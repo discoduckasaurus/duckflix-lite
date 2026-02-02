@@ -1,0 +1,23 @@
+{
+  "name": "@duckflix/zurg-client",
+  "version": "1.0.0",
+  "description": "Zurg mount client for searching and quality-gating video content",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "zurg",
+    "real-debrid",
+    "video",
+    "quality",
+    "search"
+  ],
+  "author": "DuckFlix",
+  "license": "MIT",
+  "dependencies": {},
+  "peerDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "@duckflix/m3u-parser",
+  "version": "1.0.0",
+  "description": "M3U playlist parser for IPTV/Live TV channels",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "m3u",
+    "iptv",
+    "playlist",
+    "parser",
+    "live-tv"
+  ],
+  "author": "DuckFlix",
+  "license": "MIT",
+  "dependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
