@@ -20,24 +20,4 @@ class AppViewModel @Inject constructor(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = false
         )
-
-    init {
-        // Auto-login for testing (debug builds only)
-        if (BuildConfig.DEBUG) {
-            viewModelScope.launch {
-                val token = authRepository.getAuthToken()
-                if (token.isNullOrEmpty()) {
-                    println("[DEBUG] Auto-login: No token found, attempting login with test credentials")
-                    val result = authRepository.login("admin", "q")
-                    if (result.isSuccess) {
-                        println("[INFO] Auto-login successful")
-                    } else {
-                        println("[ERROR] Auto-login failed: ${result.exceptionOrNull()?.message}")
-                    }
-                } else {
-                    println("[DEBUG] Auto-login: Token already exists")
-                }
-            }
-        }
-    }
 }

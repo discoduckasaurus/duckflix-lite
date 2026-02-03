@@ -33,6 +33,7 @@ fun SourceSelectionScreen(
     logoUrl: String? = null,
     backdropUrl: String? = null,
     onCancel: () -> Unit,
+    onComeBackLater: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     // Slot machine phrase pairs (A phrases + B phrases with same starting letter)
@@ -88,8 +89,8 @@ fun SourceSelectionScreen(
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(32.dp),
-            modifier = Modifier.padding(48.dp)
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+            modifier = Modifier.padding(32.dp)
         ) {
             // Logo with gradient background (top section) - Fixed size for consistency
             Box(
@@ -169,8 +170,15 @@ fun SourceSelectionScreen(
                         trackColor = Color.White.copy(alpha = 0.2f)
                     )
 
+                    // Show decimal for progress < 5% to indicate activity
+                    val progressText = if (progress < 5 && progress > 0) {
+                        String.format("%.1f%%", progress.toFloat())
+                    } else {
+                        "$progress%"
+                    }
+
                     Text(
-                        text = "$progress%",
+                        text = progressText,
                         style = MaterialTheme.typography.headlineMedium,
                         color = Color.White
                     )
@@ -199,12 +207,22 @@ fun SourceSelectionScreen(
                         textAlign = TextAlign.Center
                     )
 
-                    Text(
-                        text = "This may take up to 2 minutes for new content",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color.White.copy(alpha = 0.6f),
-                        textAlign = TextAlign.Center
-                    )
+                    // Show different message if stuck at low progress
+                    if (progress < 2) {
+                        Text(
+                            text = "Low seeders detected - this may take several minutes",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFFFFB74D), // Orange warning color
+                            textAlign = TextAlign.Center
+                        )
+                    } else {
+                        Text(
+                            text = "This may take up to 2 minutes for new content",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.6f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 } else {
                     Text(
                         text = "Starting playback...",
@@ -217,14 +235,37 @@ fun SourceSelectionScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Cancel button
-            Button(
-                onClick = onCancel,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White.copy(alpha = 0.2f)
-                )
+            // Action buttons row
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text("Cancel and Go Back", color = Color.White)
+                // Come back later button (only show during download with callback)
+                if (showProgress && progress < 100 && onComeBackLater != null) {
+                    Button(
+                        onClick = onComeBackLater,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFF4CAF50).copy(alpha = 0.9f) // Green
+                        )
+                    ) {
+                        Text("Come Back Later", color = Color.White)
+                    }
+                }
+
+                // Cancel/Stop button
+                Button(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (showProgress && progress < 100)
+                            Color.Red.copy(alpha = 0.9f)
+                        else
+                            Color.White.copy(alpha = 0.2f)
+                    )
+                ) {
+                    Text(
+                        text = if (showProgress && progress < 100) "Stop Download" else "Cancel",
+                        color = Color.White
+                    )
+                }
             }
         }
     }

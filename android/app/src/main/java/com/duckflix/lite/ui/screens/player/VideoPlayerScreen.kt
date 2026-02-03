@@ -188,6 +188,10 @@ fun VideoPlayerScreen(
                     onCancel = {
                         viewModel.cancelDownload()
                         onNavigateBack()
+                    },
+                    onComeBackLater = {
+                        // Don't cancel download, just go back
+                        onNavigateBack()
                     }
                 )
             }

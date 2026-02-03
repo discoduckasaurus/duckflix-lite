@@ -22,20 +22,6 @@ android {
         }
     }
 
-    flavorDimensions += "network"
-    productFlavors {
-        create("local") {
-            dimension = "network"
-            buildConfigField("String", "API_BASE_URL", "\"https://192.168.4.66:3001/api/\"")
-            versionNameSuffix = "-local"
-        }
-        create("lite") {
-            dimension = "network"
-            buildConfigField("String", "API_BASE_URL", "\"https://lite.duckflix.tv/api/\"")
-            versionNameSuffix = "-lite"
-        }
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = true

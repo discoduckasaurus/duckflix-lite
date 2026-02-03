@@ -1,9 +1,9 @@
 package com.duckflix.lite.di
 
 import android.content.Context
-import com.duckflix.lite.BuildConfig
 import com.duckflix.lite.data.remote.AuthInterceptor
 import com.duckflix.lite.data.remote.DuckFlixApi
+import com.duckflix.lite.util.NetworkDetector
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dagger.Module
@@ -73,13 +73,17 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideRetrofit(
+        @ApplicationContext context: Context,
         moshi: Moshi,
         okHttpClient: OkHttpClient
-    ): Retrofit = Retrofit.Builder()
-        .baseUrl(BuildConfig.API_BASE_URL)
-        .client(okHttpClient)
-        .addConverterFactory(MoshiConverterFactory.create(moshi))
-        .build()
+    ): Retrofit {
+        val baseUrl = NetworkDetector.getApiBaseUrl(context)
+        return Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(okHttpClient)
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+    }
 
     @Provides
     @Singleton
