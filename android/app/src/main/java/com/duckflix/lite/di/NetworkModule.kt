@@ -75,7 +75,7 @@ object NetworkModule {
         moshi: Moshi,
         okHttpClient: OkHttpClient
     ): Retrofit = Retrofit.Builder()
-        .baseUrl("https://192.168.4.66:3001/api/") // DuckFlix Lite server (direct connection)
+        .baseUrl("https://192.168.4.66:3001/api/") // DuckFlix Lite server - local IP
         .client(okHttpClient)
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()

@@ -54,8 +54,8 @@ fun DuckFlixApp(
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
 
     // TODO: Re-enable login after testing
-    val startDestination = Screen.Home.route // Skip login for testing
-    // val startDestination = if (isLoggedIn) Screen.Home.route else Screen.Login.route
+    // val startDestination = Screen.Home.route // Skip login for testing
+    val startDestination = if (isLoggedIn) Screen.Home.route else Screen.Login.route
 
     NavHost(
         navController = navController,

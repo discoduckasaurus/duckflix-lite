@@ -14,7 +14,7 @@ import javax.inject.Inject
 data class SettingsUiState(
     val username: String? = null,
     val rdExpiryDate: String? = null,
-    val serverUrl: String = "https://duckflix.tv/lite_service",
+    val serverUrl: String = "https://lite.duckflix.tv",
     val appVersion: String = "1.0.0"
 )
 
@@ -36,7 +36,7 @@ class SettingsViewModel @Inject constructor(
             _uiState.value = SettingsUiState(
                 username = "admin", // TODO: Get from user session
                 rdExpiryDate = null,
-                serverUrl = "https://duckflix.tv/lite_service",
+                serverUrl = "https://lite.duckflix.tv",
                 appVersion = "1.0.0"
             )
         }
