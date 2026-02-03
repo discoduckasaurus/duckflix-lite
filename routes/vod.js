@@ -673,5 +673,132 @@ router.get("/stream/:streamId", async (req, res) => {
   }
 });
 
+/**
+ * POST /api/vod/fallback
+ * Get next lower quality source when current stream buffers
+ */
+router.post('/fallback', async (req, res) => {
+  try {
+    const { tmdbId, type, season, episode, currentResolution, playbackPositionMs, reason } = req.body;
+    const userId = req.user.sub;
+
+    logger.info(`Fallback requested for ${tmdbId} (${type}) - current: ${currentResolution}p, reason: ${reason}`);
+
+    const { maxBitrateMbps } = getUserBandwidthInfo(userId);
+    const rdApiKey = getUserRdApiKey(userId);
+
+    if (!rdApiKey) {
+      return res.status(400).json({ error: 'No RD API key configured' });
+    }
+
+    // Get runtime for bitrate calculations
+    const { getRuntime } = require('../services/tmdb-service');
+    const runtimeMinutes = await getRuntime(tmdbId, type, season, episode);
+
+    // Search for alternatives below current resolution
+    const { searchContent } = require('../services/prowlarr-service');
+    const { checkRDInstantAvailability, rankTorrents } = require('../services/torrent-ranker');
+    const { parseResolution } = require('../utils/bitrate');
+
+    const torrents = await searchContent({
+      title: req.body.title,
+      year: req.body.year,
+      type,
+      season,
+      episode
+    });
+
+    if (!torrents || torrents.length === 0) {
+      return res.json({
+        success: false,
+        exhausted: true,
+        message: 'No alternative sources found'
+      });
+    }
+
+    // Filter to lower resolutions only
+    const lowerResTorrents = torrents.filter(t => {
+      const res = parseResolution(t.title);
+      return res > 0 && res < currentResolution;
+    });
+
+    if (lowerResTorrents.length === 0) {
+      return res.json({
+        success: false,
+        exhausted: true,
+        message: 'No lower quality sources available'
+      });
+    }
+
+    // Check RD cache and rank
+    const hashes = lowerResTorrents.map(t => t.hash).filter(Boolean);
+    const cachedHashes = await checkRDInstantAvailability(hashes, rdApiKey);
+
+    const ranked = rankTorrents(
+      lowerResTorrents,
+      type,
+      type === 'tv' ? 'episode' : 'movie',
+      1,
+      cachedHashes,
+      season,
+      episode,
+      [],
+      { maxBitrateMbps, runtimeMinutes }
+    );
+
+    if (ranked.length === 0) {
+      return res.json({
+        success: false,
+        exhausted: true,
+        message: 'No compatible sources for your connection'
+      });
+    }
+
+    const best = ranked[0];
+
+    // If cached, unrestrict and return immediately
+    if (best.isCached) {
+      const { downloadFromRD } = require('@duckflix/rd-client');
+      const result = await downloadFromRD(best.magnet, rdApiKey, season, episode);
+
+      // Cache the new link
+      await rdCacheService.cacheLink({
+        tmdbId,
+        title: req.body.title,
+        year: req.body.year,
+        type,
+        season,
+        episode,
+        streamUrl: result.download,
+        fileName: result.filename,
+        resolution: best.resolution,
+        estimatedBitrateMbps: best.estimatedBitrateMbps,
+        fileSizeBytes: best.size
+      });
+
+      return res.json({
+        success: true,
+        newStreamUrl: result.download,
+        fileName: result.filename,
+        resolution: best.resolution,
+        estimatedBitrateMbps: best.estimatedBitrateMbps
+      });
+    }
+
+    // Not cached - would need download, return info for client to decide
+    return res.json({
+      success: true,
+      needsDownload: true,
+      resolution: best.resolution,
+      estimatedBitrateMbps: best.estimatedBitrateMbps,
+      seeders: best.seeders
+    });
+
+  } catch (error) {
+    logger.error('Fallback error:', error);
+    res.status(500).json({ error: 'Fallback failed', message: error.message });
+  }
+});
+
 
 module.exports = router;
