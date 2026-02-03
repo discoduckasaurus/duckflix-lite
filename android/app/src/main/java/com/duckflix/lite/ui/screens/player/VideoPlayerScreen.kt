@@ -150,9 +150,9 @@ fun VideoPlayerScreen(
         // Loading/Download progress overlay
         when {
             uiState.loadingPhase == LoadingPhase.CHECKING_CACHE -> {
-                // Show source selection screen during cache check
+                // Show slot machine animation for Zurg cache check (no extra messaging)
                 SourceSelectionScreen(
-                    message = uiState.downloadMessage.ifEmpty { "Looking for sources..." },
+                    message = "",
                     showProgress = false,
                     logoUrl = uiState.logoUrl,
                     backdropUrl = uiState.posterUrl,
@@ -164,9 +164,9 @@ fun VideoPlayerScreen(
             }
 
             uiState.loadingPhase == LoadingPhase.SEARCHING -> {
-                // Show source selection screen without progress bar
+                // Show slot machine animation with Prowlarr search message
                 SourceSelectionScreen(
-                    message = uiState.downloadMessage.ifEmpty { "Looking for sources..." },
+                    message = "One moment, finding the best source",
                     showProgress = false,
                     logoUrl = uiState.logoUrl,
                     backdropUrl = uiState.posterUrl,
@@ -178,7 +178,7 @@ fun VideoPlayerScreen(
             }
 
             uiState.loadingPhase == LoadingPhase.DOWNLOADING -> {
-                // Show source selection screen WITH progress bar
+                // Show slot machine animation WITH progress bar
                 SourceSelectionScreen(
                     message = uiState.downloadMessage,
                     showProgress = true,

@@ -6,6 +6,8 @@ const { searchZurg } = require('../services/zurg-search');
 const { completeDownloadFlow } = require('../services/rd-service');
 const rdCacheService = require('../services/rd-cache-service');
 const downloadJobManager = require('../services/download-job-manager');
+const { getUserRdApiKey, getEffectiveUserId } = require('../services/user-service');
+const { resolveZurgToRdLink } = require('../services/zurg-to-rd-resolver');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
@@ -27,22 +29,62 @@ router.post('/stream-url/start', async (req, res) => {
     const zurgResult = await searchZurg({
       title,
       year,
-      type: type === 'tv' ? 'episode' : 'movie',
+      type, // Pass 'tv' or 'movie' directly - zurg-client expects 'tv' not 'episode'
       season,
       episode
     });
 
-    if (zurgResult.match || zurgResult.fallback) {
-      const file = zurgResult.match || zurgResult.fallback;
-      const zurgBaseUrl = process.env.ZURG_BASE_URL || 'http://localhost:9999';
-      const streamUrl = `${zurgBaseUrl}${file.filePath}`;
+    if (zurgResult.match) { // Only use good quality, skip fallbacks
+      const file = zurgResult.match;
 
-      logger.info(`Zurg match found, returning immediately: ${streamUrl}`);
+      logger.info(`Zurg match found: ${file.filePath}`);
+
+      // Try to resolve Zurg path to direct RD link (supports HTTP range requests)
+      const rdApiKey = getUserRdApiKey(userId);
+      let streamUrl = null;
+      let source = 'zurg';
+
+      if (rdApiKey) {
+        const rdLink = await resolveZurgToRdLink(file.filePath, rdApiKey);
+        if (rdLink) {
+          streamUrl = rdLink;
+          source = 'rd-via-zurg';
+          logger.info(`Using RD direct link: ${streamUrl.substring(0, 60)}...`);
+        } else {
+          logger.warn('Failed to resolve Zurg to RD, falling back to Zurg WebDAV');
+        }
+      }
+
+      // Fall back to Zurg WebDAV if RD resolution failed
+      if (!streamUrl) {
+        const mountPath = process.env.ZURG_MOUNT_PATH || '/mnt/zurg';
+        const relativePath = file.filePath.replace(mountPath, '');
+        // URL encode path segments for ExoPlayer (preserve slashes)
+        const encodedPath = relativePath.split("/").map(s => encodeURIComponent(s)).join("/");
+        streamUrl = `http://192.168.4.66:9999/http${encodedPath}`;
+      }
+
+      logger.info(`Zurg match found, returning: ${streamUrl}`);
+
+      // Track playback for monitoring (non-blocking)
+      try {
+        const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+        const rdApiKey = getUserRdApiKey(userId);
+        const userInfo = {
+          username: user?.username || 'unknown',
+          userId,
+          ip: req.ip || req.connection.remoteAddress || 'unknown',
+          rdApiKey
+        };
+        downloadJobManager.trackPlayback({ tmdbId, title, year, type, season, episode }, userInfo, source, streamUrl, file.fileName);
+      } catch (err) {
+        logger.warn('Failed to track playback:', err.message);
+      }
 
       return res.json({
         immediate: true,
         streamUrl,
-        source: 'zurg',
+        source,
         fileName: file.fileName
       });
     }
@@ -57,6 +99,22 @@ router.post('/stream-url/start', async (req, res) => {
 
     if (cachedRd) {
       logger.info(`RD cache hit, returning immediately: ${cachedRd.streamUrl}`);
+
+      // Track playback for monitoring (non-blocking)
+      try {
+        const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+        const rdApiKey = getUserRdApiKey(userId);
+        const userInfo = {
+          username: user?.username || 'unknown',
+          userId,
+          ip: req.ip || req.connection.remoteAddress || 'unknown',
+          rdApiKey
+        };
+        downloadJobManager.trackPlayback({ tmdbId, title, year, type, season, episode }, userInfo, 'rd-cached', cachedRd.streamUrl, cachedRd.fileName);
+      } catch (err) {
+        logger.warn('Failed to track playback:', err.message);
+      }
+
       return res.json({
         immediate: true,
         streamUrl: cachedRd.streamUrl,
@@ -67,12 +125,23 @@ router.post('/stream-url/start', async (req, res) => {
 
     // 3. Need to download from RD - create job
     const jobId = uuidv4();
-    downloadJobManager.createJob(jobId, { tmdbId, title, year, type, season, episode });
+
+    // Get user info for monitoring
+    const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+    const rdApiKey = getUserRdApiKey(userId);
+    const userInfo = {
+      username: user?.username || 'unknown',
+      userId,
+      ip: req.ip || req.connection.remoteAddress || 'unknown',
+      rdApiKey
+    };
+
+    downloadJobManager.createJob(jobId, { tmdbId, title, year, type, season, episode }, userInfo);
 
     logger.info(`Created download job ${jobId} for ${title}`);
 
     // Start download in background
-    processRdDownload(jobId, { tmdbId, title, year, type, season, episode });
+    processRdDownload(jobId, { tmdbId, title, year, type, season, episode, userId });
 
     res.json({
       immediate: false,
@@ -137,66 +206,105 @@ router.delete('/stream-url/cancel/:jobId', (req, res) => {
 });
 
 /**
- * Background RD download processor
+ * Background RD download processor with progressive updates
  */
 async function processRdDownload(jobId, contentInfo) {
-  const { tmdbId, title, year, type, season, episode } = contentInfo;
+  const { tmdbId, title, year, type, season, episode, userId } = contentInfo;
 
   try {
-    // Update: Searching Prowlarr
+    const rdApiKey = getUserRdApiKey(userId);
+    if (!rdApiKey) {
+      throw new Error('Real-Debrid API key not configured for this user');
+    }
+
+    // Update: Checking sources (no progress % until RD download starts)
     downloadJobManager.updateJob(jobId, {
       status: 'searching',
-      progress: 5,
-      message: 'Searching for content...'
+      progress: 0,
+      message: 'Checking sources...'
     });
 
-    // Check if RD API key is configured
-    const rdApiKey = process.env.RD_API_KEY;
-    if (!rdApiKey) {
-      throw new Error('Real-Debrid API key not configured');
+    // Use content resolver for smart Zurg/Prowlarr selection
+    const { resolveContent } = require('../services/content-resolver');
+
+    let resolution;
+    try {
+      // Update: Searching sources
+      downloadJobManager.updateJob(jobId, {
+        status: 'searching',
+        progress: 0,
+        message: 'Finding sources...'
+      });
+
+      resolution = await resolveContent({
+        title,
+        year,
+        type,
+        season,
+        episode,
+        rdApiKey
+      });
+
+      // Update: Trying source
+      const qualityLabel = resolution.quality?.resolution || resolution.quality?.title?.match(/\b(2160p|4K|1080p|720p|480p)\b/i)?.[0] || 'HD';
+      downloadJobManager.updateJob(jobId, {
+        status: 'searching',
+        progress: 0,
+        message: `Trying Source #1 ${qualityLabel}`,
+        source: `${resolution.quality?.title || 'Unknown'}`
+      });
+    } catch (err) {
+      throw new Error(`No suitable sources found: ${err.message}`);
     }
 
-    // Search Prowlarr for content
-    const { searchContent } = require('../services/prowlarr-service');
-
-    const searchResult = await searchContent({
-      title,
-      year,
-      type,
-      season,
-      episode
-    });
-
-    if (!searchResult || !searchResult.magnetUrl) {
-      throw new Error('No results found');
+    // If Zurg selected (shouldn't happen, but handle it)
+    if (resolution.source === 'zurg') {
+      downloadJobManager.updateJob(jobId, {
+        status: 'completed',
+        progress: 100,
+        message: 'Ready to play',
+        streamUrl: `${process.env.ZURG_BASE_URL || 'http://localhost:9999'}${resolution.zurgPath}`,
+        fileName: resolution.zurgPath.split('/').pop()
+      });
+      return;
     }
 
-    // Update: Found torrent, adding to RD
-    downloadJobManager.updateJob(jobId, {
-      status: 'downloading',
-      progress: 10,
-      message: 'Adding torrent to Real-Debrid...'
-    });
+    const qualityLabel = resolution.quality?.title?.match(/\b(2160p|4K|1080p|720p)\b/i)?.[0] || 'HD';
 
-    // Modified downloadFromRD to report progress
+    // Start RD download - progress bar shows ONLY actual RD download progress
     const { downloadFromRD } = require('@duckflix/rd-client');
 
     const result = await downloadFromRD(
-      searchResult.magnetUrl,
+      resolution.magnetUrl,
       rdApiKey,
       season,
       episode,
-      (progress, message) => {
-        // Progress callback
-        downloadJobManager.updateJob(jobId, {
-          status: 'downloading',
-          progress,
-          message
-        });
+      (rdProgress, rdMessage) => {
+        // rdProgress from RD client includes setup (10-20%) + download (20-90%)
+        // Extract ONLY the actual download progress from RD's torrent progress
+        // When rdMessage contains "Downloading: X%", that's the real RD progress
+        const rdMatch = rdMessage.match(/Downloading:\s*(\d+)%/);
+        if (rdMatch) {
+          // Use RD's actual download progress directly
+          const actualRdProgress = parseInt(rdMatch[1]);
+          downloadJobManager.updateJob(jobId, {
+            status: 'downloading',
+            progress: actualRdProgress,
+            message: `${qualityLabel}: ${actualRdProgress}%`
+          });
+        }
+        // Ignore other phases (adding, selecting, unrestricting) - those are quick
       }
     );
 
-    // Cache the result
+    // Verify we got the link
+    if (!result || !result.download) {
+      throw new Error('Failed to get stream URL from Real-Debrid');
+    }
+
+    logger.info(`[RD Download] Got unrestricted link (full): ${result.download}`);
+
+    // Cache the result for future users
     await rdCacheService.cacheLink({
       tmdbId,
       title,
@@ -208,16 +316,34 @@ async function processRdDownload(jobId, contentInfo) {
       fileName: result.filename
     });
 
-    // Update: Completed
+    // FINAL: Only NOW set status to 'completed' with the verified stream URL
+    // The client will ONLY start playback when it sees status=completed AND streamUrl exists
     downloadJobManager.updateJob(jobId, {
       status: 'completed',
       progress: 100,
-      message: 'Download complete, starting playback...',
+      message: 'Ready to play!',
       streamUrl: result.download,
-      fileName: result.filename
+      fileName: result.filename,
+      fileSize: result.filesize || result.bytes || null
     });
 
-    logger.info(`Download job ${jobId} completed successfully`);
+    // Also track as playback for monitoring dashboard (non-blocking)
+    try {
+      const job = downloadJobManager.getJob(jobId);
+      if (job && job.userInfo) {
+        downloadJobManager.trackPlayback(
+          contentInfo,
+          job.userInfo,
+          'rd-download',
+          result.download,
+          result.filename
+        );
+      }
+    } catch (err) {
+      logger.warn('Failed to track download playback:', err.message);
+    }
+
+    logger.info(`Download job ${jobId} completed successfully, stream URL ready`);
   } catch (error) {
     logger.error(`Job ${jobId} failed:`, {
       message: error.message,
@@ -249,15 +375,20 @@ router.post('/stream-url', async (req, res) => {
     const zurgResult = await searchZurg({
       title,
       year,
-      type: type === 'tv' ? 'episode' : 'movie',
+      type, // Pass 'tv' or 'movie' directly - zurg-client expects 'tv' not 'episode'
       season,
       episode
     });
 
-    if (zurgResult.match || zurgResult.fallback) {
-      const file = zurgResult.match || zurgResult.fallback;
-      const zurgBaseUrl = process.env.ZURG_BASE_URL || 'http://localhost:9999';
-      const streamUrl = `${zurgBaseUrl}${file.filePath}`;
+    if (zurgResult.match) { // Only use good quality, skip fallbacks
+      const file = zurgResult.match;
+
+      // Use direct Zurg access
+      const mountPath = process.env.ZURG_MOUNT_PATH || '/mnt/zurg';
+      const relativePath = file.filePath.replace(mountPath, '');
+      // URL encode path segments for ExoPlayer (preserve slashes)
+      const encodedPath = relativePath.split("/").map(s => encodeURIComponent(s)).join("/");
+      const streamUrl = `http://192.168.4.66:9999/http${encodedPath}`;
 
       logger.info(`Zurg match found, streaming from: ${streamUrl}`);
 
@@ -271,12 +402,12 @@ router.post('/stream-url', async (req, res) => {
     // Not in Zurg - fall back to Prowlarr search + RD
     logger.info('Content not in Zurg, searching...');
 
-    // Check if RD API key is configured
-    const rdApiKey = process.env.RD_API_KEY;
+    // Check if RD API key is configured for this user
+    const rdApiKey = getUserRdApiKey(userId);
     if (!rdApiKey) {
       return res.status(404).json({
         error: 'Content not found',
-        message: 'No sources available for this content.'
+        message: 'No Real-Debrid API key configured for your account.'
       });
     }
 
@@ -322,8 +453,8 @@ router.post('/stream-url', async (req, res) => {
         return res.status(404).json({
           error: 'Content not found',
           message: season && episode
-            ? `Episode S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} not found in torrent`
-            : 'No compatible video file found in the torrent'
+            ? `Episode S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')} not found in selected file`
+            : 'No compatible video file found'
         });
       }
 
@@ -336,8 +467,8 @@ router.post('/stream-url', async (req, res) => {
 
       if (rdError.message?.includes('dead') || rdError.message?.includes('virus') || rdError.message?.includes('error')) {
         return res.status(400).json({
-          error: 'Invalid torrent',
-          message: 'The torrent is no longer available or contains errors. Please try searching again.'
+          error: 'Invalid source',
+          message: 'The selected source is no longer available or contains errors. Please try searching again.'
         });
       }
 
@@ -395,6 +526,9 @@ router.post('/session/check', (req, res) => {
 
     logger.info(`VOD session check for user ${req.user.username} from ${clientIp}`);
 
+    // Get effective user ID (parent for sub-accounts, so they share IP sessions)
+    const effectiveUserId = getEffectiveUserId(userId);
+
     // Check if user has an active VOD session on a different IP
     const timeoutMs = parseInt(process.env.VOD_SESSION_TIMEOUT_MS) || 120000;
     const timeoutThreshold = new Date(Date.now() - timeoutMs).toISOString();
@@ -408,7 +542,7 @@ router.post('/session/check', (req, res) => {
           last_vod_playback_at > ? OR
           last_heartbeat_at > ?
         )
-    `).all(userId, clientIp, timeoutThreshold, timeoutThreshold);
+    `).all(effectiveUserId, clientIp, timeoutThreshold, timeoutThreshold);
 
     if (activeSessions.length > 0) {
       const activeSession = activeSessions[0];
@@ -420,13 +554,13 @@ router.post('/session/check', (req, res) => {
       });
     }
 
-    // Update or create session for this IP
+    // Update or create session for this IP (use effectiveUserId for sub-accounts)
     db.prepare(`
       INSERT INTO user_sessions (user_id, ip_address, last_vod_playback_at)
       VALUES (?, ?, datetime('now'))
       ON CONFLICT(user_id, ip_address)
       DO UPDATE SET last_vod_playback_at = datetime('now')
-    `).run(userId, clientIp);
+    `).run(effectiveUserId, clientIp);
 
     logger.info(`VOD session approved for user ${req.user.username} on ${clientIp}`);
 
@@ -486,5 +620,71 @@ router.post('/session/end', (req, res) => {
     res.status(500).json({ error: 'Session end failed' });
   }
 });
+
+
+// Proxy streaming route for Zurg files  
+router.get("/stream/:streamId", async (req, res) => {
+  const { streamId } = req.params;
+  
+  // Decode the streamId (base64url encoded file path)
+  let filePath;
+  try {
+    filePath = Buffer.from(streamId, "base64url").toString("utf-8");
+  } catch (err) {
+    return res.status(400).json({ error: "Invalid stream ID" });
+  }
+  
+  logger.info(`[Stream Proxy] Request for: ${filePath}`);
+  
+  // Verify file exists
+  if (!require("fs").existsSync(filePath)) {
+    logger.error(`[Stream Proxy] File not found: ${filePath}`);
+    return res.status(404).json({ error: "File not found" });
+  }
+  
+  const stat = require("fs").statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+  
+  // Detect MIME type
+  const path = require("path");
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeTypes = {
+    ".mp4": "video/mp4",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm"
+  };
+  const contentType = mimeTypes[ext] || "application/octet-stream";
+  
+  if (range) {
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = (end - start) + 1;
+    
+    logger.info(`[Stream Proxy] Range: ${start}-${end}/${fileSize}`);
+    
+    const file = require("fs").createReadStream(filePath, { start, end });
+    const head = {
+      "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+      "Accept-Ranges": "bytes",
+      "Content-Length": chunksize,
+      "Content-Type": contentType,
+    };
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    const head = {
+      "Content-Length": fileSize,
+      "Content-Type": contentType,
+      "Accept-Ranges": "bytes"
+    };
+    res.writeHead(200, head);
+    require("fs").createReadStream(filePath).pipe(res);
+  }
+});
+
 
 module.exports = router;

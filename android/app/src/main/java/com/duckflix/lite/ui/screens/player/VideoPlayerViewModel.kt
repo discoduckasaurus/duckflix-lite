@@ -8,9 +8,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.DefaultRenderersFactory
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.duckflix.lite.data.local.dao.WatchProgressDao
 import com.duckflix.lite.data.local.dao.WatchlistDao
@@ -76,6 +75,7 @@ class VideoPlayerViewModel @Inject constructor(
     private val season: Int? = savedStateHandle.get<Int>("season")?.takeIf { it != -1 }
     private val episode: Int? = savedStateHandle.get<Int>("episode")?.takeIf { it != -1 }
     private val resumePosition: Long? = savedStateHandle.get<Long>("resumePosition")?.takeIf { it != -1L }
+    private var pendingSeekPosition: Long? = null
     private val posterUrl: String? = savedStateHandle["posterUrl"]
 
     private val _uiState = MutableStateFlow(PlayerUiState())
@@ -112,40 +112,16 @@ class VideoPlayerViewModel @Inject constructor(
     }
 
     private fun initializePlayer() {
-        // Use DefaultRenderersFactory with extension renderers for broader codec support
-        val renderersFactory = DefaultRenderersFactory(context)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
-
-        // Optimized buffering for large remote files (RD streams)
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                5000,   // min buffer (reduced from 15000)
-                30000,  // max buffer (reduced from 50000)
-                1000,   // playback buffer (reduced from 2500 - start playback faster)
-                2000    // rebuffer (reduced from 5000)
-            )
-            .build()
-
-        // Create dedicated OkHttpClient for video streaming (without auth interceptor)
-        // RD links don't need authentication and the interceptor might interfere
-        val streamingClient = okhttp3.OkHttpClient.Builder()
-            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .build()
-
-        val dataSourceFactory = OkHttpDataSource.Factory(streamingClient)
-
-        // Configure media source factory to infer type from file extension, not Content-Type
-        // This fixes RD links that send "application/force-download" instead of proper video MIME type
-        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
-            .setDataSourceFactory(dataSourceFactory)
+        // Simple configuration like main app - defaults work best for HEVC/x265
+        val dataSourceFactory = DefaultDataSource.Factory(
+            context,
+            DefaultHttpDataSource.Factory()
+                .setAllowCrossProtocolRedirects(true)
+                .setUserAgent("ExoPlayer/DuckFlix")
+        )
 
         _player = ExoPlayer.Builder(context)
-            .setRenderersFactory(renderersFactory)
-            .setLoadControl(loadControl)
-            .setMediaSourceFactory(mediaSourceFactory)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .build().apply {
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
@@ -164,6 +140,19 @@ class VideoPlayerViewModel @Inject constructor(
 
                     if (playbackState == Player.STATE_READY) {
                         println("[INFO] ExoPlayer: Media ready, duration=${duration}ms, playing=${isPlaying}")
+
+                        // Handle pending seek position now that we know the duration
+                        pendingSeekPosition?.let { seekPos ->
+                            if (duration > 0 && seekPos < duration) {
+                                println("[DEBUG] Applying pending seek to $seekPos ms (duration: $duration ms)")
+                                seekTo(seekPos)
+                                pendingSeekPosition = null
+                            } else {
+                                println("[WARN] Skipping invalid seek position $seekPos ms (duration: $duration ms)")
+                                pendingSeekPosition = null
+                            }
+                        }
+
                         // Force play if not playing
                         if (!isPlaying) {
                             println("[DEBUG] ExoPlayer ready but not playing, forcing play()")
@@ -387,10 +376,10 @@ class VideoPlayerViewModel @Inject constructor(
             setMediaItem(mediaItem)
             prepare()
 
-            // Seek to resume position if provided
+            // Store resume position to seek after player is ready and duration is known
             if (resumePosition != null && resumePosition > 0) {
-                println("[DEBUG] Seeking to resume position: $resumePosition ms")
-                seekTo(resumePosition)
+                println("[DEBUG] Storing pending seek position: $resumePosition ms")
+                pendingSeekPosition = resumePosition
             }
         }
 
