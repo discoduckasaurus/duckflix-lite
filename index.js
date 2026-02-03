@@ -18,6 +18,7 @@ const apkRoutes = require('./routes/apk');
 const reportRoutes = require('./routes/report');
 const monitorRoutes = require('./routes/monitor');
 const bandwidthRoutes = require('./routes/bandwidth');
+const settingsRoutes = require('./routes/settings');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -63,6 +64,7 @@ app.use('/api/monitor', monitorRoutes);
 app.use('/api/apk', apkRoutes);
 app.use('/api/report', reportRoutes);
 app.use('/api/bandwidth', bandwidthRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Static files (APK hosting)
 app.use('/static', express.static(path.join(__dirname, 'static')));
