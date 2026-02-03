@@ -1,6 +1,7 @@
 package com.duckflix.lite.di
 
 import android.content.Context
+import com.duckflix.lite.BuildConfig
 import com.duckflix.lite.data.remote.AuthInterceptor
 import com.duckflix.lite.data.remote.DuckFlixApi
 import com.squareup.moshi.Moshi
@@ -75,7 +76,7 @@ object NetworkModule {
         moshi: Moshi,
         okHttpClient: OkHttpClient
     ): Retrofit = Retrofit.Builder()
-        .baseUrl("https://192.168.4.66:3001/api/") // DuckFlix Lite server - local IP
+        .baseUrl(BuildConfig.API_BASE_URL)
         .client(okHttpClient)
         .addConverterFactory(MoshiConverterFactory.create(moshi))
         .build()

@@ -24,7 +24,9 @@ class AuthInterceptor(context: Context) : Interceptor {
         val original = chain.request()
 
         // Only add auth token for our own API requests, not external URLs (like Real-Debrid)
-        val isOurApi = original.url.host.contains("duckflix") || original.url.host.contains("192.168.4")
+        val isOurApi = original.url.host.contains("duckflix") ||
+                       original.url.host.contains("192.168.4") ||
+                       original.url.host == "lite.duckflix.tv"
 
         // Get auth token from encrypted preferences
         val token = encryptedPrefs.getString("auth_token", null)
