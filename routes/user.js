@@ -11,6 +11,89 @@ const router = express.Router();
 // All user routes require authentication
 router.use(authenticateToken);
 
+/**
+ * GET /api/user/loading-phrases
+ * Get loading phrases for slot machine animation
+ * Public endpoint - no admin required
+ */
+router.get('/loading-phrases', (req, res) => {
+  try {
+    // Check if phrases are in database
+    const phrasesRecord = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('loading_phrases');
+
+    let phrasesA, phrasesB;
+    if (phrasesRecord) {
+      const data = JSON.parse(phrasesRecord.value);
+      phrasesA = data.phrasesA || [];
+      phrasesB = data.phrasesB || [];
+    } else {
+      // Default phrases if not set by admin
+      phrasesA = [
+        "Analyzing", "Allocating", "Assembling",
+        "Buffering", "Bootstrapping", "Building",
+        "Calculating", "Calibrating", "Compiling",
+        "Downloading", "Decoding", "Deploying",
+        "Encrypting", "Establishing", "Extracting",
+        "Formatting", "Fetching", "Fragmenting",
+        "Generating", "Gathering", "Gridding",
+        "Hashing", "Hijacking", "Harmonizing",
+        "Initializing", "Installing", "Integrating",
+        "Juggling", "Jamming", "Joining",
+        "Kindling", "Knitting", "Kneading",
+        "Loading", "Linking", "Launching",
+        "Materializing", "Mounting", "Mapping",
+        "Negotiating", "Normalizing", "Networking",
+        "Optimizing", "Organizing", "Orchestrating",
+        "Processing", "Parsing", "Preparing",
+        "Quantifying", "Querying", "Queueing",
+        "Reticulating", "Rendering", "Resolving",
+        "Scanning", "Spinning", "Syncing",
+        "Transmitting", "Translating", "Transcoding",
+        "Uploading", "Updating", "Unpacking",
+        "Validating", "Vectorizing", "Virtualizing",
+        "Warming", "Weaving", "Wrangling",
+        "X-raying", "Xeroxing", "Xylophonicating",
+        "Yielding", "Yodeling", "Yanking",
+        "Zipping", "Zigzagging", "Zapping"
+      ];
+
+      phrasesB = [
+        "algorithms", "architectures", "atoms",
+        "buffers", "bits", "bandwidths",
+        "caches", "codecs", "connections",
+        "data", "databases", "downloads",
+        "electrons", "encoders", "engines",
+        "files", "frameworks", "functions",
+        "graphics", "gigabytes", "gateways",
+        "hashes", "headers", "hamster wheels",
+        "interfaces", "indexes", "inputs",
+        "journeys", "junctions", "joules",
+        "kernels", "kilobytes", "keys",
+        "libraries", "links", "layers",
+        "memories", "modules", "matrices",
+        "nodes", "networks", "numbers",
+        "objects", "operations", "outputs",
+        "protocols", "packets", "pipelines",
+        "queries", "queues", "quotas",
+        "RAM", "resources", "routes",
+        "servers", "streams", "splines",
+        "threads", "tokens", "tables",
+        "units", "uploads", "URLs",
+        "variables", "vectors", "vortexes",
+        "workflows", "widgets", "wires",
+        "x-rays", "xeroxes", "x-factors",
+        "yottabytes", "yields", "yarns",
+        "zeros", "zones", "zettabytes"
+      ];
+    }
+
+    res.json({ phrasesA, phrasesB });
+  } catch (error) {
+    logger.error('Get loading phrases error:', error);
+    res.status(500).json({ error: 'Failed to get loading phrases' });
+  }
+});
+
 // Storage paths
 const WATCHLIST_DIR = path.join(__dirname, '..', 'db', 'user_watchlist');
 const WATCH_PROGRESS_DIR = path.join(__dirname, '..', 'db', 'user_watch_progress');

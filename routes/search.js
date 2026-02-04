@@ -312,6 +312,7 @@ router.get('/tmdb/:id', async (req, res) => {
       runtime: data.runtime || (data.episode_run_time && data.episode_run_time[0]),
       genres: data.genres,
       cast: data.credits?.cast?.slice(0, 10).map(c => ({
+        id: c.id,
         name: c.name,
         character: c.character,
         profilePath: c.profile_path
@@ -341,6 +342,157 @@ router.get('/tmdb/:id', async (req, res) => {
   } catch (error) {
     logger.error('TMDB detail error:', error);
     res.status(500).json({ error: 'Failed to fetch details' });
+  }
+});
+
+/**
+ * GET /api/search/person/:personId
+ * Get person details (name, bio, profile picture)
+ */
+router.get('/person/:personId', async (req, res) => {
+  try {
+    const { personId } = req.params;
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    // Check cache first
+    const cacheKey = `person_${personId}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    // Fetch person details
+    const url = `https://api.themoviedb.org/3/person/${personId}`;
+    const response = await axios.get(url, {
+      params: {
+        api_key: tmdbApiKey
+      }
+    });
+
+    const data = response.data;
+    const result = {
+      id: data.id,
+      name: data.name,
+      biography: data.biography,
+      birthday: data.birthday,
+      placeOfBirth: data.place_of_birth,
+      profilePath: data.profile_path,
+      knownForDepartment: data.known_for_department
+    };
+
+    // Cache the result (1 hour)
+    cache.set(cacheKey, {
+      data: result,
+      timestamp: Date.now()
+    });
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Person details error:', error);
+    res.status(500).json({ error: 'Failed to fetch person details' });
+  }
+});
+
+/**
+ * GET /api/search/person/:personId/credits
+ * Get combined movie and TV credits for a person
+ * Results ranked by combination of recency and rating
+ */
+router.get('/person/:personId/credits', async (req, res) => {
+  try {
+    const { personId } = req.params;
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    // Check cache first (1 hour TTL for person credits)
+    const cacheKey = `person_credits_${personId}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    // Fetch combined credits from TMDB
+    const url = `https://api.themoviedb.org/3/person/${personId}/combined_credits`;
+    const response = await axios.get(url, {
+      params: {
+        api_key: tmdbApiKey
+      }
+    });
+
+    const now = new Date();
+    const currentYear = now.getFullYear();
+
+    // Combine cast entries from movies and TV
+    const allCredits = response.data.cast || [];
+
+    // Filter and score credits
+    const scoredCredits = allCredits
+      .filter(item => {
+        // Must have poster and rating
+        const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
+        const isRated = item.vote_average && item.vote_average > 0;
+        const hasVotes = item.vote_count && item.vote_count > 0;
+        return hasPoster && isRated && hasVotes;
+      })
+      .map(item => {
+        // Calculate recency score (0-100)
+        const releaseYear = parseInt((item.release_date || item.first_air_date || '').substring(0, 4)) || 0;
+        const yearsSinceRelease = currentYear - releaseYear;
+
+        // Recency score: 100 for current year, decreases by 5 per year, minimum 0
+        const recencyScore = Math.max(0, 100 - (yearsSinceRelease * 5));
+
+        // Rating score (0-100): normalize vote_average from 0-10 to 0-100
+        const ratingScore = (item.vote_average || 0) * 10;
+
+        // Popularity bonus: log scale based on vote count
+        const popularityBonus = Math.min(20, Math.log10((item.vote_count || 1) + 1) * 5);
+
+        // Combined score: 40% recency, 40% rating, 20% popularity
+        const combinedScore = (recencyScore * 0.4) + (ratingScore * 0.4) + (popularityBonus * 0.2);
+
+        return {
+          id: item.id,
+          title: item.title || item.name,
+          year: releaseYear || null,
+          posterPath: item.poster_path,
+          overview: item.overview,
+          voteAverage: item.vote_average,
+          voteCount: item.vote_count,
+          mediaType: item.media_type,
+          character: item.character,
+          releaseDate: item.release_date || item.first_air_date,
+          combinedScore,
+          recencyScore,
+          ratingScore
+        };
+      })
+      // Sort by combined score (descending)
+      .sort((a, b) => b.combinedScore - a.combinedScore);
+
+    const responseData = {
+      personId: parseInt(personId),
+      personName: response.data.cast?.[0]?.name || 'Unknown', // TMDB doesn't return person name in credits endpoint
+      results: scoredCredits
+    };
+
+    // Cache the result (1 hour)
+    cache.set(cacheKey, {
+      data: responseData,
+      timestamp: Date.now()
+    });
+
+    res.json(responseData);
+  } catch (error) {
+    logger.error('Person credits error:', error);
+    res.status(500).json({ error: 'Failed to fetch person credits' });
   }
 });
 
