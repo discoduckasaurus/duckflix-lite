@@ -63,7 +63,21 @@ function initDatabase() {
     // Column already exists
   }
 
-  // User sessions (IP tracking for VOD)
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN enabled BOOLEAN DEFAULT 1`);
+    logger.info('Added enabled column');
+  } catch (e) {
+    // Column already exists
+  }
+
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN updated_at TEXT`);
+    logger.info('Added updated_at column');
+  } catch (e) {
+    // Column already exists
+  }
+
+  // User sessions (IP tracking for VOD) - DEPRECATED: Use rd_sessions instead
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_sessions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +88,22 @@ function initDatabase() {
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
       UNIQUE(user_id, ip_address)
+    )
+  `);
+
+  // RD sessions (RD key + IP tracking to prevent concurrent streams)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS rd_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rd_api_key TEXT NOT NULL,
+      ip_address TEXT NOT NULL,
+      user_id INTEGER NOT NULL,
+      username TEXT NOT NULL,
+      stream_started_at TEXT NOT NULL,
+      last_heartbeat_at TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(rd_api_key, ip_address),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
 
@@ -237,7 +267,7 @@ async function createAdminUser() {
     process.exit(1);
   }
 
-  const existingAdmin = db.prepare('SELECT id FROM users WHERE username = ?').get(adminUsername);
+  const existingAdmin = db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(adminUsername);
 
   if (existingAdmin) {
     logger.info(`Admin user '${adminUsername}' already exists`);
@@ -267,14 +297,14 @@ async function createTestUser() {
   const testPassword = 'jjjjjj';
   const testRdApiKey = 'IOGOUVDH4JSBH57UJAFDP3O375DCPSKP7ERWPURNCP3CCNUSFPKQ';
 
-  const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(testUsername);
+  const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(testUsername);
 
   if (existingUser) {
     // Update existing user's RD API key
     db.prepare(`
       UPDATE users
       SET rd_api_key = ?
-      WHERE username = ?
+      WHERE LOWER(username) = LOWER(?)
     `).run(testRdApiKey, testUsername);
     logger.info(`Test user '${testUsername}' already exists, RD API key updated`);
     return;

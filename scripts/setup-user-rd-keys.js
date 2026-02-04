@@ -25,7 +25,7 @@ async function migrate() {
     db.prepare(`
       UPDATE users
       SET rd_api_key = ?
-      WHERE username = ? AND is_admin = 1
+      WHERE LOWER(username) = LOWER(?) AND is_admin = 1
     `).run(envRdApiKey, adminUsername);
     console.log(`✅ Updated admin user "${adminUsername}" with ENV RD_API_KEY`);
   } else {
@@ -37,14 +37,14 @@ async function migrate() {
   const testPassword = 'jjjjjj';
   const testRdApiKey = 'IOGOUVDH4JSBH57UJAFDP3O375DCPSKP7ERWPURNCP3CCNUSFPKQ';
 
-  const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(testUsername);
+  const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(testUsername);
 
   if (existingUser) {
     // Update existing user
     db.prepare(`
       UPDATE users
       SET rd_api_key = ?
-      WHERE username = ?
+      WHERE LOWER(username) = LOWER(?)
     `).run(testRdApiKey, testUsername);
     console.log(`✅ Updated existing user "${testUsername}" with test RD_API_KEY`);
   } else {

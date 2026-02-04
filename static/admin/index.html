@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DuckFlix Lite - Admin Dashboard</title>
+    <link rel="stylesheet" href="/static/admin/styles.css?v=7">
+</head>
+<body>
+    <!-- Login Screen -->
+    <div id="login-screen" class="screen active">
+        <div class="login-container">
+            <h1>DuckFlix Lite Admin</h1>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required autocomplete="username">
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="btn btn-primary">Login</button>
+                <div id="login-error" class="error-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Admin Dashboard -->
+    <div id="admin-screen" class="screen">
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <h2>DuckFlix Admin</h2>
+                <div class="admin-info" id="admin-info"></div>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="#" data-view="dashboard" class="active">Dashboard</a></li>
+                <li><a href="#" data-view="users">Users</a></li>
+                <li><a href="#" data-view="failures">Playback Failures</a></li>
+                <li><a href="#" data-view="health">Service Health</a></li>
+                <li><a href="#" data-view="loading-phrases">Loading Phrases</a></li>
+            </ul>
+            <button id="logout-btn" class="btn btn-secondary">Logout</button>
+        </nav>
+
+        <main class="main-content">
+            <!-- Dashboard View -->
+            <div id="view-dashboard" class="view active">
+                <h1>Dashboard Overview</h1>
+                <div class="stats-grid" id="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Total Users</div>
+                        <div class="stat-value" id="stat-users">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">RD Keys Expiring Soon</div>
+                        <div class="stat-value" id="stat-expiring">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Recent Failures (24h)</div>
+                        <div class="stat-value" id="stat-failures">-</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Services Status</div>
+                        <div class="stat-value" id="stat-services">-</div>
+                    </div>
+                </div>
+                <div class="recent-section">
+                    <h2>Recent Playback Failures</h2>
+                    <div id="recent-failures"></div>
+                </div>
+            </div>
+
+            <!-- Users View -->
+            <div id="view-users" class="view">
+                <div class="view-header">
+                    <h1>User Management</h1>
+                    <button class="btn btn-primary" id="add-user-btn">Add User</button>
+                </div>
+                <div id="users-table-container"></div>
+            </div>
+
+            <!-- Failures View -->
+            <div id="view-failures" class="view">
+                <h1>Playback Failures</h1>
+                <div id="failures-table-container"></div>
+            </div>
+
+            <!-- Health View -->
+            <div id="view-health" class="view">
+                <h1>Service Health</h1>
+                <div id="health-status-container"></div>
+            </div>
+
+            <!-- Loading Phrases View -->
+            <div id="view-loading-phrases" class="view">
+                <div class="view-header">
+                    <h1>Loading Phrases</h1>
+                    <button class="btn btn-primary" id="save-phrases-btn">Save Changes</button>
+                </div>
+                <div id="loading-phrases-container"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal for User Add/Edit -->
+    <div id="user-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="user-modal-title">Add User</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <form id="user-form">
+                <input type="hidden" id="user-id" name="id">
+                <div class="form-group">
+                    <label for="user-username">Username</label>
+                    <input type="text" id="user-username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="user-password">Password</label>
+                    <input type="password" id="user-password" name="password">
+                    <small id="password-hint" style="display: none;">Leave blank to keep current password</small>
+                </div>
+                <div class="form-group">
+                    <label for="user-parent">Parent User (Sub-Account)</label>
+                    <select id="user-parent" name="parent_user_id">
+                        <option value="">None - Standalone Account</option>
+                    </select>
+                    <small><i>Sub-accounts inherit parent's RD API key and share IP session</i></small>
+                </div>
+                <div class="form-group">
+                    <label for="user-rd-key">Real-Debrid API Key <span style="color: var(--danger-color);">REQUIRED</span></label>
+                    <input type="text" id="user-rd-key" name="rd_api_key" placeholder="Enter RD API key">
+                    <small><i>User will be disabled until a valid key is added. Sub-accounts inherit parent's key.</i></small>
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="user-is-admin" name="is_admin">
+                        Admin User
+                    </label>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary modal-close">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+                <div id="user-form-error" class="error-message"></div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/admin/app.js?v=7"></script>
+</body>
+</html>

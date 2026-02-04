@@ -9,6 +9,7 @@ const downloadJobManager = require('../services/download-job-manager');
 const { getUserRdApiKey, getEffectiveUserId } = require('../services/user-service');
 const { resolveZurgToRdLink } = require('../services/zurg-to-rd-resolver');
 const { logPlaybackFailure } = require('../services/failure-tracker');
+const { checkRdSession, startRdSession, updateRdHeartbeat, endRdSession } = require('../services/rd-session-tracker');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
@@ -663,54 +664,50 @@ router.post('/stream-url', async (req, res) => {
 router.post('/session/check', (req, res) => {
   try {
     const userId = req.user.sub;
+    const username = req.user.username;
     const clientIp = req.ip;
 
-    logger.info(`VOD session check for user ${req.user.username} from ${clientIp}`);
+    logger.info(`[RD Session] Check for user ${username} from ${clientIp}`);
 
-    // Get effective user ID (parent for sub-accounts, so they share IP sessions)
-    const effectiveUserId = getEffectiveUserId(userId);
+    // Get user's RD API key (inherits from parent if sub-account)
+    const rdApiKey = getUserRdApiKey(userId);
 
-    // Check if user has an active VOD session on a different IP
-    const timeoutMs = parseInt(process.env.VOD_SESSION_TIMEOUT_MS) || 120000;
-    const timeoutThreshold = new Date(Date.now() - timeoutMs).toISOString();
-
-    const activeSessions = db.prepare(`
-      SELECT ip_address, last_vod_playback_at, last_heartbeat_at
-      FROM user_sessions
-      WHERE user_id = ?
-        AND ip_address != ?
-        AND (
-          last_vod_playback_at > ? OR
-          last_heartbeat_at > ?
-        )
-    `).all(effectiveUserId, clientIp, timeoutThreshold, timeoutThreshold);
-
-    if (activeSessions.length > 0) {
-      const activeSession = activeSessions[0];
-      logger.warn(`User ${req.user.username} has active VOD session on ${activeSession.ip_address}`);
-      return res.status(409).json({
-        error: 'Concurrent stream detected',
-        message: 'You already have an active stream on another device',
-        activeIp: activeSession.ip_address.split('.').slice(0, 2).join('.') + '.*.*' // Partial IP for privacy
+    if (!rdApiKey) {
+      logger.error(`[RD Session] User ${username} has no RD API key`);
+      return res.status(403).json({
+        error: 'No RD API key configured',
+        message: 'Your account requires a Real-Debrid API key. Please contact an administrator.'
       });
     }
 
-    // Update or create session for this IP (use effectiveUserId for sub-accounts)
-    db.prepare(`
-      INSERT INTO user_sessions (user_id, ip_address, last_vod_playback_at)
-      VALUES (?, ?, datetime('now'))
-      ON CONFLICT(user_id, ip_address)
-      DO UPDATE SET last_vod_playback_at = datetime('now')
-    `).run(effectiveUserId, clientIp);
+    // Check if this RD key is being used from a different IP
+    const sessionCheck = checkRdSession(rdApiKey, clientIp, userId);
 
-    logger.info(`VOD session approved for user ${req.user.username} on ${clientIp}`);
+    if (!sessionCheck.allowed) {
+      const activeSession = sessionCheck.activeSession;
+      logger.warn(`[RD Session] BLOCKED: ${username} attempted stream from ${clientIp}, but RD key in use by ${activeSession.username} on ${activeSession.ipAddress}`);
+
+      return res.status(409).json({
+        error: 'Real-Debrid key in use elsewhere',
+        message: `User or Sub-User is Using This Service Elsewhere, Please Try Again Later`,
+        details: {
+          activeUser: activeSession.username,
+          startedAt: activeSession.startedAt
+        }
+      });
+    }
+
+    // Start new RD session
+    startRdSession(rdApiKey, clientIp, userId, username);
+
+    logger.info(`[RD Session] APPROVED: ${username} on ${clientIp} with RD ${rdApiKey.slice(-6)}`);
 
     res.json({
       success: true,
       message: 'Playback authorized'
     });
   } catch (error) {
-    logger.error('VOD session check error:', error);
+    logger.error('[RD Session] Check error:', error);
     res.status(500).json({ error: 'Session check failed' });
   }
 });
@@ -724,16 +721,19 @@ router.post('/session/heartbeat', (req, res) => {
     const userId = req.user.sub;
     const clientIp = req.ip;
 
-    db.prepare(`
-      INSERT INTO user_sessions (user_id, ip_address, last_heartbeat_at)
-      VALUES (?, ?, datetime('now'))
-      ON CONFLICT(user_id, ip_address)
-      DO UPDATE SET last_heartbeat_at = datetime('now')
-    `).run(userId, clientIp);
+    // Get user's RD API key
+    const rdApiKey = getUserRdApiKey(userId);
+
+    if (!rdApiKey) {
+      return res.status(403).json({ error: 'No RD API key configured' });
+    }
+
+    // Update RD session heartbeat
+    updateRdHeartbeat(rdApiKey, clientIp);
 
     res.json({ success: true });
   } catch (error) {
-    logger.error('VOD heartbeat error:', error);
+    logger.error('[RD Session] Heartbeat error:', error);
     res.status(500).json({ error: 'Heartbeat failed' });
   }
 });
@@ -747,17 +747,19 @@ router.post('/session/end', (req, res) => {
     const userId = req.user.sub;
     const clientIp = req.ip;
 
-    db.prepare(`
-      UPDATE user_sessions
-      SET last_vod_playback_at = NULL, last_heartbeat_at = NULL
-      WHERE user_id = ? AND ip_address = ?
-    `).run(userId, clientIp);
+    // Get user's RD API key
+    const rdApiKey = getUserRdApiKey(userId);
 
-    logger.info(`VOD session ended for user ${req.user.username} on ${clientIp}`);
+    if (rdApiKey) {
+      // End RD session (removed after 5s if no heartbeat)
+      endRdSession(rdApiKey, clientIp);
+    }
+
+    logger.info(`[RD Session] Ended for user ${req.user.username} on ${clientIp}`);
 
     res.json({ success: true });
   } catch (error) {
-    logger.error('VOD session end error:', error);
+    logger.error('[RD Session] End error:', error);
     res.status(500).json({ error: 'Session end failed' });
   }
 });

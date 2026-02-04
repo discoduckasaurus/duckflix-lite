@@ -33,8 +33,8 @@ router.post('/login', loginLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Username and password required' });
     }
 
-    // Get user from database
-    const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+    // Get user from database (case-insensitive)
+    const user = db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?)').get(username);
 
     // Always hash to prevent timing attacks (even if user doesn't exist)
     const passwordMatch = user
@@ -44,6 +44,28 @@ router.post('/login', loginLimiter, async (req, res) => {
     if (!user || !passwordMatch) {
       logger.warn(`Failed login attempt for username: ${username} from IP: ${req.ip}`);
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check if user is enabled (must have valid RD API key)
+    if (!user.enabled && !user.is_admin) {
+      logger.warn(`Login blocked for disabled user: ${username}`);
+      return res.status(403).json({
+        error: 'Account disabled',
+        message: 'Your account requires a valid Real-Debrid API key. Please contact an administrator.'
+      });
+    }
+
+    // Check if RD subscription is expired
+    if (user.rd_expiry_date && !user.is_admin) {
+      const expiry = new Date(user.rd_expiry_date);
+      const now = new Date();
+      if (expiry < now) {
+        logger.warn(`Login blocked for expired RD subscription: ${username}`);
+        return res.status(403).json({
+          error: 'Real-Debrid subscription expired',
+          message: 'Your Real-Debrid subscription has expired. Please renew and contact an administrator.'
+        });
+      }
     }
 
     // Update last login

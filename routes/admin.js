@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { db } = require('../db/init');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const { validateRDKey, checkUserRDExpiry } = require('../services/rd-expiry-checker');
 
 const router = express.Router();
 
@@ -17,7 +18,7 @@ router.use(requireAdmin);
 router.get('/users', (req, res) => {
   try {
     const users = db.prepare(`
-      SELECT id, username, is_admin, parent_user_id, rd_api_key, rd_expiry_date, created_at, last_login_at
+      SELECT id, username, is_admin, parent_user_id, rd_api_key, rd_expiry_date, enabled, created_at, last_login_at
       FROM users
       ORDER BY created_at DESC
     `).all();
@@ -31,6 +32,7 @@ router.get('/users', (req, res) => {
         // SECURITY: Mask RD API keys (only show last 4 chars)
         rdApiKey: u.rd_api_key ? `****${u.rd_api_key.slice(-4)}` : null,
         rdExpiryDate: u.rd_expiry_date,
+        enabled: !!u.enabled,
         createdAt: u.created_at,
         lastLoginAt: u.last_login_at
       }))
@@ -53,12 +55,47 @@ router.post('/users', async (req, res) => {
       return res.status(400).json({ error: 'Username and password required' });
     }
 
+    // Check for case-insensitive duplicate username
+    const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(username);
+    if (existingUser) {
+      return res.status(409).json({ error: 'Username already exists' });
+    }
+
     // Validate parent user exists if provided
+    let parent = null;
     if (parentUserId) {
-      const parent = db.prepare('SELECT id FROM users WHERE id = ?').get(parentUserId);
+      parent = db.prepare('SELECT id, enabled, rd_api_key, rd_expiry_date FROM users WHERE id = ?').get(parentUserId);
       if (!parent) {
         return res.status(400).json({ error: 'Parent user not found' });
       }
+    }
+
+    // Validate and check RD API key if provided
+    let validatedRdKey = rdApiKey;
+    let validatedExpiry = rdExpiryDate;
+    let enabled = 0; // Disabled by default until RD key is validated
+
+    // Sub-accounts inherit parent's status
+    if (parent) {
+      enabled = parent.enabled; // Inherit parent's enabled status
+      logger.info(`[User Create] Sub-account ${username} inherits parent's enabled status: ${enabled}`);
+    } else if (rdApiKey) {
+      // Standalone account with RD key
+      try {
+        const rdValidation = await validateRDKey(rdApiKey);
+        if (rdValidation.valid) {
+          validatedExpiry = rdValidation.expiryDate;
+          enabled = 1; // Enable user if RD key is valid
+          logger.info(`[User Create] Valid RD key for ${username}, expiry: ${validatedExpiry}`);
+        } else {
+          return res.status(400).json({ error: `Invalid RD API key: ${rdValidation.error}` });
+        }
+      } catch (error) {
+        return res.status(400).json({ error: `Failed to validate RD API key: ${error.message}` });
+      }
+    } else {
+      // Standalone account without RD key - stays disabled
+      logger.info(`[User Create] Standalone account ${username} created without RD key, disabled`);
     }
 
     // Hash password
@@ -66,13 +103,13 @@ router.post('/users', async (req, res) => {
 
     // Create user
     const result = db.prepare(`
-      INSERT INTO users (username, password_hash, is_admin, parent_user_id, rd_api_key, rd_expiry_date)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(username, passwordHash, isAdmin ? 1 : 0, parentUserId || null, rdApiKey || null, rdExpiryDate || null);
+      INSERT INTO users (username, password_hash, is_admin, parent_user_id, rd_api_key, rd_expiry_date, enabled)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(username, passwordHash, isAdmin ? 1 : 0, parentUserId || null, validatedRdKey || null, validatedExpiry || null, enabled);
 
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(result.lastInsertRowid);
 
-    logger.info(`User created: ${username} (ID: ${user.id})`);
+    logger.info(`User created: ${username} (ID: ${user.id}, enabled: ${enabled})`);
 
     res.status(201).json({
       user: {
@@ -81,7 +118,8 @@ router.post('/users', async (req, res) => {
         isAdmin: !!user.is_admin,
         parentUserId: user.parent_user_id,
         rdApiKey: user.rd_api_key,
-        rdExpiryDate: user.rd_expiry_date
+        rdExpiryDate: user.rd_expiry_date,
+        enabled: !!user.enabled
       }
     });
   } catch (error) {
@@ -100,7 +138,7 @@ router.post('/users', async (req, res) => {
 router.put('/users/:id', async (req, res) => {
   try {
     const userId = parseInt(req.params.id, 10);
-    const { username, password, rdApiKey, rdExpiryDate } = req.body;
+    const { username, password, rdApiKey, parentUserId, isAdmin } = req.body;
 
     // Check user exists
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
@@ -108,11 +146,27 @@ router.put('/users/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // Validate parent user if provided
+    let parent = null;
+    if (parentUserId !== undefined) {
+      if (parentUserId) {
+        parent = db.prepare('SELECT id, enabled, rd_api_key FROM users WHERE id = ?').get(parentUserId);
+        if (!parent) {
+          return res.status(400).json({ error: 'Parent user not found' });
+        }
+      }
+    }
+
     // Build update query dynamically
     const updates = [];
     const values = [];
 
-    if (username) {
+    if (username !== undefined) {
+      // Check for case-insensitive duplicate username (excluding current user)
+      const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND id != ?').get(username, userId);
+      if (existingUser) {
+        return res.status(409).json({ error: 'Username already exists' });
+      }
       updates.push('username = ?');
       values.push(username);
     }
@@ -123,14 +177,69 @@ router.put('/users/:id', async (req, res) => {
       values.push(passwordHash);
     }
 
-    if (rdApiKey !== undefined) {
-      updates.push('rd_api_key = ?');
-      values.push(rdApiKey);
+    if (isAdmin !== undefined) {
+      updates.push('is_admin = ?');
+      values.push(isAdmin ? 1 : 0);
     }
 
-    if (rdExpiryDate !== undefined) {
+    if (parentUserId !== undefined) {
+      updates.push('parent_user_id = ?');
+      values.push(parentUserId || null);
+    }
+
+    // Handle RD API key updates
+    let validatedRdKey = rdApiKey;
+    let validatedExpiry = null;
+    let shouldUpdateEnabled = false;
+    let newEnabledStatus = user.enabled;
+
+    if (rdApiKey !== undefined && rdApiKey) {
+      // Validate RD key if provided
+      try {
+        const rdValidation = await validateRDKey(rdApiKey);
+        if (rdValidation.valid) {
+          validatedExpiry = rdValidation.expiryDate;
+          updates.push('rd_api_key = ?');
+          values.push(rdApiKey);
+          updates.push('rd_expiry_date = ?');
+          values.push(validatedExpiry);
+
+          // Enable if RD key is valid and no parent
+          if (!parent && !parentUserId) {
+            shouldUpdateEnabled = true;
+            newEnabledStatus = 1;
+          }
+        } else {
+          return res.status(400).json({ error: `Invalid RD API key: ${rdValidation.error}` });
+        }
+      } catch (error) {
+        return res.status(400).json({ error: `Failed to validate RD API key: ${error.message}` });
+      }
+    } else if (rdApiKey === null || rdApiKey === '') {
+      // Removing RD key
+      updates.push('rd_api_key = ?');
+      values.push(null);
       updates.push('rd_expiry_date = ?');
-      values.push(rdExpiryDate);
+      values.push(null);
+    }
+
+    // Update enabled status based on parent change
+    if (parentUserId !== undefined) {
+      shouldUpdateEnabled = true;
+      if (parent) {
+        // Converting to sub-user - inherit parent's enabled status
+        newEnabledStatus = parent.enabled;
+        logger.info(`[User Update] Converting ${user.username} to sub-user, inheriting enabled=${newEnabledStatus}`);
+      } else {
+        // Converting to standalone - enabled only if has valid RD key
+        newEnabledStatus = user.rd_api_key || validatedRdKey ? 1 : 0;
+        logger.info(`[User Update] Converting ${user.username} to standalone, enabled=${newEnabledStatus}`);
+      }
+    }
+
+    if (shouldUpdateEnabled) {
+      updates.push('enabled = ?');
+      values.push(newEnabledStatus);
     }
 
     if (updates.length === 0) {
@@ -140,13 +249,13 @@ router.put('/users/:id', async (req, res) => {
     values.push(userId);
 
     db.prepare(`
-      UPDATE users SET ${updates.join(', ')}
+      UPDATE users SET ${updates.join(', ')}, updated_at = datetime('now')
       WHERE id = ?
     `).run(...values);
 
     const updatedUser = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
 
-    logger.info(`User updated: ${updatedUser.username} (ID: ${userId})`);
+    logger.info(`User updated: ${updatedUser.username} (ID: ${userId}, enabled: ${updatedUser.enabled})`);
 
     res.json({
       user: {
@@ -155,7 +264,8 @@ router.put('/users/:id', async (req, res) => {
         isAdmin: !!updatedUser.is_admin,
         parentUserId: updatedUser.parent_user_id,
         rdApiKey: updatedUser.rd_api_key,
-        rdExpiryDate: updatedUser.rd_expiry_date
+        rdExpiryDate: updatedUser.rd_expiry_date,
+        enabled: !!updatedUser.enabled
       }
     });
   } catch (error) {

@@ -69,6 +69,11 @@ app.use('/api/content', contentRoutes);
 // Static files (APK hosting)
 app.use('/static', express.static(path.join(__dirname, 'static')));
 
+// Admin dashboard (SPA - serve index.html for all /admin routes)
+app.get('/admin*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'static', 'admin', 'index.html'));
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
@@ -105,6 +110,40 @@ async function start() {
         logger.error('[RD Cache] Cleanup failed:', error);
       }
     }, 60 * 60 * 1000); // 1 hour
+
+    // Start RD expiry checker job (runs every 6 hours)
+    logger.info('Starting RD expiry checker job...');
+    const { checkAllUsersRDExpiry } = require('./services/rd-expiry-checker');
+
+    // Run once on startup
+    setTimeout(async () => {
+      try {
+        await checkAllUsersRDExpiry();
+      } catch (error) {
+        logger.error('[RD Expiry] Initial check failed:', error);
+      }
+    }, 30000); // Wait 30s after startup
+
+    // Then run every 6 hours
+    setInterval(async () => {
+      try {
+        await checkAllUsersRDExpiry();
+      } catch (error) {
+        logger.error('[RD Expiry] Periodic check failed:', error);
+      }
+    }, 6 * 60 * 60 * 1000); // 6 hours
+
+    // Start RD session cleanup job (runs every 30 seconds)
+    logger.info('Starting RD session cleanup job...');
+    const { cleanupExpiredRdSessions } = require('./services/rd-session-tracker');
+
+    setInterval(() => {
+      try {
+        cleanupExpiredRdSessions();
+      } catch (error) {
+        logger.error('[RD Session] Cleanup failed:', error);
+      }
+    }, 30000); // 30 seconds
 
     // HTTPS server configuration
     const httpsOptions = {

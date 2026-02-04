@@ -311,8 +311,9 @@ router.get('/health', async (req, res) => {
 
     // Test RD API (using test key from env if available)
     const testRdApiKey = process.env.TEST_RD_API_KEY || process.env.RD_API_KEY;
-    let rdStatus = 'down';
+    let rdStatus = 'n/a';
     let rdResponseTime = null;
+    let rdMessage = 'No test key configured (per-user keys in use)';
     if (testRdApiKey) {
       const rdStart = Date.now();
       try {
@@ -322,14 +323,18 @@ router.get('/health', async (req, res) => {
         });
         rdResponseTime = Date.now() - rdStart;
         rdStatus = 'up';
+        rdMessage = 'Test key valid';
       } catch (err) {
         logger.error('RD health check failed:', err.message);
+        rdStatus = 'down';
+        rdMessage = err.message;
       }
     }
     services.push({
       name: 'Real-Debrid API',
       status: rdStatus,
       responseTime: rdResponseTime,
+      message: rdMessage,
       lastChecked: new Date().toISOString()
     });
 
@@ -342,28 +347,80 @@ router.get('/health', async (req, res) => {
 
 /**
  * GET /api/admin/loading-phrases
- * Get current loading phrase pairs
+ * Get current loading phrases (separate A and B lists)
  */
 router.get('/loading-phrases', (req, res) => {
   try {
     // Check if phrases are in database
     const phrasesRecord = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('loading_phrases');
 
-    let phrases;
+    let phrasesA, phrasesB;
     if (phrasesRecord) {
-      phrases = JSON.parse(phrasesRecord.value);
+      const data = JSON.parse(phrasesRecord.value);
+      phrasesA = data.phrasesA || [];
+      phrasesB = data.phrasesB || [];
     } else {
-      // Default phrases
-      phrases = [
-        { phraseA: "Reticulating", phraseB: "splines" },
-        { phraseA: "Calibrating", phraseB: "flux capacitor" },
-        { phraseA: "Initializing", phraseB: "hyperdrive" },
-        { phraseA: "Downloading", phraseB: "more RAM" },
-        { phraseA: "Spinning up", phraseB: "hamster wheels" }
+      // Default phrases - organized by first letter
+      phrasesA = [
+        "Analyzing", "Allocating", "Assembling",
+        "Buffering", "Bootstrapping", "Building",
+        "Calculating", "Calibrating", "Compiling",
+        "Downloading", "Decoding", "Deploying",
+        "Encrypting", "Establishing", "Extracting",
+        "Formatting", "Fetching", "Fragmenting",
+        "Generating", "Gathering", "Gridding",
+        "Hashing", "Hijacking", "Harmonizing",
+        "Initializing", "Installing", "Integrating",
+        "Juggling", "Jamming", "Joining",
+        "Kindling", "Knitting", "Kneading",
+        "Loading", "Linking", "Launching",
+        "Materializing", "Mounting", "Mapping",
+        "Negotiating", "Normalizing", "Networking",
+        "Optimizing", "Organizing", "Orchestrating",
+        "Processing", "Parsing", "Preparing",
+        "Quantifying", "Querying", "Queueing",
+        "Reticulating", "Rendering", "Resolving",
+        "Scanning", "Spinning", "Syncing",
+        "Transmitting", "Translating", "Transcoding",
+        "Uploading", "Updating", "Unpacking",
+        "Validating", "Vectorizing", "Virtualizing",
+        "Warming", "Weaving", "Wrangling",
+        "X-raying", "Xeroxing", "Xylophonicating",
+        "Yielding", "Yodeling", "Yanking",
+        "Zipping", "Zigzagging", "Zapping"
+      ];
+
+      phrasesB = [
+        "algorithms", "architectures", "atoms",
+        "bits", "buffers", "bandwidths",
+        "caches", "circuits", "clouds",
+        "data", "directories", "drives",
+        "electrons", "engines", "endpoints",
+        "files", "frameworks", "flux capacitors",
+        "gateways", "graphics", "grids",
+        "hamster wheels", "hashes", "hardware",
+        "instances", "interfaces", "indices",
+        "journeys", "jets", "junctions",
+        "kernels", "keys", "kilobytes",
+        "libraries", "layers", "links",
+        "memories", "modules", "metadata",
+        "networks", "nodes", "namespaces",
+        "objects", "operations", "outputs",
+        "protocols", "processors", "packets",
+        "queries", "queues", "quotas",
+        "resources", "registers", "RAM",
+        "splines", "servers", "streams",
+        "threads", "tables", "tokens",
+        "units", "URIs", "uploads",
+        "variables", "vectors", "volumes",
+        "widgets", "workers", "wires",
+        "XML", "x-coordinates", "xeroxes",
+        "yields", "yottabytes", "yarn",
+        "zones", "zettabytes", "zeros"
       ];
     }
 
-    res.json({ phrases });
+    res.json({ phrasesA, phrasesB });
   } catch (error) {
     logger.error('Get loading phrases error:', error);
     res.status(500).json({ error: 'Failed to get loading phrases' });
@@ -371,34 +428,75 @@ router.get('/loading-phrases', (req, res) => {
 });
 
 /**
+ * GET /api/admin/loading-phrases/test
+ * Test phrase generation with anti-repetition buffer
+ */
+router.get('/loading-phrases/test', (req, res) => {
+  try {
+    const count = parseInt(req.query.count, 10) || 15;
+
+    // Get phrases
+    const phrasesRecord = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('loading_phrases');
+
+    let phrasesA, phrasesB;
+    if (phrasesRecord) {
+      const data = JSON.parse(phrasesRecord.value);
+      phrasesA = data.phrasesA || [];
+      phrasesB = data.phrasesB || [];
+    } else {
+      return res.status(404).json({ error: 'No loading phrases configured' });
+    }
+
+    // Generate phrases with buffer
+    const LoadingPhraseGenerator = require('../services/loading-phrase-generator');
+    const generator = new LoadingPhraseGenerator(phrasesA, phrasesB);
+    const pairs = generator.generateMultiple(count);
+
+    res.json({
+      count: pairs.length,
+      pairs: pairs.map(p => `${p.phraseA} ${p.phraseB}`),
+      details: pairs
+    });
+  } catch (error) {
+    logger.error('Test loading phrases error:', error);
+    res.status(500).json({ error: 'Failed to test loading phrases' });
+  }
+});
+
+/**
  * PUT /api/admin/loading-phrases
- * Update loading phrase pairs
+ * Update loading phrases (separate A and B lists)
  */
 router.put('/loading-phrases', (req, res) => {
   try {
-    const { phrases } = req.body;
+    const { phrasesA, phrasesB } = req.body;
 
-    if (!Array.isArray(phrases)) {
-      return res.status(400).json({ error: 'Phrases must be an array' });
+    if (!Array.isArray(phrasesA) || !Array.isArray(phrasesB)) {
+      return res.status(400).json({ error: 'phrasesA and phrasesB must be arrays' });
     }
 
-    // Validate phrase structure
-    for (const phrase of phrases) {
-      if (!phrase.phraseA || !phrase.phraseB) {
-        return res.status(400).json({ error: 'Each phrase must have phraseA and phraseB' });
-      }
+    // Validate that each phrase in A has at least one matching phrase in B (by first letter)
+    const bFirstLetters = new Set(phrasesB.map(p => p.charAt(0).toUpperCase()));
+    const unmatchedA = phrasesA.filter(a => !bFirstLetters.has(a.charAt(0).toUpperCase()));
+
+    if (unmatchedA.length > 0) {
+      return res.status(400).json({
+        error: 'Each A phrase must have at least one B phrase with matching first letter',
+        unmatchedPhrases: unmatchedA
+      });
     }
 
     // Store in database
+    const data = { phrasesA, phrasesB };
     db.prepare(`
       INSERT INTO app_settings (key, value, updated_at)
       VALUES ('loading_phrases', ?, datetime('now'))
       ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = datetime('now')
-    `).run(JSON.stringify(phrases), JSON.stringify(phrases));
+    `).run(JSON.stringify(data), JSON.stringify(data));
 
-    logger.info(`Admin ${req.user.username} updated loading phrases (${phrases.length} pairs)`);
+    logger.info(`Admin ${req.user.username} updated loading phrases (${phrasesA.length} A, ${phrasesB.length} B)`);
 
-    res.json({ success: true, phrases });
+    res.json({ success: true, phrasesA, phrasesB });
   } catch (error) {
     logger.error('Update loading phrases error:', error);
     res.status(500).json({ error: 'Failed to update loading phrases' });
