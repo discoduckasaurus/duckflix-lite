@@ -96,6 +96,403 @@ router.get('/tmdb/trending', async (req, res) => {
 router.use(authenticateToken);
 
 /**
+ * Helper: Format TMDB results consistently
+ */
+function formatResults(results) {
+  return results
+    .filter(item => {
+      const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
+      const isRated = item.vote_average && item.vote_average > 0;
+      const hasVotes = item.vote_count && item.vote_count > 0;
+      return hasPoster && isRated && hasVotes;
+    })
+    .map(item => ({
+      id: item.id,
+      title: item.title || item.name,
+      year: (item.release_date || item.first_air_date || '').substring(0, 4),
+      posterPath: item.poster_path,
+      backdropPath: item.backdrop_path,
+      overview: item.overview,
+      voteAverage: item.vote_average,
+      voteCount: item.vote_count,
+      mediaType: item.media_type || (item.title ? 'movie' : 'tv')
+    }));
+}
+
+/**
+ * GET /api/search/collections/popular
+ * Get popular movies and TV shows
+ */
+router.get('/collections/popular', async (req, res) => {
+  try {
+    const { type = 'movie', page = 1 } = req.query;
+    const contentType = type === 'tv' ? 'tv' : 'movie';
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    const cacheKey = `popular_${contentType}_${page}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const response = await axios.get(`https://api.themoviedb.org/3/${contentType}/popular`, {
+      params: {
+        api_key: tmdbApiKey,
+        page
+      }
+    });
+
+    const results = formatResults(response.data.results);
+    const responseData = {
+      results,
+      page: response.data.page,
+      totalPages: response.data.total_pages,
+      totalResults: response.data.total_results
+    };
+
+    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+    res.json(responseData);
+  } catch (error) {
+    logger.error('Popular collection error:', error);
+    res.status(500).json({ error: 'Failed to fetch popular content' });
+  }
+});
+
+/**
+ * GET /api/search/collections/top-rated
+ * Get top rated movies and TV shows
+ */
+router.get('/collections/top-rated', async (req, res) => {
+  try {
+    const { type = 'movie', page = 1 } = req.query;
+    const contentType = type === 'tv' ? 'tv' : 'movie';
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    const cacheKey = `top_rated_${contentType}_${page}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const response = await axios.get(`https://api.themoviedb.org/3/${contentType}/top_rated`, {
+      params: {
+        api_key: tmdbApiKey,
+        page
+      }
+    });
+
+    const results = formatResults(response.data.results);
+    const responseData = {
+      results,
+      page: response.data.page,
+      totalPages: response.data.total_pages,
+      totalResults: response.data.total_results
+    };
+
+    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+    res.json(responseData);
+  } catch (error) {
+    logger.error('Top rated collection error:', error);
+    res.status(500).json({ error: 'Failed to fetch top rated content' });
+  }
+});
+
+/**
+ * GET /api/search/collections/now-playing
+ * Get movies currently in theaters
+ */
+router.get('/collections/now-playing', async (req, res) => {
+  try {
+    const { page = 1 } = req.query;
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    const cacheKey = `now_playing_${page}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const response = await axios.get('https://api.themoviedb.org/3/movie/now_playing', {
+      params: {
+        api_key: tmdbApiKey,
+        page
+      }
+    });
+
+    const results = formatResults(response.data.results);
+    const responseData = {
+      results,
+      page: response.data.page,
+      totalPages: response.data.total_pages,
+      totalResults: response.data.total_results
+    };
+
+    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+    res.json(responseData);
+  } catch (error) {
+    logger.error('Now playing collection error:', error);
+    res.status(500).json({ error: 'Failed to fetch now playing movies' });
+  }
+});
+
+/**
+ * GET /api/search/collections/upcoming
+ * Get upcoming movies
+ */
+router.get('/collections/upcoming', async (req, res) => {
+  try {
+    const { page = 1 } = req.query;
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    const cacheKey = `upcoming_${page}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const response = await axios.get('https://api.themoviedb.org/3/movie/upcoming', {
+      params: {
+        api_key: tmdbApiKey,
+        page
+      }
+    });
+
+    const results = formatResults(response.data.results);
+    const responseData = {
+      results,
+      page: response.data.page,
+      totalPages: response.data.total_pages,
+      totalResults: response.data.total_results
+    };
+
+    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+    res.json(responseData);
+  } catch (error) {
+    logger.error('Upcoming collection error:', error);
+    res.status(500).json({ error: 'Failed to fetch upcoming movies' });
+  }
+});
+
+/**
+ * GET /api/search/collections/airing-today
+ * Get TV shows airing today
+ */
+router.get('/collections/airing-today', async (req, res) => {
+  try {
+    const { page = 1 } = req.query;
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    const cacheKey = `airing_today_${page}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const response = await axios.get('https://api.themoviedb.org/3/tv/airing_today', {
+      params: {
+        api_key: tmdbApiKey,
+        page
+      }
+    });
+
+    const results = formatResults(response.data.results);
+    const responseData = {
+      results,
+      page: response.data.page,
+      totalPages: response.data.total_pages,
+      totalResults: response.data.total_results
+    };
+
+    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+    res.json(responseData);
+  } catch (error) {
+    logger.error('Airing today collection error:', error);
+    res.status(500).json({ error: 'Failed to fetch airing today shows' });
+  }
+});
+
+/**
+ * GET /api/search/collections/on-the-air
+ * Get TV shows currently on the air
+ */
+router.get('/collections/on-the-air', async (req, res) => {
+  try {
+    const { page = 1 } = req.query;
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    const cacheKey = `on_the_air_${page}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const response = await axios.get('https://api.themoviedb.org/3/tv/on_the_air', {
+      params: {
+        api_key: tmdbApiKey,
+        page
+      }
+    });
+
+    const results = formatResults(response.data.results);
+    const responseData = {
+      results,
+      page: response.data.page,
+      totalPages: response.data.total_pages,
+      totalResults: response.data.total_results
+    };
+
+    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+    res.json(responseData);
+  } catch (error) {
+    logger.error('On the air collection error:', error);
+    res.status(500).json({ error: 'Failed to fetch on the air shows' });
+  }
+});
+
+/**
+ * GET /api/search/collections/discover
+ * Advanced discover with filters
+ * Supports: genre, year, rating, runtime, language, etc.
+ */
+router.get('/collections/discover', async (req, res) => {
+  try {
+    const {
+      type = 'movie',
+      page = 1,
+      genre,
+      year,
+      minRating,
+      maxRating,
+      minRuntime,
+      maxRuntime,
+      language,
+      sortBy = 'popularity.desc'
+    } = req.query;
+
+    const contentType = type === 'tv' ? 'tv' : 'movie';
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    // Build cache key from all params
+    const cacheKey = `discover_${contentType}_${JSON.stringify(req.query)}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    // Build query params
+    const params = {
+      api_key: tmdbApiKey,
+      page,
+      sort_by: sortBy
+    };
+
+    if (genre) params.with_genres = genre;
+    if (year) {
+      if (contentType === 'movie') {
+        params.primary_release_year = year;
+      } else {
+        params.first_air_date_year = year;
+      }
+    }
+    if (minRating) params['vote_average.gte'] = minRating;
+    if (maxRating) params['vote_average.lte'] = maxRating;
+    if (minRuntime) params['with_runtime.gte'] = minRuntime;
+    if (maxRuntime) params['with_runtime.lte'] = maxRuntime;
+    if (language) params.with_original_language = language;
+
+    const response = await axios.get(`https://api.themoviedb.org/3/discover/${contentType}`, {
+      params
+    });
+
+    const results = formatResults(response.data.results);
+    const responseData = {
+      results,
+      page: response.data.page,
+      totalPages: response.data.total_pages,
+      totalResults: response.data.total_results,
+      filters: {
+        genre,
+        year,
+        minRating,
+        maxRating,
+        language,
+        sortBy
+      }
+    };
+
+    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+    res.json(responseData);
+  } catch (error) {
+    logger.error('Discover collection error:', error);
+    res.status(500).json({ error: 'Failed to discover content' });
+  }
+});
+
+/**
+ * GET /api/search/collections/genres
+ * Get list of all genres
+ */
+router.get('/collections/genres', async (req, res) => {
+  try {
+    const { type = 'movie' } = req.query;
+    const contentType = type === 'tv' ? 'tv' : 'movie';
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    const cacheKey = `genres_${contentType}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const response = await axios.get(`https://api.themoviedb.org/3/genre/${contentType}/list`, {
+      params: {
+        api_key: tmdbApiKey
+      }
+    });
+
+    cache.set(cacheKey, { data: response.data, timestamp: Date.now() });
+    res.json(response.data);
+  } catch (error) {
+    logger.error('Genres list error:', error);
+    res.status(500).json({ error: 'Failed to fetch genres' });
+  }
+});
+
+router.use(authenticateToken);
+
+/**
  * Calculate relevance score for search result
  * Higher score = more relevant
  */
