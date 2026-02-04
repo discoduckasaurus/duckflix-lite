@@ -36,6 +36,14 @@ data class TrackInfo(
     val isSelected: Boolean
 )
 
+data class AudioTrackCandidate(
+    val trackId: String,
+    val label: String,
+    val language: String?,
+    val title: String?,
+    val isSelected: Boolean
+)
+
 enum class LoadingPhase {
     CHECKING_CACHE,      // Checking Zurg + RD cache
     SEARCHING,           // Searching for sources (no progress UI shown)
@@ -265,13 +273,6 @@ class VideoPlayerViewModel @Inject constructor(
             val subtitleTracks = mutableListOf<TrackInfo>()
 
             // Build list of audio tracks with metadata
-            data class AudioTrackCandidate(
-                val trackId: String,
-                val label: String,
-                val language: String?,
-                val title: String?,
-                val isSelected: Boolean
-            )
             val candidates = mutableListOf<AudioTrackCandidate>()
 
             player.currentTracks.groups.forEach { group ->
