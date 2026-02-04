@@ -107,62 +107,64 @@ router.post('/stream-url/start', async (req, res) => {
       episode
     });
 
-    if (zurgResult.match) { // Only use good quality, skip fallbacks
-      const file = zurgResult.match;
-
-      logger.info(`Zurg match found: ${file.filePath}`);
-
-      // Try to resolve Zurg path to direct RD link (supports HTTP range requests)
+    // Try all Zurg matches in quality order, attempting RD resolution on each
+    if (zurgResult.matches && zurgResult.matches.length > 0) {
       const rdApiKey = getUserRdApiKey(userId);
-      let streamUrl = null;
-      let source = 'zurg';
 
       if (rdApiKey) {
-        const rdLink = await resolveZurgToRdLink(file.filePath, rdApiKey);
-        if (rdLink) {
-          streamUrl = rdLink;
-          source = 'rd-via-zurg';
-          logger.info(`Using RD direct link: ${streamUrl.substring(0, 60)}...`);
+        // Filter for QUALITY matches only (meetsQualityThreshold = true)
+        const qualityMatches = zurgResult.matches.filter(m => m.meetsQualityThreshold);
+
+        if (qualityMatches.length === 0) {
+          logger.info(`Skipping ${zurgResult.matches.length} garbage Zurg matches (all < 7 MB/min), using Prowlarr`);
         } else {
-          logger.warn('Failed to resolve Zurg to RD, falling back to Zurg WebDAV');
+          logger.info(`Trying ${qualityMatches.length} quality Zurg matches (skipping ${zurgResult.matches.length - qualityMatches.length} garbage)`);
         }
+
+        // Loop through QUALITY Zurg matches only, trying RD resolution on each
+        for (let i = 0; i < qualityMatches.length; i++) {
+          const file = qualityMatches[i];
+          logger.info(`Trying quality match ${i + 1}/${qualityMatches.length}: ${file.fileName} (${file.mbPerMinute} MB/min)`);
+
+          const rdLink = await resolveZurgToRdLink(file.filePath, rdApiKey);
+
+          if (rdLink) {
+            // SUCCESS - this Zurg match resolved to RD direct link
+            logger.info(`✅ RD resolution succeeded on match ${i + 1}: ${rdLink.substring(0, 60)}...`);
+
+            // Track playback for monitoring (non-blocking)
+            try {
+              const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+              const userInfo = {
+                username: user?.username || 'unknown',
+                userId,
+                ip: req.ip || req.connection.remoteAddress || 'unknown',
+                rdApiKey
+              };
+              downloadJobManager.trackPlayback({ tmdbId, title, year, type, season, episode }, userInfo, 'rd-via-zurg', rdLink, file.fileName);
+            } catch (err) {
+              logger.warn('Failed to track playback:', err.message);
+            }
+
+            return res.json({
+              immediate: true,
+              streamUrl: rdLink,
+              source: 'rd-via-zurg',
+              fileName: file.fileName
+            });
+          } else {
+            logger.warn(`❌ RD resolution failed for match ${i + 1}, trying next...`);
+            // Continue to next Zurg match
+          }
+        }
+
+        // ALL quality matches failed RD resolution, fall back to Prowlarr
+        if (qualityMatches.length > 0) {
+          logger.warn(`All ${qualityMatches.length} quality Zurg matches failed RD resolution, falling back to Prowlarr`);
+        }
+      } else {
+        logger.warn('No RD API key available, skipping Zurg matches');
       }
-
-      // Fall back to server proxy if RD resolution failed
-      // Use proxy endpoint that properly supports HTTP range requests
-      if (!streamUrl) {
-        // Encode file path as base64url for proxy endpoint
-        const streamId = Buffer.from(file.filePath).toString('base64url');
-        const serverHost = process.env.SERVER_HOST || 'lite.duckflix.tv';
-        const serverProtocol = process.env.SERVER_PROTOCOL || 'https';
-        streamUrl = `${serverProtocol}://${serverHost}/api/vod/stream/${streamId}`;
-        source = 'zurg-proxy';
-        logger.info(`Using server proxy for Zurg file (RD resolution failed)`);
-      }
-
-      logger.info(`Zurg match found, returning: ${streamUrl}`);
-
-      // Track playback for monitoring (non-blocking)
-      try {
-        const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
-        const rdApiKey = getUserRdApiKey(userId);
-        const userInfo = {
-          username: user?.username || 'unknown',
-          userId,
-          ip: req.ip || req.connection.remoteAddress || 'unknown',
-          rdApiKey
-        };
-        downloadJobManager.trackPlayback({ tmdbId, title, year, type, season, episode }, userInfo, source, streamUrl, file.fileName);
-      } catch (err) {
-        logger.warn('Failed to track playback:', err.message);
-      }
-
-      return res.json({
-        immediate: true,
-        streamUrl,
-        source,
-        fileName: file.fileName
-      });
     }
 
     // 2. Check RD cache
