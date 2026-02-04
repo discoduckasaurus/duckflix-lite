@@ -169,6 +169,32 @@ function initDatabase() {
     ON rd_link_cache(tmdb_id, type, season, episode, resolution)
   `);
 
+  // Playback failures tracking
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS playback_failures (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      username TEXT NOT NULL,
+      tmdb_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      season INTEGER,
+      episode INTEGER,
+      error TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_failures_user
+    ON playback_failures(user_id)
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_failures_created
+    ON playback_failures(created_at DESC)
+  `);
+
   // App settings table (admin-configurable)
   db.exec(`
     CREATE TABLE IF NOT EXISTS app_settings (

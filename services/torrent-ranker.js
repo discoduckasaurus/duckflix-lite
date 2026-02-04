@@ -148,6 +148,28 @@ const rankTorrents = (torrents, type, downloadType, episodeCount = 1, cachedHash
       // Seeder score (capped at 500)
       score += Math.min(t.seeders || 0, 500);
 
+      // === AUDIO TRACK SCORING ===
+      // Prefer English audio, deprioritize foreign-only releases
+      const titleUpper = title.toUpperCase();
+
+      // English audio indicators
+      const hasEnglish = /\b(ENG|ENGLISH|DUAL[\s\._-]?AUDIO|MULTI[\s\._-]?AUDIO)\b/.test(titleUpper);
+      if (hasEnglish) {
+        score += 50;
+      }
+
+      // Subtitle indicators (embedded subs are valuable)
+      const hasSubs = /\b(SUBS|SUBTITLES|SUBBED)\b/.test(titleUpper);
+      if (hasSubs) {
+        score += 20;
+      }
+
+      // Foreign language markers (penalize if no English indicator)
+      const foreignLanguages = /\b(ITA|ITALIAN|FRE|FRENCH|GER|GERMAN|SPA|SPANISH|JPN|JAPANESE|KOR|KOREAN|RUS|RUSSIAN|CHI|CHINESE)\b/.test(titleUpper);
+      if (foreignLanguages && !hasEnglish) {
+        score -= 30;
+      }
+
       // Size scoring
       let idealSize = 0;
       if (type === 'tv') {

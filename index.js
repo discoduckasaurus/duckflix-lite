@@ -6,19 +6,19 @@ const path = require('path');
 require('dotenv').config();
 
 const logger = require('./utils/logger');
-const { initDatabase, createAdminUser, createTestUser } = require('./db/init');
+const { initDatabase, createAdminUser } = require('./db/init');
 const { startSyncJobs } = require('./services/epg-sync');
 const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
+const adminDashboardRoutes = require('./routes/admin-dashboard');
 const epgRoutes = require('./routes/epg');
 const searchRoutes = require('./routes/search');
+const publicRoutes = require('./routes/public-routes');
 const rdRoutes = require('./routes/rd');
 const vodRoutes = require('./routes/vod');
 const apkRoutes = require('./routes/apk');
-const reportRoutes = require('./routes/report');
-const monitorRoutes = require('./routes/monitor');
-const bandwidthRoutes = require('./routes/bandwidth');
-const settingsRoutes = require('./routes/settings');
+const userRoutes = require('./routes/user');
+const contentRoutes = require('./routes/content');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -54,17 +54,17 @@ app.get('/health', (req, res) => {
 
 // API Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/public', publicRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin', adminDashboardRoutes);
 app.use('/api/epg', epgRoutes);
 app.use('/api/m3u', epgRoutes); // M3U uses same routes as EPG
 app.use('/api/search', searchRoutes);
 app.use('/api/rd', rdRoutes);
 app.use('/api/vod', vodRoutes);
-app.use('/api/monitor', monitorRoutes);
 app.use('/api/apk', apkRoutes);
-app.use('/api/report', reportRoutes);
-app.use('/api/bandwidth', bandwidthRoutes);
-app.use('/api/settings', settingsRoutes);
+app.use('/api/user', userRoutes);
+app.use('/api/content', contentRoutes);
 
 // Static files (APK hosting)
 app.use('/static', express.static(path.join(__dirname, 'static')));
@@ -91,9 +91,6 @@ async function start() {
 
     logger.info('Creating admin user if not exists...');
     await createAdminUser();
-
-    logger.info('Creating test user if not exists...');
-    await createTestUser();
 
     logger.info('Starting EPG/M3U sync jobs...');
     startSyncJobs();

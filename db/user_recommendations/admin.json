@@ -1,0 +1,380 @@
+{
+  "tv_1433": {
+    "tmdbId": 1433,
+    "type": "tv",
+    "title": "American+Dad!",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 15632,
+        "type": "tv",
+        "title": "The Cleveland Show",
+        "source": "continue-watching",
+        "posterPath": "/Qp4gvTc5Cp15VBdt77oXKQ54xF.jpg",
+        "releaseDate": "2009-09-27",
+        "voteAverage": 5.908
+      },
+      {
+        "tmdbId": 1434,
+        "type": "tv",
+        "title": "Family Guy",
+        "source": "continue-watching",
+        "posterPath": "/3PFsEuAiyLkWsP4GG6dIV37Q6gu.jpg",
+        "releaseDate": "1999-01-31",
+        "voteAverage": 7.39
+      },
+      {
+        "tmdbId": 32726,
+        "type": "tv",
+        "title": "Bob's Burgers",
+        "source": "continue-watching",
+        "posterPath": "/iIHsQe3Qjs3NH62HdamyQEPeqTR.jpg",
+        "releaseDate": "2011-01-09",
+        "voteAverage": 7.83
+      },
+      {
+        "tmdbId": 615,
+        "type": "tv",
+        "title": "Futurama",
+        "source": "continue-watching",
+        "posterPath": "/6ZS8SOno6kTmWz4eQ8lX8EBXOMv.jpg",
+        "releaseDate": "1999-03-28",
+        "voteAverage": 8.37
+      },
+      {
+        "tmdbId": 44169,
+        "type": "tv",
+        "title": "Brickleberry",
+        "source": "continue-watching",
+        "posterPath": "/nLeOBqvDWuZfyMq7DGRT13YDRNK.jpg",
+        "releaseDate": "2012-09-25",
+        "voteAverage": 7.228
+      },
+      {
+        "tmdbId": 2190,
+        "type": "tv",
+        "title": "South Park",
+        "source": "continue-watching",
+        "posterPath": "/1CGwZCFX2qerXaXQJJUB3qUvxq7.jpg",
+        "releaseDate": "1997-08-13",
+        "voteAverage": 8.337
+      },
+      {
+        "tmdbId": 709,
+        "type": "tv",
+        "title": "Robot Chicken",
+        "source": "continue-watching",
+        "posterPath": "/lMZv3mJC9QRolgzflM3ajtB3o2U.jpg",
+        "releaseDate": "2005-02-20",
+        "voteAverage": 7.664
+      },
+      {
+        "tmdbId": 10283,
+        "type": "tv",
+        "title": "Archer",
+        "source": "continue-watching",
+        "posterPath": "/vhnrkTGYPqcB63ALcSJm0WoaKHT.jpg",
+        "releaseDate": "2009-09-17",
+        "voteAverage": 7.955
+      },
+      {
+        "tmdbId": 10126,
+        "type": "tv",
+        "title": "Taz-Mania",
+        "source": "continue-watching",
+        "posterPath": "/ozqJKBZq3k7BjyAwv2A7V1Zv6Ba.jpg",
+        "releaseDate": "1991-09-07",
+        "voteAverage": 7.022
+      },
+      {
+        "tmdbId": 43548,
+        "type": "tv",
+        "title": "Fugget About It",
+        "source": "continue-watching",
+        "posterPath": "/s4gzOlg1QtSDwlYlAkG0IOs8oz3.jpg",
+        "releaseDate": "2012-09-07",
+        "voteAverage": 7.6
+      },
+      {
+        "tmdbId": 234512,
+        "type": "tv",
+        "title": "Leading Role",
+        "source": "continue-watching",
+        "posterPath": "/t0ZWTCP451IgzMgHSPDBenpLG1W.jpg",
+        "releaseDate": "2023-09-25",
+        "voteAverage": 6.3
+      },
+      {
+        "tmdbId": 1432,
+        "type": "tv",
+        "title": "Veronica Mars",
+        "source": "continue-watching",
+        "posterPath": "/vOdJETEueGgUqJR4UvwTdUoJhvO.jpg",
+        "releaseDate": "2004-09-22",
+        "voteAverage": 7.812
+      },
+      {
+        "tmdbId": 504,
+        "type": "tv",
+        "title": "The Ren & Stimpy Show",
+        "source": "continue-watching",
+        "posterPath": "/4plB7fMf1xob12ui7kpgnO3h4tJ.jpg",
+        "releaseDate": "1991-08-11",
+        "voteAverage": 7.635
+      },
+      {
+        "tmdbId": 2316,
+        "type": "tv",
+        "title": "The Office",
+        "source": "continue-watching",
+        "posterPath": "/dg9e5fPRRId8PoBE0F6jl5y85Eu.jpg",
+        "releaseDate": "2005-03-24",
+        "voteAverage": 8.593
+      },
+      {
+        "tmdbId": 2224,
+        "type": "tv",
+        "title": "The Daily Show",
+        "source": "continue-watching",
+        "posterPath": "/ixcfyK7it6FjRM36Te4OdblAq4X.jpg",
+        "releaseDate": "1996-07-22",
+        "voteAverage": 6.398
+      },
+      {
+        "tmdbId": 30983,
+        "type": "tv",
+        "title": "Detective Conan",
+        "source": "continue-watching",
+        "posterPath": "/rRIEFvHRy01OYzmXQBbGeW0Qilc.jpg",
+        "releaseDate": "1996-01-08",
+        "voteAverage": 8
+      },
+      {
+        "tmdbId": 1421,
+        "type": "tv",
+        "title": "Modern Family",
+        "source": "continue-watching",
+        "posterPath": "/k5Qg5rgPoKdh3yTJJrLtyoyYGwC.jpg",
+        "releaseDate": "2009-09-23",
+        "voteAverage": 7.894
+      },
+      {
+        "tmdbId": 456,
+        "type": "tv",
+        "title": "The Simpsons",
+        "source": "continue-watching",
+        "posterPath": "/uWpG7GqfKGQqX4YMAo3nv5OrglV.jpg",
+        "releaseDate": "1989-12-17",
+        "voteAverage": 8.013
+      },
+      {
+        "tmdbId": 1618,
+        "type": "tv",
+        "title": "Justice League",
+        "source": "continue-watching",
+        "posterPath": "/b6P4pAoEOHMzK429erFipH4b8kM.jpg",
+        "releaseDate": "2001-11-17",
+        "voteAverage": 8.197
+      },
+      {
+        "tmdbId": 4238,
+        "type": "tv",
+        "title": "The King of Queens",
+        "source": "continue-watching",
+        "posterPath": "/vXs300Yvjy4Kr0iHgBtajHkYbAt.jpg",
+        "releaseDate": "1998-09-21",
+        "voteAverage": 7.121
+      }
+    ],
+    "fetchedAt": "2026-02-03T20:18:00.339Z"
+  },
+  "tv_106379": {
+    "tmdbId": 106379,
+    "type": "tv",
+    "title": "Fallout",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 126308,
+        "type": "tv",
+        "title": "Shōgun",
+        "source": "continue-watching",
+        "posterPath": "/7O4iVfOMQmdCSxhOg1WnzG1AgYT.jpg",
+        "releaseDate": "2024-02-27",
+        "voteAverage": 8.442
+      },
+      {
+        "tmdbId": 241259,
+        "type": "tv",
+        "title": "Baby Reindeer",
+        "source": "continue-watching",
+        "posterPath": "/tN9OcbkAOPwHSr1sgMornZtQZBx.jpg",
+        "releaseDate": "2024-04-11",
+        "voteAverage": 7.599
+      },
+      {
+        "tmdbId": 251091,
+        "type": "tv",
+        "title": "Star Wars: Tales of the Empire",
+        "source": "continue-watching",
+        "posterPath": "/qA28nLteurVboSSzltuyYt1lvlC.jpg",
+        "releaseDate": "2024-05-04",
+        "voteAverage": 7.376
+      },
+      {
+        "tmdbId": 138502,
+        "type": "tv",
+        "title": "X-Men '97",
+        "source": "continue-watching",
+        "posterPath": "/9Ycz7yYRf9V4jk3YXwcZhFtbNcF.jpg",
+        "releaseDate": "2024-03-20",
+        "voteAverage": 8.5
+      },
+      {
+        "tmdbId": 108545,
+        "type": "tv",
+        "title": "3 Body Problem",
+        "source": "continue-watching",
+        "posterPath": "/ykZ7hlShkdRQaL2aiieXdEMmrLb.jpg",
+        "releaseDate": "2024-03-21",
+        "voteAverage": 7.452
+      },
+      {
+        "tmdbId": 208825,
+        "type": "tv",
+        "title": "Parasyte: The Grey",
+        "source": "continue-watching",
+        "posterPath": "/9UPneQ4NF7g6WDNSFE5qyt88wJn.jpg",
+        "releaseDate": "2024-04-05",
+        "voteAverage": 7.439
+      },
+      {
+        "tmdbId": 102621,
+        "type": "tv",
+        "title": "KAOS",
+        "source": "continue-watching",
+        "posterPath": "/dDBTUSl3tRsOeKC1jZugBSFHy9I.jpg",
+        "releaseDate": "2024-08-29",
+        "voteAverage": 7.232
+      },
+      {
+        "tmdbId": 156484,
+        "type": "tv",
+        "title": "The 8 Show",
+        "source": "continue-watching",
+        "posterPath": "/umBNBnKThMmF1QQZixZ7rsYOowq.jpg",
+        "releaseDate": "2024-05-17",
+        "voteAverage": 7.235
+      },
+      {
+        "tmdbId": 205715,
+        "type": "tv",
+        "title": "Gen V",
+        "source": "continue-watching",
+        "posterPath": "/tEv842Nd5uMSavURG4aQO1pNtst.jpg",
+        "releaseDate": "2023-09-28",
+        "voteAverage": 7.694
+      },
+      {
+        "tmdbId": 125909,
+        "type": "tv",
+        "title": "Batman: Caped Crusader",
+        "source": "continue-watching",
+        "posterPath": "/imuZQcnPNKNygPw28TESUq4tNsb.jpg",
+        "releaseDate": "2024-08-01",
+        "voteAverage": 7.358
+      },
+      {
+        "tmdbId": 196322,
+        "type": "tv",
+        "title": "Dark Matter",
+        "source": "continue-watching",
+        "posterPath": "/c6MRUtPk0nEPQ9FBD9RdRKt2rIm.jpg",
+        "releaseDate": "2024-05-07",
+        "voteAverage": 7.783
+      },
+      {
+        "tmdbId": 125988,
+        "type": "tv",
+        "title": "Silo",
+        "source": "continue-watching",
+        "posterPath": "/c2OijvbFEXBW1onbzuvENr4CGQB.jpg",
+        "releaseDate": "2023-05-04",
+        "voteAverage": 8.124
+      },
+      {
+        "tmdbId": 76479,
+        "type": "tv",
+        "title": "The Boys",
+        "source": "continue-watching",
+        "posterPath": "/2zmTngn1tYC1AvfnrFLhxeD82hz.jpg",
+        "releaseDate": "2019-07-25",
+        "voteAverage": 8.443
+      },
+      {
+        "tmdbId": 158300,
+        "type": "tv",
+        "title": "Knuckles",
+        "source": "continue-watching",
+        "posterPath": "/sK6Nr6KNUA4WlAHyNBTioz9FK87.jpg",
+        "releaseDate": "2024-04-26",
+        "voteAverage": 7.3
+      },
+      {
+        "tmdbId": 217667,
+        "type": "tv",
+        "title": "Eric",
+        "source": "continue-watching",
+        "posterPath": "/9OV6McrRh1BAnrak3yVP9xYuUId.jpg",
+        "releaseDate": "2024-05-30",
+        "voteAverage": 6.983
+      },
+      {
+        "tmdbId": 132750,
+        "type": "tv",
+        "title": "Dead Boy Detectives",
+        "source": "continue-watching",
+        "posterPath": "/qGEjCjfBSUzaYNzOqUTx3XRniHH.jpg",
+        "releaseDate": "2024-04-25",
+        "voteAverage": 7.667
+      },
+      {
+        "tmdbId": 46518,
+        "type": "tv",
+        "title": "Masters of the Air",
+        "source": "continue-watching",
+        "posterPath": "/rSAmgcoA74371rplbqM27yVsd3y.jpg",
+        "releaseDate": "2024-01-25",
+        "voteAverage": 7.776
+      },
+      {
+        "tmdbId": 220801,
+        "type": "tv",
+        "title": "Fool Me Once",
+        "source": "continue-watching",
+        "posterPath": "/Ertv4WLEyHgi8zN4ldOKgPcGAZ.jpg",
+        "releaseDate": "2024-01-01",
+        "voteAverage": 7.132
+      },
+      {
+        "tmdbId": 233629,
+        "type": "tv",
+        "title": "Bodies",
+        "source": "continue-watching",
+        "posterPath": "/qWX71nLvoLsBNPEjddZMC75lq6I.jpg",
+        "releaseDate": "2023-10-19",
+        "voteAverage": 7.167
+      },
+      {
+        "tmdbId": 100088,
+        "type": "tv",
+        "title": "The Last of Us",
+        "source": "continue-watching",
+        "posterPath": "/dmo6TYuuJgaYinXBPjrgG9mB5od.jpg",
+        "releaseDate": "2023-01-15",
+        "voteAverage": 8.452
+      }
+    ],
+    "fetchedAt": "2026-02-03T23:01:56.304Z"
+  }
+}

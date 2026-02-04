@@ -6,10 +6,83 @@ const { searchZurg } = require('../services/zurg-search');
 const { completeDownloadFlow } = require('../services/rd-service');
 const rdCacheService = require('../services/rd-cache-service');
 const downloadJobManager = require('../services/download-job-manager');
-const { getUserRdApiKey, getEffectiveUserId, getUserBandwidthInfo } = require('../services/user-service');
+const { getUserRdApiKey, getEffectiveUserId } = require('../services/user-service');
+const { resolveZurgToRdLink } = require('../services/zurg-to-rd-resolver');
+const { logPlaybackFailure } = require('../services/failure-tracker');
 const { v4: uuidv4 } = require('uuid');
 
 const router = express.Router();
+
+// Proxy streaming route for Zurg files (no auth required - streamId acts as security token)
+router.get("/stream/:streamId", async (req, res) => {
+  const { streamId } = req.params;
+
+  // Decode the streamId (base64url encoded file path)
+  let filePath;
+  try {
+    filePath = Buffer.from(streamId, "base64url").toString("utf-8");
+  } catch (err) {
+    return res.status(400).json({ error: "Invalid stream ID" });
+  }
+
+  // Security: Only allow files within Zurg mount
+  const zurgMount = process.env.ZURG_MOUNT_PATH || '/mnt/zurg';
+  if (!filePath.startsWith(zurgMount)) {
+    logger.error(`[Stream Proxy] Unauthorized path access attempt: ${filePath}`);
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  logger.info(`[Stream Proxy] Request for: ${filePath}`);
+
+  // Verify file exists
+  if (!require("fs").existsSync(filePath)) {
+    logger.error(`[Stream Proxy] File not found: ${filePath}`);
+    return res.status(404).json({ error: "File not found" });
+  }
+
+  const stat = require("fs").statSync(filePath);
+  const fileSize = stat.size;
+  const range = req.headers.range;
+
+  // Detect MIME type
+  const path = require("path");
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeTypes = {
+    ".mp4": "video/mp4",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm"
+  };
+  const contentType = mimeTypes[ext] || "application/octet-stream";
+
+  if (range) {
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = (end - start) + 1;
+
+    logger.info(`[Stream Proxy] Range: ${start}-${end}/${fileSize}`);
+
+    const file = require("fs").createReadStream(filePath, { start, end });
+    const head = {
+      "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+      "Accept-Ranges": "bytes",
+      "Content-Length": chunksize,
+      "Content-Type": contentType,
+    };
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    const head = {
+      "Content-Length": fileSize,
+      "Content-Type": contentType,
+      "Accept-Ranges": "bytes"
+    };
+    res.writeHead(200, head);
+    require("fs").createReadStream(filePath).pipe(res);
+  }
+});
 
 router.use(authenticateToken);
 
@@ -22,9 +95,7 @@ router.post('/stream-url/start', async (req, res) => {
     const { tmdbId, title, year, type, season, episode } = req.body;
     const userId = req.user.sub;
 
-    // Get user's bandwidth constraints
-    const { maxBitrateMbps, hasMeasurement } = getUserBandwidthInfo(userId);
-    logger.info(`Starting stream for ${title} - user max bitrate: ${maxBitrateMbps.toFixed(1)} Mbps (measured: ${hasMeasurement})`);
+    logger.info(`Starting stream URL retrieval for: ${title} (${year})`);
 
     // 1. Check Zurg first (preferred due to cache info)
     const zurgResult = await searchZurg({
@@ -35,15 +106,38 @@ router.post('/stream-url/start', async (req, res) => {
       episode
     });
 
-    if (zurgResult.match || zurgResult.fallback) {
-      const file = zurgResult.match || zurgResult.fallback;
+    if (zurgResult.match) { // Only use good quality, skip fallbacks
+      const file = zurgResult.match;
 
-      // Use direct Zurg access (nginx can't reach it due to Docker networking)
-      const mountPath = process.env.ZURG_MOUNT_PATH || '/mnt/zurg';
-      const relativePath = file.filePath.replace(mountPath, '');
-      // URL encode path segments for ExoPlayer (preserve slashes)
-      const encodedPath = relativePath.split("/").map(s => encodeURIComponent(s)).join("/");
-      const streamUrl = `http://192.168.4.66:9999/http${encodedPath}`;
+      logger.info(`Zurg match found: ${file.filePath}`);
+
+      // Try to resolve Zurg path to direct RD link (supports HTTP range requests)
+      const rdApiKey = getUserRdApiKey(userId);
+      let streamUrl = null;
+      let source = 'zurg';
+
+      if (rdApiKey) {
+        const rdLink = await resolveZurgToRdLink(file.filePath, rdApiKey);
+        if (rdLink) {
+          streamUrl = rdLink;
+          source = 'rd-via-zurg';
+          logger.info(`Using RD direct link: ${streamUrl.substring(0, 60)}...`);
+        } else {
+          logger.warn('Failed to resolve Zurg to RD, falling back to Zurg WebDAV');
+        }
+      }
+
+      // Fall back to server proxy if RD resolution failed
+      // Use proxy endpoint that properly supports HTTP range requests
+      if (!streamUrl) {
+        // Encode file path as base64url for proxy endpoint
+        const streamId = Buffer.from(file.filePath).toString('base64url');
+        const serverHost = process.env.SERVER_HOST || 'lite.duckflix.tv';
+        const serverProtocol = process.env.SERVER_PROTOCOL || 'https';
+        streamUrl = `${serverProtocol}://${serverHost}/api/vod/stream/${streamId}`;
+        source = 'zurg-proxy';
+        logger.info(`Using server proxy for Zurg file (RD resolution failed)`);
+      }
 
       logger.info(`Zurg match found, returning: ${streamUrl}`);
 
@@ -57,7 +151,7 @@ router.post('/stream-url/start', async (req, res) => {
           ip: req.ip || req.connection.remoteAddress || 'unknown',
           rdApiKey
         };
-        downloadJobManager.trackPlayback({ tmdbId, title, year, type, season, episode }, userInfo, 'zurg', streamUrl, file.fileName);
+        downloadJobManager.trackPlayback({ tmdbId, title, year, type, season, episode }, userInfo, source, streamUrl, file.fileName);
       } catch (err) {
         logger.warn('Failed to track playback:', err.message);
       }
@@ -65,7 +159,7 @@ router.post('/stream-url/start', async (req, res) => {
       return res.json({
         immediate: true,
         streamUrl,
-        source: 'zurg',
+        source,
         fileName: file.fileName
       });
     }
@@ -75,8 +169,7 @@ router.post('/stream-url/start', async (req, res) => {
       tmdbId,
       type,
       season,
-      episode,
-      maxBitrateMbps
+      episode
     });
 
     if (cachedRd) {
@@ -123,7 +216,7 @@ router.post('/stream-url/start', async (req, res) => {
     logger.info(`Created download job ${jobId} for ${title}`);
 
     // Start download in background
-    processRdDownload(jobId, { tmdbId, title, year, type, season, episode, userId, maxBitrateMbps });
+    processRdDownload(jobId, { tmdbId, title, year, type, season, episode, userId });
 
     res.json({
       immediate: false,
@@ -135,6 +228,22 @@ router.post('/stream-url/start', async (req, res) => {
       message: error.message,
       stack: error.stack?.split('\n').slice(0, 5)
     });
+
+    // Log playback failure
+    try {
+      const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+      logPlaybackFailure(
+        userId,
+        user?.username || 'unknown',
+        tmdbId,
+        title,
+        season,
+        episode,
+        error.message
+      );
+    } catch (logErr) {
+      logger.warn('Failed to log playback failure:', logErr.message);
+    }
 
     res.status(500).json({
       error: 'Stream start failed',
@@ -191,7 +300,7 @@ router.delete('/stream-url/cancel/:jobId', (req, res) => {
  * Background RD download processor with progressive updates
  */
 async function processRdDownload(jobId, contentInfo) {
-  const { tmdbId, title, year, type, season, episode, userId, maxBitrateMbps } = contentInfo;
+  const { tmdbId, title, year, type, season, episode, userId } = contentInfo;
 
   try {
     const rdApiKey = getUserRdApiKey(userId);
@@ -224,9 +333,7 @@ async function processRdDownload(jobId, contentInfo) {
         type,
         season,
         episode,
-        rdApiKey,
-        tmdbId,
-        maxBitrateMbps
+        rdApiKey
       });
 
       // Update: Trying source
@@ -297,10 +404,7 @@ async function processRdDownload(jobId, contentInfo) {
       season,
       episode,
       streamUrl: result.download,
-      fileName: result.filename,
-      resolution: resolution.quality?.resolution,
-      estimatedBitrateMbps: resolution.estimatedBitrateMbps,
-      fileSizeBytes: resolution.quality?.size
+      fileName: result.filename
     });
 
     // FINAL: Only NOW set status to 'completed' with the verified stream URL
@@ -338,6 +442,22 @@ async function processRdDownload(jobId, contentInfo) {
       stack: error.stack?.split('\n').slice(0, 3)
     });
 
+    // Log playback failure
+    try {
+      const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+      logPlaybackFailure(
+        userId,
+        user?.username || 'unknown',
+        tmdbId,
+        title,
+        season,
+        episode,
+        error.message
+      );
+    } catch (logErr) {
+      logger.warn('Failed to log playback failure:', logErr.message);
+    }
+
     downloadJobManager.updateJob(jobId, {
       status: 'error',
       error: error.message,
@@ -367,21 +487,39 @@ router.post('/stream-url', async (req, res) => {
       episode
     });
 
-    if (zurgResult.match || zurgResult.fallback) {
-      const file = zurgResult.match || zurgResult.fallback;
+    if (zurgResult.match) { // Only use good quality, skip fallbacks
+      const file = zurgResult.match;
 
-      // Use direct Zurg access
-      const mountPath = process.env.ZURG_MOUNT_PATH || '/mnt/zurg';
-      const relativePath = file.filePath.replace(mountPath, '');
-      // URL encode path segments for ExoPlayer (preserve slashes)
-      const encodedPath = relativePath.split("/").map(s => encodeURIComponent(s)).join("/");
-      const streamUrl = `http://192.168.4.66:9999/http${encodedPath}`;
+      // Try to resolve Zurg path to direct RD link first
+      const rdApiKey = getUserRdApiKey(userId);
+      let streamUrl = null;
+      let source = 'zurg';
 
-      logger.info(`Zurg match found, streaming from: ${streamUrl}`);
+      if (rdApiKey) {
+        const rdLink = await resolveZurgToRdLink(file.filePath, rdApiKey);
+        if (rdLink) {
+          streamUrl = rdLink;
+          source = 'rd-via-zurg';
+          logger.info(`Using RD direct link: ${streamUrl.substring(0, 60)}...`);
+        }
+      }
+
+      // Fall back to server proxy if RD resolution failed
+      if (!streamUrl) {
+        // Use server proxy endpoint that properly supports HTTP range requests
+        const streamId = Buffer.from(file.filePath).toString('base64url');
+        const serverHost = process.env.SERVER_HOST || 'lite.duckflix.tv';
+        const serverProtocol = process.env.SERVER_PROTOCOL || 'https';
+        streamUrl = `${serverProtocol}://${serverHost}/api/vod/stream/${streamId}`;
+        source = 'zurg-proxy';
+        logger.info(`Using server proxy for Zurg file`);
+      }
+
+      logger.info(`Zurg match found, streaming from: ${streamUrl.substring(0, 80)}...`);
 
       return res.json({
         streamUrl,
-        source: 'zurg',
+        source,
         fileName: file.fileName
       });
     }
@@ -486,6 +624,22 @@ router.post('/stream-url', async (req, res) => {
       code: error.code,
       stack: error.stack?.split('\n').slice(0, 5)
     });
+
+    // Log playback failure
+    try {
+      const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+      logPlaybackFailure(
+        userId,
+        user?.username || 'unknown',
+        tmdbId,
+        title,
+        season,
+        episode,
+        error.message
+      );
+    } catch (logErr) {
+      logger.warn('Failed to log playback failure:', logErr.message);
+    }
 
     // User-friendly error messages
     if (error.message && error.message.includes('Prowlarr')) {
@@ -608,195 +762,83 @@ router.post('/session/end', (req, res) => {
   }
 });
 
-
-// Proxy streaming route for Zurg files  
-router.get("/stream/:streamId", async (req, res) => {
-  const { streamId } = req.params;
-  
-  // Decode the streamId (base64url encoded file path)
-  let filePath;
-  try {
-    filePath = Buffer.from(streamId, "base64url").toString("utf-8");
-  } catch (err) {
-    return res.status(400).json({ error: "Invalid stream ID" });
-  }
-  
-  logger.info(`[Stream Proxy] Request for: ${filePath}`);
-  
-  // Verify file exists
-  if (!require("fs").existsSync(filePath)) {
-    logger.error(`[Stream Proxy] File not found: ${filePath}`);
-    return res.status(404).json({ error: "File not found" });
-  }
-  
-  const stat = require("fs").statSync(filePath);
-  const fileSize = stat.size;
-  const range = req.headers.range;
-  
-  // Detect MIME type
-  const path = require("path");
-  const ext = path.extname(filePath).toLowerCase();
-  const mimeTypes = {
-    ".mp4": "video/mp4",
-    ".mkv": "video/x-matroska",
-    ".avi": "video/x-msvideo",
-    ".mov": "video/quicktime",
-    ".webm": "video/webm"
-  };
-  const contentType = mimeTypes[ext] || "application/octet-stream";
-  
-  if (range) {
-    const parts = range.replace(/bytes=/, "").split("-");
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    const chunksize = (end - start) + 1;
-    
-    logger.info(`[Stream Proxy] Range: ${start}-${end}/${fileSize}`);
-    
-    const file = require("fs").createReadStream(filePath, { start, end });
-    const head = {
-      "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-      "Accept-Ranges": "bytes",
-      "Content-Length": chunksize,
-      "Content-Type": contentType,
-    };
-    res.writeHead(206, head);
-    file.pipe(res);
-  } else {
-    const head = {
-      "Content-Length": fileSize,
-      "Content-Type": contentType,
-      "Accept-Ranges": "bytes"
-    };
-    res.writeHead(200, head);
-    require("fs").createReadStream(filePath).pipe(res);
-  }
-});
-
 /**
- * POST /api/vod/fallback
- * Get next lower quality source when current stream buffers
+ * GET /api/vod/next-episode/:tmdbId/:season/:episode
+ * Get next episode info for auto-play
  */
-router.post('/fallback', async (req, res) => {
+router.get('/next-episode/:tmdbId/:season/:episode', async (req, res) => {
   try {
-    const { tmdbId, type, season, episode, currentResolution, playbackPositionMs, reason } = req.body;
-    const userId = req.user.sub;
+    const { tmdbId, season, episode } = req.params;
+    const currentSeason = parseInt(season);
+    const currentEpisode = parseInt(episode);
 
-    logger.info(`Fallback requested for ${tmdbId} (${type}) - current: ${currentResolution}p, reason: ${reason}`);
-
-    const { maxBitrateMbps } = getUserBandwidthInfo(userId);
-    const rdApiKey = getUserRdApiKey(userId);
-
-    if (!rdApiKey) {
-      return res.status(400).json({ error: 'No RD API key configured' });
+    if (!tmdbId || isNaN(currentSeason) || isNaN(currentEpisode)) {
+      return res.status(400).json({ error: 'Invalid parameters' });
     }
 
-    // Get runtime for bitrate calculations
-    const { getRuntime } = require('../services/tmdb-service');
-    const runtimeMinutes = await getRuntime(tmdbId, type, season, episode);
+    logger.info(`Getting next episode for TMDB ${tmdbId} S${currentSeason}E${currentEpisode}`);
 
-    // Search for alternatives below current resolution
-    const { searchContent } = require('../services/prowlarr-service');
-    const { checkRDInstantAvailability, rankTorrents } = require('../services/torrent-ranker');
-    const { parseResolution } = require('../utils/bitrate');
+    // Get next episode from TMDB
+    const { getNextEpisode } = require('../services/tmdb-service');
+    const nextEpisode = await getNextEpisode(parseInt(tmdbId), currentSeason, currentEpisode);
 
-    const torrents = await searchContent({
-      title: req.body.title,
-      year: req.body.year,
-      type,
-      season,
-      episode
+    if (!nextEpisode) {
+      // Series finale - no next episode
+      return res.json({
+        hasNext: false,
+        tmdbId: parseInt(tmdbId)
+      });
+    }
+
+    // Check if next episode is in same pack as current episode (Zurg search)
+    let inCurrentPack = false;
+    try {
+      // Search for next episode in Zurg
+      const nextZurgResult = await searchZurg({
+        type: 'tv',
+        season: nextEpisode.season,
+        episode: nextEpisode.episode
+      });
+
+      // If both current and next episode are in Zurg, check if same pack
+      if (nextZurgResult.match) {
+        const currentZurgResult = await searchZurg({
+          type: 'tv',
+          season: currentSeason,
+          episode: currentEpisode
+        });
+
+        if (currentZurgResult.match) {
+          // Extract pack directory (everything except filename)
+          const currentPack = currentZurgResult.match.filePath.substring(0, currentZurgResult.match.filePath.lastIndexOf('/'));
+          const nextPack = nextZurgResult.match.filePath.substring(0, nextZurgResult.match.filePath.lastIndexOf('/'));
+
+          inCurrentPack = currentPack === nextPack;
+          logger.info(`Pack check: ${inCurrentPack ? 'SAME' : 'DIFFERENT'} pack (current: ${currentPack}, next: ${nextPack})`);
+        }
+      }
+    } catch (err) {
+      logger.warn('Failed to check pack status:', err.message);
+      // Not critical - continue without pack info
+    }
+
+    res.json({
+      hasNext: true,
+      nextEpisode: {
+        season: nextEpisode.season,
+        episode: nextEpisode.episode,
+        title: nextEpisode.title,
+        overview: nextEpisode.overview
+      },
+      inCurrentPack,
+      tmdbId: parseInt(tmdbId)
     });
-
-    if (!torrents || torrents.length === 0) {
-      return res.json({
-        success: false,
-        exhausted: true,
-        message: 'No alternative sources found'
-      });
-    }
-
-    // Filter to lower resolutions only
-    const lowerResTorrents = torrents.filter(t => {
-      const res = parseResolution(t.title);
-      return res > 0 && res < currentResolution;
-    });
-
-    if (lowerResTorrents.length === 0) {
-      return res.json({
-        success: false,
-        exhausted: true,
-        message: 'No lower quality sources available'
-      });
-    }
-
-    // Check RD cache and rank
-    const hashes = lowerResTorrents.map(t => t.hash).filter(Boolean);
-    const cachedHashes = await checkRDInstantAvailability(hashes, rdApiKey);
-
-    const ranked = rankTorrents(
-      lowerResTorrents,
-      type,
-      type === 'tv' ? 'episode' : 'movie',
-      1,
-      cachedHashes,
-      season,
-      episode,
-      [],
-      { maxBitrateMbps, runtimeMinutes }
-    );
-
-    if (ranked.length === 0) {
-      return res.json({
-        success: false,
-        exhausted: true,
-        message: 'No compatible sources for your connection'
-      });
-    }
-
-    const best = ranked[0];
-
-    // If cached, unrestrict and return immediately
-    if (best.isCached) {
-      const { downloadFromRD } = require('@duckflix/rd-client');
-      const result = await downloadFromRD(best.magnet, rdApiKey, season, episode);
-
-      // Cache the new link
-      await rdCacheService.cacheLink({
-        tmdbId,
-        title: req.body.title,
-        year: req.body.year,
-        type,
-        season,
-        episode,
-        streamUrl: result.download,
-        fileName: result.filename,
-        resolution: best.resolution,
-        estimatedBitrateMbps: best.estimatedBitrateMbps,
-        fileSizeBytes: best.size
-      });
-
-      return res.json({
-        success: true,
-        newStreamUrl: result.download,
-        fileName: result.filename,
-        resolution: best.resolution,
-        estimatedBitrateMbps: best.estimatedBitrateMbps
-      });
-    }
-
-    // Not cached - would need download, return info for client to decide
-    return res.json({
-      success: true,
-      needsDownload: true,
-      resolution: best.resolution,
-      estimatedBitrateMbps: best.estimatedBitrateMbps,
-      seeders: best.seeders
-    });
-
   } catch (error) {
-    logger.error('Fallback error:', error);
-    res.status(500).json({ error: 'Fallback failed', message: error.message });
+    logger.error('Next episode error:', error);
+    res.status(500).json({
+      error: 'Failed to get next episode',
+      message: error.message
+    });
   }
 });
 
