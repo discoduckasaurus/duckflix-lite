@@ -320,6 +320,11 @@ router.get('/tmdb/:id', async (req, res) => {
       voteAverage: data.vote_average,
       runtime: data.runtime || (data.episode_run_time && data.episode_run_time[0]),
       genres: data.genres,
+      originalLanguage: data.original_language, // e.g., "en", "ja", "fr"
+      spokenLanguages: data.spoken_languages?.map(lang => ({
+        iso6391: lang.iso_639_1,
+        name: lang.english_name
+      })) || [],
       cast: data.credits?.cast?.slice(0, 10).map(c => ({
         id: c.id,
         name: c.name,
