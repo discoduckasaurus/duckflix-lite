@@ -9,7 +9,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -72,49 +71,44 @@ fun SourceSelectionScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.95f)),
+            .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
-        // Backdrop image (if provided)
+        // Backdrop image (if provided) - slightly brighter so it's visible but still dim
         backdropUrl?.let { url ->
             Image(
                 painter = rememberAsyncImagePainter(url),
                 contentDescription = null,
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(0.15f),
+                    .alpha(0.2f), // Increased from 0.05f to 0.2f
                 contentScale = ContentScale.Crop
             )
         }
 
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-            modifier = Modifier.padding(32.dp)
-        ) {
-            // Logo with gradient background (top section) - Fixed size for consistency
+        // Semi-opaque black overlay to ensure player doesn't show through and dims the backdrop
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.7f))
+        )
+
+        TVSafeContent {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight() // Let content determine height, don't force fillMaxSize
+            ) {
+            // Logo (transparent background) - Fixed size for consistency
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(260.dp),
                 contentAlignment = Alignment.Center
             ) {
-                // Strong gradient background for visibility
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Black.copy(alpha = 0.95f),
-                                    Color.Black.copy(alpha = 0.7f),
-                                    Color.Transparent
-                                )
-                            )
-                        )
-                )
-
-                // Logo image from TMDB (or empty space if not loaded yet)
+                // Logo image from TMDB (no background, just the logo)
                 if (logoUrl != null) {
                     Image(
                         painter = rememberAsyncImagePainter(
@@ -133,7 +127,7 @@ fun SourceSelectionScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Slot machine animated phrase
             SlotMachinePhrase(
@@ -143,55 +137,27 @@ fun SourceSelectionScreen(
                 showPhrase = showPhrase
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-            // Source info message (e.g., "Source 1 1080p")
+            // Source info message (e.g., "Source 1 1080p", "One moment, finding the best source")
             Text(
                 text = message,
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.bodyLarge, // Reduced from headlineLarge
                 color = Color.White.copy(alpha = 0.9f),
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 32.dp) // Add horizontal padding for better text wrapping
             )
 
             // Progress bar (only shown for DOWNLOADING phase)
             if (showProgress) {
-                Spacer(modifier = Modifier.height(24.dp))
-
-                // Circular progress indicator
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier.size(120.dp)
-                ) {
-                    CircularProgressIndicator(
-                        progress = { progress / 100f },
-                        modifier = Modifier.fillMaxSize(),
-                        strokeWidth = 8.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                        trackColor = Color.White.copy(alpha = 0.2f)
-                    )
-
-                    // Show decimal for progress < 5% to indicate activity
-                    val progressText = if (progress < 5 && progress > 0) {
-                        String.format("%.1f%%", progress.toFloat())
-                    } else {
-                        "$progress%"
-                    }
-
-                    Text(
-                        text = progressText,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = Color.White
-                    )
-                }
-
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Linear progress bar
                 LinearProgressIndicator(
                     progress = { progress / 100f },
                     modifier = Modifier
-                        .width(500.dp)
-                        .height(12.dp),
+                        .width(600.dp)
+                        .height(16.dp),
                     color = MaterialTheme.colorScheme.primary,
                     trackColor = Color.White.copy(alpha = 0.3f)
                 )
@@ -233,7 +199,7 @@ fun SourceSelectionScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Action buttons row
             Row(
@@ -267,6 +233,7 @@ fun SourceSelectionScreen(
                     )
                 }
             }
+        }
         }
     }
 }

@@ -1,22 +1,27 @@
 package com.duckflix.lite.ui.screens.settings
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.duckflix.lite.ui.components.FocusableCard
 import com.duckflix.lite.ui.components.FocusableButton
+import kotlinx.coroutines.delay
 
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
+    onLogoutSuccess: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
 
     Column(
         modifier = Modifier
@@ -65,10 +70,13 @@ fun SettingsScreen(
             }
 
             FocusableButton(
-                onClick = { viewModel.logout(); onNavigateBack() },
-                modifier = Modifier.fillMaxWidth()
+                onClick = {
+                    viewModel.logout(onLogoutComplete = onLogoutSuccess)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !uiState.isLoggingOut
             ) {
-                Text("Logout")
+                Text(if (uiState.isLoggingOut) "Logging out..." else "Logout")
             }
         }
 
@@ -106,6 +114,14 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
+        }
+    }
+
+    uiState.logoutMessage?.let { message ->
+        LaunchedEffect(message) {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+            delay(100)
+            viewModel.clearLogoutMessage()
         }
     }
 }

@@ -9,6 +9,9 @@ const downloadJobManager = require('../services/download-job-manager');
 const { getUserRdApiKey, getEffectiveUserId } = require('../services/user-service');
 const { resolveZurgToRdLink } = require('../services/zurg-to-rd-resolver');
 const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const DEBUG_LOG = '/tmp/vod-debug.log';
+const debug = (msg) => fs.appendFileSync(DEBUG_LOG, `${new Date().toISOString()} ${msg}\n`);
 
 const router = express.Router();
 
@@ -37,22 +40,30 @@ router.post('/stream-url/start', async (req, res) => {
     if (zurgResult.match) { // Only use good quality, skip fallbacks
       const file = zurgResult.match;
 
+      debug(`[ZURG-MATCH] Entered Zurg match block`);
       logger.info(`Zurg match found: ${file.filePath}`);
 
       // Try to resolve Zurg path to direct RD link (supports HTTP range requests)
       const rdApiKey = getUserRdApiKey(userId);
+      debug(`[RD-KEY] getUserRdApiKey returned: ${rdApiKey ? 'KEY_PRESENT' : 'NULL'}`);
+
       let streamUrl = null;
       let source = 'zurg';
 
       if (rdApiKey) {
+        debug(`[RESOLVE] Attempting to resolve: ${file.filePath}`);
         const rdLink = await resolveZurgToRdLink(file.filePath, rdApiKey);
+        debug(`[RESOLVE] Result: ${rdLink ? rdLink.substring(0, 80) : 'NULL'}`);
+
         if (rdLink) {
           streamUrl = rdLink;
           source = 'rd-via-zurg';
-          logger.info(`Using RD direct link: ${streamUrl.substring(0, 60)}...`);
+          debug(`[SUCCESS] Using RD direct link`);
         } else {
-          logger.warn('Failed to resolve Zurg to RD, falling back to Zurg WebDAV');
+          debug(`[FALLBACK] Failed to resolve, using Zurg HTTP`);
         }
+      } else {
+        debug('[NO-KEY] No RD API key, skipping resolution');
       }
 
       // Fall back to Zurg WebDAV if RD resolution failed
@@ -85,7 +96,11 @@ router.post('/stream-url/start', async (req, res) => {
         immediate: true,
         streamUrl,
         source,
-        fileName: file.fileName
+        fileName: file.fileName,
+        _debug: {
+          rdApiKeyPresent: !!getUserRdApiKey(userId),
+          filePath: file.filePath
+        }
       });
     }
 

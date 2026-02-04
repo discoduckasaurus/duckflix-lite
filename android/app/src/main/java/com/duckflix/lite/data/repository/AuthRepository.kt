@@ -36,11 +36,11 @@ class AuthRepository @Inject constructor(
         return try {
             val response = api.login(LoginRequest(username, password))
 
-            // Save token securely
+            // Save token securely (use commit() for synchronous save)
             encryptedPrefs.edit()
                 .putString(KEY_TOKEN, response.token)
                 .putInt(KEY_USER_ID, response.user.id)
-                .apply()
+                .commit()
 
             // Save user to local database
             userDao.insertUser(
@@ -58,9 +58,27 @@ class AuthRepository @Inject constructor(
         }
     }
 
-    suspend fun logout() {
-        encryptedPrefs.edit().clear().apply()
-        userDao.deleteAll()
+    suspend fun logout(): Result<Unit> {
+        return try {
+            val token = getAuthToken()
+
+            // Call backend logout (graceful degradation if fails)
+            if (!token.isNullOrEmpty()) {
+                try {
+                    api.logout("Bearer $token")
+                } catch (e: Exception) {
+                    println("[WARN] Backend logout failed: ${e.message}")
+                }
+            }
+
+            // Clear local data (use commit for synchronous)
+            encryptedPrefs.edit().clear().commit()
+            userDao.deleteAll()
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     fun isLoggedIn(): Flow<Boolean> = flow {

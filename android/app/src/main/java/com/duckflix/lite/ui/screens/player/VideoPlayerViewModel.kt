@@ -4,15 +4,20 @@ import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.duckflix.lite.data.bandwidth.StutterDetector
+import com.duckflix.lite.data.local.dao.PlaybackErrorDao
 import com.duckflix.lite.data.local.dao.WatchProgressDao
 import com.duckflix.lite.data.local.dao.WatchlistDao
+import com.duckflix.lite.data.local.entity.PlaybackErrorEntity
 import com.duckflix.lite.data.local.entity.WatchProgressEntity
 import com.duckflix.lite.data.remote.DuckFlixApi
 import com.duckflix.lite.data.remote.dto.StreamUrlRequest
@@ -55,7 +60,15 @@ data class PlayerUiState(
     val duration: Long = 0,
     val bufferedPercentage: Int = 0,
     val posterUrl: String? = null,
-    val logoUrl: String? = null // TODO: Fetch from TMDB API later
+    val logoUrl: String? = null, // English logo (transparent PNG) for loading screens
+    val autoPlayEnabled: Boolean = false,
+    val nextEpisodeInfo: com.duckflix.lite.data.remote.dto.NextEpisodeResponse? = null,
+    val movieRecommendations: List<com.duckflix.lite.data.remote.dto.MovieRecommendationItem>? = null,
+    val selectedRecommendation: com.duckflix.lite.data.remote.dto.MovieRecommendationItem? = null,
+    val isLoadingNextContent: Boolean = false,
+    val showSeriesCompleteOverlay: Boolean = false,
+    val showRecommendationsOverlay: Boolean = false,
+    val autoPlayCountdown: Int = 0
 )
 
 @HiltViewModel
@@ -64,7 +77,10 @@ class VideoPlayerViewModel @Inject constructor(
     private val api: DuckFlixApi,
     private val watchProgressDao: WatchProgressDao,
     private val watchlistDao: WatchlistDao,
+    private val playbackErrorDao: PlaybackErrorDao,
+    private val autoPlaySettingsDao: com.duckflix.lite.data.local.dao.AutoPlaySettingsDao,
     private val okHttpClient: okhttp3.OkHttpClient,
+    private val stutterDetector: StutterDetector,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -75,8 +91,12 @@ class VideoPlayerViewModel @Inject constructor(
     private val season: Int? = savedStateHandle.get<Int>("season")?.takeIf { it != -1 }
     private val episode: Int? = savedStateHandle.get<Int>("episode")?.takeIf { it != -1 }
     private val resumePosition: Long? = savedStateHandle.get<Long>("resumePosition")?.takeIf { it != -1L }
-    private var pendingSeekPosition: Long? = null
     private val posterUrl: String? = savedStateHandle["posterUrl"]
+    private val logoUrl: String? = savedStateHandle["logoUrl"]
+    private val originalLanguage: String? = savedStateHandle["originalLanguage"]
+    private var pendingSeekPosition: Long? = null
+    private var currentStreamUrl: String? = null
+    private var currentErrorId: Int? = null
 
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
@@ -85,10 +105,24 @@ class VideoPlayerViewModel @Inject constructor(
     val player: ExoPlayer?
         get() = _player
 
+    private var autoPlayCountdownJob: kotlinx.coroutines.Job? = null
+    var onAutoPlayNext: ((season: Int, episode: Int) -> Unit)? = null
+    var onAutoPlayRecommendation: ((tmdbId: Int) -> Unit)? = null
+
     init {
         // Set initial posterUrl
-        _uiState.value = _uiState.value.copy(posterUrl = posterUrl)
+        _uiState.value = _uiState.value.copy(
+            posterUrl = posterUrl,
+            logoUrl = logoUrl
+        )
 
+        // Initialize stutter detector with playback settings
+        viewModelScope.launch {
+            stutterDetector.initialize()
+            stutterDetector.reset() // Reset for new content
+        }
+
+        loadAutoPlaySettings()
         initializePlayer()
         loadVideoUrl()
         startPositionUpdates()
@@ -127,7 +161,11 @@ class VideoPlayerViewModel @Inject constructor(
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     val stateName = when(playbackState) {
                         Player.STATE_IDLE -> "IDLE"
-                        Player.STATE_BUFFERING -> "BUFFERING"
+                        Player.STATE_BUFFERING -> {
+                            // Record buffering event and check for fallback
+                            handleBufferingEvent()
+                            "BUFFERING"
+                        }
                         Player.STATE_READY -> "READY"
                         Player.STATE_ENDED -> "ENDED"
                         else -> "UNKNOWN"
@@ -159,6 +197,10 @@ class VideoPlayerViewModel @Inject constructor(
                             play()
                         }
                     }
+
+                    if (playbackState == Player.STATE_ENDED) {
+                        handleVideoEnded()
+                    }
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -174,6 +216,38 @@ class VideoPlayerViewModel @Inject constructor(
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     println("[ERROR] ExoPlayer error: ${error.errorCodeName} - ${error.message}")
                     println("[ERROR] ExoPlayer error cause: ${error.cause?.message}")
+
+                    // Log error to database for tracking and fallback strategies
+                    viewModelScope.launch {
+                        try {
+                            val errorEntity = PlaybackErrorEntity(
+                                tmdbId = tmdbId,
+                                title = contentTitle,
+                                type = contentType,
+                                season = season,
+                                episode = episode,
+                                errorCode = error.errorCodeName,
+                                errorMessage = error.message ?: "Unknown error",
+                                errorCause = error.cause?.message,
+                                streamUrl = currentStreamUrl
+                            )
+                            val errorId = playbackErrorDao.insertError(errorEntity)
+                            currentErrorId = errorId.toInt()
+
+                            println("[ERROR-TRACKING] Logged error ID: $errorId for $contentTitle")
+                            println("[ERROR-TRACKING] Error details: ${error.errorCodeName} - ${error.message}")
+
+                            // Check if we've seen this error before and had a successful fallback
+                            val resolvedErrors = playbackErrorDao.getResolvedErrorsByCode(error.errorCodeName)
+                            if (resolvedErrors.isNotEmpty()) {
+                                println("[ERROR-TRACKING] Found ${resolvedErrors.size} previously resolved errors with code ${error.errorCodeName}")
+                                // Future: Apply known fallback strategy based on resolved errors
+                            }
+                        } catch (e: Exception) {
+                            println("[ERROR] Failed to log playback error: ${e.message}")
+                        }
+                    }
+
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
                         error = "Playback error: ${error.errorCodeName}\n${error.message}"
@@ -190,6 +264,16 @@ class VideoPlayerViewModel @Inject constructor(
             val audioTracks = mutableListOf<TrackInfo>()
             val subtitleTracks = mutableListOf<TrackInfo>()
 
+            // Build list of audio tracks with metadata
+            data class AudioTrackCandidate(
+                val trackId: String,
+                val label: String,
+                val language: String?,
+                val title: String?,
+                val isSelected: Boolean
+            )
+            val candidates = mutableListOf<AudioTrackCandidate>()
+
             player.currentTracks.groups.forEach { group ->
                 for (i in 0 until group.length) {
                     val format = group.getTrackFormat(i)
@@ -197,10 +281,23 @@ class VideoPlayerViewModel @Inject constructor(
 
                     when {
                         format.sampleMimeType?.startsWith("audio/") == true -> {
+                            val trackId = "${group.mediaTrackGroup.id}_$i"
+                            val label = format.label ?: format.language ?: "Audio ${audioTracks.size + 1}"
+
                             audioTracks.add(
                                 TrackInfo(
-                                    id = "${group.mediaTrackGroup.id}_$i",
-                                    label = format.label ?: format.language ?: "Audio ${audioTracks.size + 1}",
+                                    id = trackId,
+                                    label = label,
+                                    isSelected = isSelected
+                                )
+                            )
+
+                            candidates.add(
+                                AudioTrackCandidate(
+                                    trackId = trackId,
+                                    label = label,
+                                    language = format.language,
+                                    title = format.label,
                                     isSelected = isSelected
                                 )
                             )
@@ -223,7 +320,78 @@ class VideoPlayerViewModel @Inject constructor(
                 audioTracks = audioTracks,
                 subtitleTracks = subtitleTracks
             )
+
+            // Auto-select best audio track if no track selected
+            val hasSelectedAudio = audioTracks.any { it.isSelected }
+            if (!hasSelectedAudio && candidates.isNotEmpty()) {
+                val bestTrack = selectBestAudioTrack(candidates)
+                if (bestTrack != null) {
+                    println("[AUTO-SELECT] Selecting best track: ${bestTrack.trackId} (${bestTrack.label})")
+                    selectAudioTrack(bestTrack.trackId)
+                }
+            }
         }
+    }
+
+    /**
+     * Smart audio track selection based on originalLanguage metadata
+     */
+    private fun selectBestAudioTrack(candidates: List<AudioTrackCandidate>): AudioTrackCandidate? {
+        if (candidates.isEmpty()) return null
+
+        val origLang = originalLanguage?.lowercase() ?: "en"
+        println("[AudioTrack] Movie original language: $origLang")
+
+        candidates.forEachIndexed { index, track ->
+            println("[AudioTrack] [$index] lang=${track.language}, title=${track.title}, label=${track.label}")
+        }
+
+        // Priority order for matching
+        val priorities = listOf<(AudioTrackCandidate) -> Boolean>(
+            // 1. Exact ISO code match (2 or 3 letter)
+            { track ->
+                val langLower = track.language?.lowercase()
+                langLower == origLang || langLower?.take(2) == origLang.take(2)
+            },
+
+            // 2. English variants (eng, en, english)
+            { track ->
+                val langLower = track.language?.lowercase()
+                val titleLower = track.title?.lowercase()
+                langLower in listOf("eng", "en", "english") ||
+                titleLower?.contains("english") == true
+            },
+
+            // 3. "Original" track when original language is English
+            { track ->
+                val titleLower = track.title?.lowercase()
+                titleLower?.contains("original") == true && origLang == "en"
+            },
+
+            // 4. Undefined/null when original is English
+            { track ->
+                (track.language == null || track.language.lowercase() == "und") && origLang == "en"
+            },
+
+            // 5. Any track matching the original language ISO code (fuzzy match on first 2 chars)
+            { track ->
+                val langLower = track.language?.lowercase()
+                langLower?.take(2) == origLang.take(2)
+            }
+        )
+
+        // Try each priority level
+        for (matcher in priorities) {
+            val matchedTrack = candidates.firstOrNull(matcher)
+            if (matchedTrack != null) {
+                println("[AudioTrack] Selected track: ${matchedTrack.trackId} via priority matcher")
+                return matchedTrack
+            }
+        }
+
+        // Fallback to first track
+        println("[AudioTrack] No match found, selecting first track")
+        return candidates.firstOrNull()
     }
 
     private fun loadVideoUrl() {
@@ -353,6 +521,7 @@ class VideoPlayerViewModel @Inject constructor(
 
     private fun startPlayback(streamUrl: String, fileName: String?) {
         println("[DEBUG] startPlayback: Setting media item: $streamUrl")
+        currentStreamUrl = streamUrl
 
         // Explicitly set MIME type based on file extension to override RD's "application/force-download"
         val mimeType = when {
@@ -393,6 +562,14 @@ class VideoPlayerViewModel @Inject constructor(
         )
 
         startHeartbeat()
+
+        // For movies with auto-play enabled, prefetch recommendations after 90 seconds
+        if (_uiState.value.autoPlayEnabled && contentType == "movie") {
+            viewModelScope.launch {
+                delay(90000) // 90 seconds
+                prefetchNextContent()
+            }
+        }
     }
 
     fun cancelDownload() {
@@ -426,24 +603,49 @@ class VideoPlayerViewModel @Inject constructor(
     private suspend fun saveProgress() {
         _player?.let { player ->
             if (player.duration > 0) {
-                val isCompleted = player.currentPosition >= (player.duration * 0.9)
+                // Different completion thresholds: 95% for TV shows, 90% for movies
+                val completionThreshold = if (contentType == "tv") 0.95 else 0.90
+                val isCompleted = player.currentPosition >= (player.duration * completionThreshold)
                 val progress = WatchProgressEntity(
                     tmdbId = tmdbId,
                     title = contentTitle,
                     type = contentType,
                     year = year,
-                    posterUrl = null, // TODO: Get from detail response
+                    posterUrl = posterUrl,
                     position = player.currentPosition,
                     duration = player.duration,
                     lastWatchedAt = System.currentTimeMillis(),
-                    isCompleted = isCompleted
+                    isCompleted = isCompleted,
+                    season = season,
+                    episode = episode
                 )
                 watchProgressDao.saveProgress(progress)
+
+                // Sync to server for recommendations
+                try {
+                    val syncRequest = com.duckflix.lite.data.remote.dto.WatchProgressSyncRequest(
+                        tmdbId = tmdbId,
+                        type = contentType,
+                        title = contentTitle,
+                        posterPath = posterUrl?.substringAfter("w500"), // Extract just the path
+                        releaseDate = year,
+                        position = player.currentPosition,
+                        duration = player.duration,
+                        season = season,
+                        episode = episode
+                    )
+                    api.syncWatchProgress(syncRequest)
+                } catch (e: Exception) {
+                    println("[WARN] Failed to sync watch progress to server: ${e.message}")
+                    // Non-critical - local progress is still saved
+                }
 
                 // Auto-remove from watchlist when completed (movies only)
                 if (isCompleted && contentType == "movie") {
                     try {
                         watchlistDao.remove(tmdbId)
+                        // Also remove from server
+                        api.removeFromWatchlist(tmdbId, contentType)
                     } catch (e: Exception) {
                         // Watchlist removal failure is not critical
                     }
@@ -509,13 +711,72 @@ class VideoPlayerViewModel @Inject constructor(
     }
 
     fun selectAudioTrack(trackId: String) {
-        // TODO: Implement audio track selection
-        // This requires using TrackSelectionOverride
+        _player?.let { player ->
+            try {
+                val parts = trackId.split("_")
+                if (parts.size >= 2) {
+                    val trackIndex = parts.last().toIntOrNull() ?: return
+
+                    player.currentTracks.groups.forEachIndexed { groupIndex, group ->
+                        for (i in 0 until group.length) {
+                            val format = group.getTrackFormat(i)
+                            if (format.sampleMimeType?.startsWith("audio/") == true && i == trackIndex) {
+                                player.trackSelectionParameters = player.trackSelectionParameters
+                                    .buildUpon()
+                                    .setOverrideForType(
+                                        TrackSelectionOverride(group.mediaTrackGroup, listOf(i))
+                                    )
+                                    .build()
+                                updateAvailableTracks()
+                                return
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                println("[ERROR] Failed to select audio track: ${e.message}")
+            }
+        }
     }
 
     fun selectSubtitleTrack(trackId: String) {
-        // TODO: Implement subtitle track selection
-        // This requires using TrackSelectionOverride
+        _player?.let { player ->
+            try {
+                if (trackId == "none") {
+                    player.trackSelectionParameters = player.trackSelectionParameters
+                        .buildUpon()
+                        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                        .build()
+                    updateAvailableTracks()
+                    return
+                }
+
+                val parts = trackId.split("_")
+                if (parts.size >= 2) {
+                    val trackIndex = parts.last().toIntOrNull() ?: return
+
+                    player.currentTracks.groups.forEachIndexed { groupIndex, group ->
+                        for (i in 0 until group.length) {
+                            val format = group.getTrackFormat(i)
+                            if ((format.sampleMimeType?.startsWith("text/") == true ||
+                                 format.sampleMimeType?.startsWith("application/") == true) &&
+                                i == trackIndex) {
+                                player.trackSelectionParameters = player.trackSelectionParameters
+                                    .buildUpon()
+                                    .setOverrideForType(
+                                        TrackSelectionOverride(group.mediaTrackGroup, listOf(i))
+                                    )
+                                    .build()
+                                updateAvailableTracks()
+                                return
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                println("[ERROR] Failed to select subtitle track: ${e.message}")
+            }
+        }
     }
 
     private fun fetchTmdbLogo() {
@@ -575,6 +836,180 @@ class VideoPlayerViewModel @Inject constructor(
                 // Non-critical, continue without logo
             }
         }
+    }
+
+    /**
+     * Handle buffering event for adaptive bitrate - detect stuttering
+     */
+    private fun handleBufferingEvent() {
+        viewModelScope.launch {
+            if (stutterDetector.shouldTriggerFallback()) {
+                println("[INFO] Stutter detected, requesting lower quality fallback")
+
+                val fallbackUrl = stutterDetector.requestFallback(
+                    tmdbId = tmdbId,
+                    type = contentType,
+                    year = year,
+                    season = season,
+                    episode = episode,
+                    duration = (_uiState.value.duration / 60000).toInt(), // Convert ms to minutes
+                    currentBitrate = null, // Could extract from track info if needed
+                    scope = viewModelScope
+                )
+
+                if (fallbackUrl != null) {
+                    println("[INFO] Switching to fallback URL: $fallbackUrl")
+
+                    // Mark current error as resolved if we had one
+                    currentErrorId?.let { errorId ->
+                        try {
+                            playbackErrorDao.markAsResolved(errorId)
+                            println("[ERROR-TRACKING] Marked error $errorId as resolved via fallback")
+                        } catch (e: Exception) {
+                            println("[ERROR] Failed to mark error as resolved: ${e.message}")
+                        }
+                    }
+
+                    currentStreamUrl = fallbackUrl
+
+                    // Save current position
+                    val currentPos = _player?.currentPosition ?: 0
+
+                    // Load fallback URL
+                    _player?.apply {
+                        setMediaItem(MediaItem.fromUri(fallbackUrl))
+                        prepare()
+                        seekTo(currentPos)
+                        play()
+                    }
+                } else {
+                    println("[WARN] No fallback URL available")
+                }
+            } else {
+                stutterDetector.recordBufferEvent()
+            }
+        }
+    }
+
+    // Auto-play methods
+    private fun loadAutoPlaySettings() {
+        viewModelScope.launch {
+            val settings = autoPlaySettingsDao.getSettingsOnce()
+            if (settings != null) {
+                val shouldEnable = if (contentType == "tv") {
+                    settings.enabled && settings.lastSeriesTmdbId == tmdbId
+                } else {
+                    settings.sessionEnabled
+                }
+                _uiState.value = _uiState.value.copy(autoPlayEnabled = shouldEnable)
+            }
+        }
+    }
+
+    fun toggleAutoPlay() {
+        viewModelScope.launch {
+            val newState = !_uiState.value.autoPlayEnabled
+            _uiState.value = _uiState.value.copy(autoPlayEnabled = newState)
+
+            val settings = autoPlaySettingsDao.getSettingsOnce() ?: com.duckflix.lite.data.local.entity.AutoPlaySettingsEntity()
+            if (contentType == "tv") {
+                autoPlaySettingsDao.saveSettings(
+                    settings.copy(enabled = newState, lastSeriesTmdbId = if (newState) tmdbId else null)
+                )
+            } else {
+                autoPlaySettingsDao.saveSettings(settings.copy(sessionEnabled = newState))
+            }
+
+            if (newState && _player?.duration != null) {
+                prefetchNextContent()
+            }
+        }
+    }
+
+    private fun prefetchNextContent() {
+        if (_uiState.value.isLoadingNextContent) return
+        viewModelScope.launch {
+            try {
+                _uiState.value = _uiState.value.copy(isLoadingNextContent = true)
+                if (contentType == "tv" && season != null && episode != null) {
+                    val nextEpisode = api.getNextEpisode(tmdbId, season, episode)
+                    _uiState.value = _uiState.value.copy(
+                        nextEpisodeInfo = nextEpisode,
+                        isLoadingNextContent = false
+                    )
+                } else {
+                    val recommendations = api.getContentRecommendations(tmdbId, limit = 4)
+                    _uiState.value = _uiState.value.copy(
+                        movieRecommendations = recommendations.recommendations,
+                        selectedRecommendation = recommendations.recommendations.randomOrNull(),
+                        isLoadingNextContent = false
+                    )
+                }
+            } catch (e: Exception) {
+                println("[AutoPlay] Prefetch failed: ${e.message}")
+                _uiState.value = _uiState.value.copy(isLoadingNextContent = false)
+            }
+        }
+    }
+
+    private fun handleVideoEnded() {
+        if (!_uiState.value.autoPlayEnabled) return
+        if (contentType == "tv") handleTVEpisodeEnded() else handleMovieEnded()
+    }
+
+    private fun handleTVEpisodeEnded() {
+        val nextEpisode = _uiState.value.nextEpisodeInfo
+        if (nextEpisode == null || !nextEpisode.hasNext) {
+            _uiState.value = _uiState.value.copy(showSeriesCompleteOverlay = true)
+            return
+        }
+        startAutoPlayCountdown {
+            onAutoPlayNext?.invoke(nextEpisode.season!!, nextEpisode.episode!!)
+        }
+    }
+
+    private fun handleMovieEnded() {
+        val selected = _uiState.value.selectedRecommendation
+        if (selected == null || _uiState.value.movieRecommendations.isNullOrEmpty()) {
+            _uiState.value = _uiState.value.copy(showRecommendationsOverlay = true)
+            return
+        }
+        startAutoPlayCountdown {
+            onAutoPlayRecommendation?.invoke(selected.tmdbId)
+        }
+    }
+
+    private fun startAutoPlayCountdown(onComplete: () -> Unit) {
+        autoPlayCountdownJob?.cancel()
+        _uiState.value = _uiState.value.copy(autoPlayCountdown = 5)
+        autoPlayCountdownJob = viewModelScope.launch {
+            for (i in 5 downTo 1) {
+                _uiState.value = _uiState.value.copy(autoPlayCountdown = i)
+                delay(1000)
+            }
+            onComplete()
+        }
+    }
+
+    fun cancelAutoPlay() {
+        autoPlayCountdownJob?.cancel()
+        _uiState.value = _uiState.value.copy(
+            autoPlayCountdown = 0,
+            showSeriesCompleteOverlay = false,
+            showRecommendationsOverlay = false
+        )
+    }
+
+    fun dismissSeriesComplete() {
+        _uiState.value = _uiState.value.copy(showSeriesCompleteOverlay = false)
+    }
+
+    fun dismissRecommendations() {
+        _uiState.value = _uiState.value.copy(showRecommendationsOverlay = false)
+    }
+
+    fun selectRecommendation(rec: com.duckflix.lite.data.remote.dto.MovieRecommendationItem) {
+        _uiState.value = _uiState.value.copy(selectedRecommendation = rec)
     }
 
     override fun onCleared() {

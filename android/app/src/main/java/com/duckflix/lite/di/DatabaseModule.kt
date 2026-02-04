@@ -46,4 +46,10 @@ object DatabaseModule {
 
     @Provides
     fun provideWatchlistDao(database: DuckFlixDatabase) = database.watchlistDao()
+
+    @Provides
+    fun providePlaybackErrorDao(database: DuckFlixDatabase) = database.playbackErrorDao()
+
+    @Provides
+    fun provideAutoPlaySettingsDao(database: DuckFlixDatabase) = database.autoPlaySettingsDao()
 }

@@ -68,16 +68,39 @@ fun LoginScreen(
 
                 Button(
                     onClick = viewModel::login,
-                    enabled = !uiState.isLoading && uiState.username.isNotBlank() && uiState.password.isNotBlank(),
+                    enabled = !uiState.isLoading && !uiState.isMeasuringBandwidth && uiState.username.isNotBlank() && uiState.password.isNotBlank(),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    if (uiState.isLoading) {
+                    when {
+                        uiState.isLoading -> {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                        uiState.isMeasuringBandwidth -> {
+                            Text("Measuring bandwidth...")
+                        }
+                        else -> {
+                            Text("Login")
+                        }
+                    }
+                }
+
+                // Show bandwidth test progress
+                if (uiState.isMeasuringBandwidth) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            color = MaterialTheme.colorScheme.onPrimary
+                            modifier = Modifier.size(32.dp)
                         )
-                    } else {
-                        Text("Login")
+                        Text(
+                            text = "Testing connection speed...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
                     }
                 }
             }

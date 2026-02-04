@@ -9,8 +9,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.duckflix.lite.ui.screens.admin.AdminScreen
 import com.duckflix.lite.ui.screens.detail.DetailScreen
+import com.duckflix.lite.ui.screens.filmography.ActorFilmographyScreen
 import com.duckflix.lite.ui.screens.login.LoginScreen
+import com.duckflix.lite.ui.screens.login.UsernameScreen
+import com.duckflix.lite.ui.screens.login.PasswordScreen
 import com.duckflix.lite.ui.screens.home.HomeScreen
 import com.duckflix.lite.ui.screens.player.VideoPlayerScreen
 import com.duckflix.lite.ui.screens.search.SearchScreen
@@ -18,12 +22,19 @@ import com.duckflix.lite.ui.screens.settings.SettingsScreen
 
 sealed class Screen(val route: String) {
     object Login : Screen("login")
+    object LoginUsername : Screen("login_username")
+    object LoginPassword : Screen("login_password/{username}") {
+        fun createRoute(username: String) = "login_password/${java.net.URLEncoder.encode(username, "UTF-8")}"
+    }
     object Home : Screen("home")
     object Search : Screen("search")
     object Detail : Screen("detail/{tmdbId}?type={type}") {
         fun createRoute(tmdbId: Int, type: String = "movie") = "detail/$tmdbId?type=$type"
     }
-    object Player : Screen("player/{tmdbId}/{title}?year={year}&type={type}&season={season}&episode={episode}&resumePosition={resumePosition}&posterUrl={posterUrl}") {
+    object ActorFilmography : Screen("actor/{personId}") {
+        fun createRoute(personId: Int) = "actor/$personId"
+    }
+    object Player : Screen("player/{tmdbId}/{title}?year={year}&type={type}&season={season}&episode={episode}&resumePosition={resumePosition}&posterUrl={posterUrl}&logoUrl={logoUrl}&originalLanguage={originalLanguage}") {
         fun createRoute(
             tmdbId: Int,
             title: String,
@@ -32,18 +43,23 @@ sealed class Screen(val route: String) {
             season: Int? = null,
             episode: Int? = null,
             resumePosition: Long? = null,
-            posterUrl: String? = null
+            posterUrl: String? = null,
+            logoUrl: String? = null,
+            originalLanguage: String? = null
         ) = "player/$tmdbId/${java.net.URLEncoder.encode(title, "UTF-8")}?" +
                 "year=${year ?: ""}&type=$type" +
                 "&season=${season ?: -1}" +
                 "&episode=${episode ?: -1}" +
                 "&resumePosition=${resumePosition ?: -1L}" +
-                (if (posterUrl != null) "&posterUrl=${java.net.URLEncoder.encode(posterUrl, "UTF-8")}" else "")
+                (if (posterUrl != null) "&posterUrl=${java.net.URLEncoder.encode(posterUrl, "UTF-8")}" else "") +
+                (if (logoUrl != null) "&logoUrl=${java.net.URLEncoder.encode(logoUrl, "UTF-8")}" else "") +
+                (if (originalLanguage != null) "&originalLanguage=$originalLanguage" else "")
     }
     object Vod : Screen("vod")
     object LiveTV : Screen("livetv")
     object Dvr : Screen("dvr")
     object Settings : Screen("settings")
+    object Admin : Screen("admin")
 }
 
 @Composable
@@ -55,12 +71,13 @@ fun DuckFlixApp(
 
     // TODO: Re-enable login after testing
     // val startDestination = Screen.Home.route // Skip login for testing
-    val startDestination = if (isLoggedIn) Screen.Home.route else Screen.Login.route
+    val startDestination = if (isLoggedIn) Screen.Home.route else Screen.LoginUsername.route
 
     NavHost(
         navController = navController,
         startDestination = startDestination
     ) {
+        // Old single-screen login (kept for backwards compatibility with logout)
         composable(Screen.Login.route) {
             LoginScreen(
                 onLoginSuccess = {
@@ -69,6 +86,44 @@ fun DuckFlixApp(
                     }
                 }
             )
+        }
+
+        // Two-step login flow - Username screen
+        composable(Screen.LoginUsername.route) {
+            UsernameScreen(
+                onUsernameSubmit = { username ->
+                    navController.navigate(Screen.LoginPassword.createRoute(username))
+                }
+            )
+        }
+
+        // Two-step login flow - Password screen
+        composable(
+            route = Screen.LoginPassword.route,
+            arguments = listOf(
+                navArgument("username") { type = NavType.StringType }
+            )
+        ) { backStackEntry ->
+            val username = backStackEntry.arguments?.getString("username") ?: ""
+            PasswordScreen(
+                username = username,
+                onPasswordSubmit = { password ->
+                    // Login is handled in the PasswordScreen via ViewModel
+                },
+                onBack = {
+                    navController.navigateUp()
+                }
+            )
+
+            // Listen for login success via ViewModel
+            val viewModel: com.duckflix.lite.ui.screens.login.LoginViewModel = hiltViewModel()
+            val uiState by viewModel.uiState.collectAsState()
+
+            if (uiState.isLoggedIn) {
+                navController.navigate(Screen.Home.route) {
+                    popUpTo(Screen.LoginUsername.route) { inclusive = true }
+                }
+            }
         }
 
         composable(Screen.Home.route) {
@@ -97,14 +152,33 @@ fun DuckFlixApp(
             )
         ) {
             DetailScreen(
-                onPlayClick = { tmdbId, title, year, type, season, episode, resumePosition, posterUrl ->
-                    navController.navigate(Screen.Player.createRoute(tmdbId, title, year, type, season, episode, resumePosition, posterUrl))
+                onPlayClick = { tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage ->
+                    navController.navigate(Screen.Player.createRoute(tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage))
                 },
                 onSearchTorrents = { tmdbId, title ->
                     // TODO: Navigate to torrent search/Prowlarr flow
                 },
                 onNavigateBack = {
                     navController.navigateUp()
+                },
+                onActorClick = { personId ->
+                    navController.navigate(Screen.ActorFilmography.createRoute(personId))
+                }
+            )
+        }
+
+        composable(
+            route = Screen.ActorFilmography.route,
+            arguments = listOf(
+                navArgument("personId") { type = NavType.IntType }
+            )
+        ) {
+            ActorFilmographyScreen(
+                onNavigateBack = {
+                    navController.navigateUp()
+                },
+                onContentClick = { tmdbId, mediaType ->
+                    navController.navigate(Screen.Detail.createRoute(tmdbId, mediaType))
                 }
             )
         }
@@ -139,9 +213,36 @@ fun DuckFlixApp(
                     type = NavType.StringType
                     nullable = true
                     defaultValue = null
+                },
+                navArgument("originalLanguage") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
                 }
             )
         ) {
+            val playerViewModel: com.duckflix.lite.ui.screens.player.VideoPlayerViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+
+            // Setup auto-play navigation callbacks
+            playerViewModel.onAutoPlayNext = onAutoPlayNext@{ season, episode ->
+                val currentEntry = navController.currentBackStackEntry ?: return@onAutoPlayNext
+                val tmdbId = currentEntry.arguments?.getInt("tmdbId") ?: return@onAutoPlayNext
+                val title = currentEntry.arguments?.getString("title") ?: return@onAutoPlayNext
+                val year = currentEntry.arguments?.getString("year")
+                val posterUrl = currentEntry.arguments?.getString("posterUrl")
+                val originalLanguage = currentEntry.arguments?.getString("originalLanguage")
+
+                navController.navigate(
+                    Screen.Player.createRoute(tmdbId, title, year, "tv", season, episode, null, posterUrl, null, originalLanguage)
+                ) {
+                    popUpTo(Screen.Player.route) { inclusive = true }
+                }
+            }
+
+            playerViewModel.onAutoPlayRecommendation = { recommendationTmdbId ->
+                navController.navigate(Screen.Detail.createRoute(recommendationTmdbId, "movie"))
+            }
+
             VideoPlayerScreen(
                 onNavigateBack = {
                     navController.navigateUp()
@@ -151,6 +252,19 @@ fun DuckFlixApp(
 
         composable(Screen.Settings.route) {
             SettingsScreen(
+                onNavigateBack = {
+                    navController.navigateUp()
+                },
+                onLogoutSuccess = {
+                    navController.navigate(Screen.LoginUsername.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(Screen.Admin.route) {
+            AdminScreen(
                 onNavigateBack = {
                     navController.navigateUp()
                 }

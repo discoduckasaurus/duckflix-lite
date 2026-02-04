@@ -23,11 +23,13 @@ data class RecentItem(
     val title: String,
     val type: String,
     val year: String?,
-    val posterUrl: String?
+    val posterUrl: String?,
+    val voteAverage: Double? = null
 )
 
 data class SearchUiState(
     val query: String = "",
+    val topResults: List<TmdbSearchResult> = emptyList(), // Mixed movies + TV by relevance
     val movieResults: List<TmdbSearchResult> = emptyList(),
     val tvResults: List<TmdbSearchResult> = emptyList(),
     val recentSearches: List<RecentItem> = emptyList(),
@@ -48,64 +50,7 @@ class SearchViewModel @Inject constructor(
     val uiState: StateFlow<SearchUiState> = _uiState.asStateFlow()
 
     init {
-        seedTestData()
         loadRecentData()
-    }
-
-    private fun seedTestData() {
-        viewModelScope.launch {
-            // Check if we already have data
-            val existingWatched = watchProgressDao.getProgress(1855) // BSG TMDB ID
-            if (existingWatched == null) {
-                // Insert test titles
-                val now = System.currentTimeMillis()
-
-                // Battlestar Galactica (2004)
-                watchProgressDao.saveProgress(
-                    com.duckflix.lite.data.local.entity.WatchProgressEntity(
-                        tmdbId = 1855,
-                        title = "Battlestar Galactica",
-                        type = "tv",
-                        year = "2004",
-                        posterUrl = "https://image.tmdb.org/t/p/w500/99PJSbcO2LeM10uOGWeFihNu7f5.jpg",
-                        position = 300000, // 5 minutes in
-                        duration = 2700000, // 45 minutes
-                        lastWatchedAt = now - 86400000, // 1 day ago
-                        isCompleted = false
-                    )
-                )
-
-                // Mean Girls (2004)
-                watchProgressDao.saveProgress(
-                    com.duckflix.lite.data.local.entity.WatchProgressEntity(
-                        tmdbId = 10625,
-                        title = "Mean Girls",
-                        type = "movie",
-                        year = "2004",
-                        posterUrl = "https://image.tmdb.org/t/p/w500/fXm3YKXAEjx7d2tIWDg9TfRZtsU.jpg",
-                        position = 1200000, // 20 minutes in
-                        duration = 5820000, // 97 minutes
-                        lastWatchedAt = now - 172800000, // 2 days ago
-                        isCompleted = false
-                    )
-                )
-
-                // American Dad
-                watchProgressDao.saveProgress(
-                    com.duckflix.lite.data.local.entity.WatchProgressEntity(
-                        tmdbId = 1433,
-                        title = "American Dad!",
-                        type = "tv",
-                        year = "2005",
-                        posterUrl = "https://image.tmdb.org/t/p/w500/xnFFz3etm1vftF0ns8RMHA1XdqU.jpg",
-                        position = 600000, // 10 minutes in
-                        duration = 1260000, // 21 minutes
-                        lastWatchedAt = now, // Just now
-                        isCompleted = false
-                    )
-                )
-            }
-        }
     }
 
     private fun loadRecentData() {
@@ -115,7 +60,7 @@ class SearchViewModel @Inject constructor(
                 recentSearchDao.getRecentSearches().collect { searches ->
                     _uiState.value = _uiState.value.copy(
                         recentSearches = searches.map {
-                            RecentItem(it.tmdbId, it.title, it.type, it.year, it.posterUrl)
+                            RecentItem(it.tmdbId, it.title, it.type, it.year, it.posterUrl, it.voteAverage)
                         }
                     )
                 }
@@ -134,7 +79,7 @@ class SearchViewModel @Inject constructor(
         }
     }
 
-    fun saveRecentSearch(tmdbId: Int, title: String, type: String, year: String?, posterUrl: String?) {
+    fun saveRecentSearch(tmdbId: Int, title: String, type: String, year: String?, posterUrl: String?, voteAverage: Double? = null) {
         viewModelScope.launch {
             recentSearchDao.saveSearch(
                 RecentSearchEntity(
@@ -143,7 +88,8 @@ class SearchViewModel @Inject constructor(
                     type = type,
                     year = year,
                     posterUrl = posterUrl,
-                    searchedAt = System.currentTimeMillis()
+                    searchedAt = System.currentTimeMillis(),
+                    voteAverage = voteAverage
                 )
             )
         }
@@ -169,22 +115,21 @@ class SearchViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)
 
             try {
-                // Search both movies and TV shows in parallel
-                val movieDeferred = async {
-                    api.searchTmdb(query = query, type = "movie")
-                }
-                val tvDeferred = async {
-                    api.searchTmdb(query = query, type = "tv")
-                }
+                // Use multi-search to get both movies and TV in one call
+                val multiResponse = api.searchTmdb(query = query, type = "multi")
 
-                val movieResponse = movieDeferred.await()
-                val tvResponse = tvDeferred.await()
+                // Server already sorted by relevance and added relevanceScore
+                val allResults = multiResponse.results
 
-                // Set the type on each result
-                val moviesWithType = movieResponse.results.map { it.copy(type = "movie") }
-                val tvWithType = tvResponse.results.map { it.copy(type = "tv") }
+                // Separate into movies and TV (keeping relevance order)
+                val moviesWithType = allResults.filter { it.type == "movie" }
+                val tvWithType = allResults.filter { it.type == "tv" }
+
+                // Top results - already sorted by relevance from server
+                val topResults = allResults.take(10)
 
                 _uiState.value = _uiState.value.copy(
+                    topResults = topResults,
                     movieResults = moviesWithType,
                     tvResults = tvWithType,
                     isLoading = false

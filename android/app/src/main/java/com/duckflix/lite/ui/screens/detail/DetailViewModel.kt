@@ -29,7 +29,9 @@ data class DetailUiState(
     val selectedSeason: Int? = null, // currently selected season number
     val isLoadingSeasons: Boolean = false,
     val watchProgress: WatchProgressEntity? = null,
-    val isInWatchlist: Boolean = false
+    val isInWatchlist: Boolean = false,
+    val isLoadingRandomEpisode: Boolean = false,
+    val randomEpisodeError: String? = null
 )
 
 @HiltViewModel
@@ -63,15 +65,7 @@ class DetailViewModel @Inject constructor(
                 // Check Zurg availability
                 checkZurgAvailability(details)
 
-                // For TV shows, select and load first season automatically
-                if (contentType == "tv" && !details.seasons.isNullOrEmpty()) {
-                    // Select first non-special season
-                    val firstSeason = details.seasons.firstOrNull { it.seasonNumber > 0 }
-                    if (firstSeason != null) {
-                        _uiState.value = _uiState.value.copy(selectedSeason = firstSeason.seasonNumber)
-                        loadSeason(firstSeason.seasonNumber)
-                    }
-                }
+                // Don't auto-select season - let user choose from dropdown
             } catch (e: Exception) {
                 _uiState.value = DetailUiState(
                     isLoading = false,
@@ -114,6 +108,10 @@ class DetailViewModel @Inject constructor(
         if (!_uiState.value.seasons.containsKey(seasonNumber)) {
             loadSeason(seasonNumber)
         }
+    }
+
+    fun resetToSeriesView() {
+        _uiState.value = _uiState.value.copy(selectedSeason = null)
     }
 
     private fun loadSeason(seasonNumber: Int) {
@@ -160,11 +158,18 @@ class DetailViewModel @Inject constructor(
                 val content = _uiState.value.content ?: return@launch
 
                 if (_uiState.value.isInWatchlist) {
-                    // Remove from watchlist
+                    // Remove from watchlist locally
                     watchlistDao.remove(tmdbId)
                     _uiState.value = _uiState.value.copy(isInWatchlist = false)
+
+                    // Sync to server
+                    try {
+                        api.removeFromWatchlist(tmdbId, contentType)
+                    } catch (e: Exception) {
+                        println("[WARN] Failed to sync watchlist removal to server: ${e.message}")
+                    }
                 } else {
-                    // Add to watchlist
+                    // Add to watchlist locally
                     val watchlistItem = WatchlistEntity(
                         tmdbId = tmdbId,
                         title = content.title,
@@ -175,9 +180,43 @@ class DetailViewModel @Inject constructor(
                     )
                     watchlistDao.add(watchlistItem)
                     _uiState.value = _uiState.value.copy(isInWatchlist = true)
+
+                    // Sync to server
+                    try {
+                        val syncRequest = com.duckflix.lite.data.remote.dto.WatchlistSyncRequest(
+                            tmdbId = tmdbId,
+                            type = contentType,
+                            title = content.title,
+                            posterPath = content.posterPath,
+                            releaseDate = content.releaseDate,
+                            voteAverage = content.voteAverage
+                        )
+                        api.addToWatchlist(syncRequest)
+                    } catch (e: Exception) {
+                        println("[WARN] Failed to sync watchlist addition to server: ${e.message}")
+                    }
                 }
             } catch (e: Exception) {
                 // Watchlist toggle failure - could show error to user
+            }
+        }
+    }
+
+    fun playRandomEpisode(onPlay: (Int, Int) -> Unit) {
+        viewModelScope.launch {
+            try {
+                _uiState.value = _uiState.value.copy(
+                    isLoadingRandomEpisode = true,
+                    randomEpisodeError = null
+                )
+                val randomEpisode = api.getRandomEpisode(tmdbId)
+                _uiState.value = _uiState.value.copy(isLoadingRandomEpisode = false)
+                onPlay(randomEpisode.season, randomEpisode.episode)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isLoadingRandomEpisode = false,
+                    randomEpisodeError = "Failed: ${e.message}"
+                )
             }
         }
     }

@@ -2,6 +2,7 @@ package com.duckflix.lite.ui.screens.login
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.duckflix.lite.data.bandwidth.BandwidthTester
 import com.duckflix.lite.data.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,12 +17,15 @@ data class LoginUiState(
     val password: String = "",
     val isLoading: Boolean = false,
     val isLoggedIn: Boolean = false,
+    val isMeasuringBandwidth: Boolean = false,
+    val bandwidthMbps: Double? = null,
     val error: String? = null
 )
 
 @HiltViewModel
 class LoginViewModel @Inject constructor(
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val bandwidthTester: BandwidthTester
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LoginUiState())
@@ -57,7 +61,9 @@ class LoginViewModel @Inject constructor(
 
             result.fold(
                 onSuccess = {
-                    _uiState.update { it.copy(isLoading = false, isLoggedIn = true) }
+                    _uiState.update { it.copy(isLoading = false) }
+                    // Perform bandwidth test after successful login
+                    performBandwidthTest()
                 },
                 onFailure = { error ->
                     _uiState.update {
@@ -68,6 +74,50 @@ class LoginViewModel @Inject constructor(
                     }
                 }
             )
+        }
+    }
+
+    fun loginWithCredentials(username: String, password: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null, username = username, password = password) }
+
+            val result = authRepository.login(
+                username = username,
+                password = password
+            )
+
+            result.fold(
+                onSuccess = {
+                    _uiState.update { it.copy(isLoading = false) }
+                    // Perform bandwidth test after successful login
+                    performBandwidthTest()
+                },
+                onFailure = { error ->
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            error = error.message ?: "Login failed"
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    private fun performBandwidthTest() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isMeasuringBandwidth = true) }
+
+            // Perform bandwidth test and report to server
+            val bandwidthStatus = bandwidthTester.performTestAndReport()
+
+            _uiState.update {
+                it.copy(
+                    isMeasuringBandwidth = false,
+                    isLoggedIn = true,
+                    bandwidthMbps = bandwidthStatus?.effectiveBandwidthMbps
+                )
+            }
         }
     }
 }

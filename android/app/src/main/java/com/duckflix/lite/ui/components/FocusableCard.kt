@@ -95,3 +95,49 @@ fun MenuCard(
         }
     }
 }
+
+/**
+ * Media card for poster-style content (no internal padding)
+ * Used for movie/TV show poster cards in carousels
+ */
+@Composable
+fun MediaCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    focusRequester: FocusRequester? = null,
+    interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
+    content: @Composable BoxScope.() -> Unit
+) {
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Card(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .then(
+                if (focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
+            )
+            .focusable(interactionSource = interactionSource),
+        interactionSource = interactionSource,
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp), // Less rounded corners (default is 12dp)
+        border = if (isFocused) {
+            BorderStroke(4.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isFocused) {
+                Color(0xFF3A3A3A)
+            } else {
+                Color(0xFF2A2A2A)
+            }
+        )
+    ) {
+        Box(content = content)
+    }
+}

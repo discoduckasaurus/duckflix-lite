@@ -16,7 +16,8 @@ data class TmdbSearchResult(
     @Json(name = "posterPath") val posterPath: String?,
     val overview: String?,
     @Json(name = "voteAverage") val voteAverage: Double?,
-    val type: String = "movie" // "movie" or "tv"
+    @Json(name = "relevanceScore") val relevanceScore: Double? = null,
+    @Json(name = "mediaType") val type: String = "movie" // Map server's mediaType to type field
 ) {
     val posterUrl: String?
         get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
@@ -29,19 +30,29 @@ data class TmdbDetailResponse(
     val overview: String?,
     @Json(name = "posterPath") val posterPath: String?,
     @Json(name = "backdropPath") val backdropPath: String?,
+    @Json(name = "logoPath") val logoPath: String?, // English logo (transparent PNG)
     @Json(name = "releaseDate") val releaseDate: String?,
     @Json(name = "voteAverage") val voteAverage: Double?,
     val runtime: Int?,
     val genres: List<GenreDto>?,
     val cast: List<CastDto>?,
     val seasons: List<SeasonInfoDto>?,
-    @Json(name = "numberOfSeasons") val numberOfSeasons: Int?
+    @Json(name = "numberOfSeasons") val numberOfSeasons: Int?,
+    @Json(name = "originalLanguage") val originalLanguage: String?, // ISO 639-1 code: "en", "ja", "fr", etc.
+    @Json(name = "spokenLanguages") val spokenLanguages: List<SpokenLanguageDto>?
 ) {
     val posterUrl: String?
         get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
 
     val backdropUrl: String?
         get() = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
+
+    val logoUrl: String?
+        get() = logoPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+
+    // Prefer logo over poster for title display (logos are transparent PNGs)
+    val titleImageUrl: String?
+        get() = logoUrl ?: posterUrl
 
     val year: String?
         get() = releaseDate?.substring(0, 4)
@@ -51,6 +62,12 @@ data class TmdbDetailResponse(
 }
 
 @JsonClass(generateAdapter = true)
+data class SpokenLanguageDto(
+    @Json(name = "iso6391") val iso6391: String, // "en"
+    val name: String // "English"
+)
+
+@JsonClass(generateAdapter = true)
 data class GenreDto(
     val id: Int,
     val name: String
@@ -58,6 +75,7 @@ data class GenreDto(
 
 @JsonClass(generateAdapter = true)
 data class CastDto(
+    val id: Int,
     val name: String,
     val character: String?,
     @Json(name = "profilePath") val profilePath: String?
@@ -105,4 +123,129 @@ data class EpisodeDto(
 ) {
     val stillUrl: String?
         get() = stillPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+}
+
+// Trending API DTOs
+@JsonClass(generateAdapter = true)
+data class TrendingResult(
+    val id: Int,
+    val title: String,
+    @Json(name = "poster_path") val posterPath: String?,
+    val overview: String?,
+    @Json(name = "vote_average") val voteAverage: Double?,
+    val year: String?,
+    @Json(name = "media_type") val mediaType: String = "movie"
+) {
+    val posterUrl: String?
+        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+}
+
+@JsonClass(generateAdapter = true)
+data class TrendingResponse(
+    val results: List<TrendingResult>
+)
+
+// Recommendations API DTOs
+@JsonClass(generateAdapter = true)
+data class RecommendationItem(
+    val tmdbId: Int,
+    val title: String,
+    val type: String, // "movie" or "tv"
+    val posterPath: String?,
+    val releaseDate: String?,
+    val voteAverage: Double?
+) {
+    val posterUrl: String?
+        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+
+    val year: String?
+        get() = releaseDate?.take(4)
+
+    // Map to id and mediaType for compatibility with existing UI code
+    val id: Int
+        get() = tmdbId
+
+    val mediaType: String
+        get() = type
+}
+
+@JsonClass(generateAdapter = true)
+data class RecommendationsResponse(
+    val recommendations: List<RecommendationItem>,
+    val total: Int,
+    val page: Int,
+    val totalPages: Int,
+    val hasMore: Boolean
+)
+
+@JsonClass(generateAdapter = true)
+data class WatchProgressSyncRequest(
+    val tmdbId: Int,
+    val type: String,
+    val title: String,
+    val posterPath: String?,
+    val releaseDate: String?,
+    val position: Long,
+    val duration: Long,
+    val season: Int?,
+    val episode: Int?
+)
+
+@JsonClass(generateAdapter = true)
+data class WatchlistSyncRequest(
+    val tmdbId: Int,
+    val type: String,
+    val title: String,
+    val posterPath: String?,
+    val releaseDate: String?,
+    val voteAverage: Double?
+)
+
+@JsonClass(generateAdapter = true)
+data class RandomEpisodeResponse(
+    val season: Int,
+    val episode: Int,
+    val title: String
+)
+
+// Person/Actor DTOs
+@JsonClass(generateAdapter = true)
+data class PersonDetailsResponse(
+    val id: Int,
+    val name: String,
+    val biography: String?,
+    val birthday: String?,
+    @Json(name = "placeOfBirth") val placeOfBirth: String?,
+    @Json(name = "profilePath") val profilePath: String?,
+    @Json(name = "knownForDepartment") val knownForDepartment: String?
+) {
+    val profileUrl: String?
+        get() = profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }
+}
+
+@JsonClass(generateAdapter = true)
+data class PersonCreditsResponse(
+    val personId: Int,
+    val personName: String,
+    val results: List<PersonCreditItem>
+)
+
+@JsonClass(generateAdapter = true)
+data class PersonCreditItem(
+    val id: Int,
+    val title: String,
+    val year: Int?,
+    @Json(name = "posterPath") val posterPath: String?,
+    val overview: String?,
+    @Json(name = "voteAverage") val voteAverage: Double?,
+    @Json(name = "voteCount") val voteCount: Int?,
+    @Json(name = "mediaType") val mediaType: String, // "movie" or "tv"
+    val character: String?,
+    @Json(name = "releaseDate") val releaseDate: String?,
+    @Json(name = "combinedScore") val combinedScore: Double?,
+    @Json(name = "recencyScore") val recencyScore: Double?,
+    @Json(name = "ratingScore") val ratingScore: Double?
+) {
+    val posterUrl: String?
+        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
 }

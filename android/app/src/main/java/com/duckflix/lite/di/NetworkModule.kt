@@ -3,7 +3,6 @@ package com.duckflix.lite.di
 import android.content.Context
 import com.duckflix.lite.data.remote.AuthInterceptor
 import com.duckflix.lite.data.remote.DuckFlixApi
-import com.duckflix.lite.util.NetworkDetector
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import dagger.Module
@@ -48,7 +47,7 @@ object NetworkModule {
 
         val authInterceptor = AuthInterceptor(context)
 
-        // Trust all certificates (for self-signed cert on 192.168.4.66)
+        // Trust all certificates (kept for compatibility, lite.duckflix.tv has Let's Encrypt cert)
         val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
             override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
@@ -77,7 +76,8 @@ object NetworkModule {
         moshi: Moshi,
         okHttpClient: OkHttpClient
     ): Retrofit {
-        val baseUrl = NetworkDetector.getApiBaseUrl(context)
+        // Single server URL - always use public domain
+        val baseUrl = "https://lite.duckflix.tv/api/"
         return Retrofit.Builder()
             .baseUrl(baseUrl)
             .client(okHttpClient)

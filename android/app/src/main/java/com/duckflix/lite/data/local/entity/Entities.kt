@@ -51,7 +51,9 @@ data class WatchProgressEntity(
     val position: Long, // milliseconds
     val duration: Long, // milliseconds
     val lastWatchedAt: Long, // timestamp
-    val isCompleted: Boolean = false
+    val isCompleted: Boolean = false,
+    val season: Int? = null, // TV shows only
+    val episode: Int? = null // TV shows only
 )
 
 @Entity(tableName = "recent_searches")
@@ -61,7 +63,8 @@ data class RecentSearchEntity(
     val type: String, // "movie" or "tv"
     val year: String?,
     val posterUrl: String?,
-    val searchedAt: Long // timestamp
+    val searchedAt: Long, // timestamp
+    val voteAverage: Double? = null
 )
 
 @Entity(tableName = "watchlist")

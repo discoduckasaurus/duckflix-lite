@@ -2,12 +2,15 @@ package com.duckflix.lite.ui.screens.player
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.*
@@ -33,7 +36,11 @@ fun VideoPlayerScreen(
     LaunchedEffect(uiState.showControls) {
         if (!uiState.showControls) {
             delay(100) // Small delay to ensure focus system is ready
-            backgroundFocusRequester.requestFocus()
+            try {
+                backgroundFocusRequester.requestFocus()
+            } catch (e: IllegalArgumentException) {
+                // Focus system not ready, ignore
+            }
         }
     }
 
@@ -124,12 +131,14 @@ fun VideoPlayerScreen(
                         isLoading = uiState.isLoading,
                         currentPosition = uiState.currentPosition,
                         duration = uiState.duration,
+                        isAutoPlayEnabled = uiState.autoPlayEnabled,
                         onPlayPauseClick = viewModel::togglePlayPause,
                         onSeekForward = viewModel::seekForward,
                         onSeekBackward = viewModel::seekBackward,
                         onSeekTo = viewModel::seekTo,
                         onBackClick = onNavigateBack,
                         onShowTracks = viewModel::showTrackSelection,
+                        onToggleAutoPlay = viewModel::toggleAutoPlay,
                         onHideControls = viewModel::hideControls
                     )
                 }
@@ -142,6 +151,54 @@ fun VideoPlayerScreen(
                         onAudioTrackSelected = viewModel::selectAudioTrack,
                         onSubtitleTrackSelected = viewModel::selectSubtitleTrack,
                         onDismiss = viewModel::hideTrackSelection
+                    )
+                }
+
+                // Restore focus when dialog closes
+                LaunchedEffect(uiState.showTrackSelection) {
+                    if (!uiState.showTrackSelection) {
+                        delay(100)
+                        try {
+                            if (uiState.showControls) {
+                                // Controls are visible, focus will handle itself
+                            } else {
+                                backgroundFocusRequester.requestFocus()
+                            }
+                        } catch (e: IllegalArgumentException) {
+                            // Focus system not ready, ignore
+                        }
+                    }
+                }
+
+                // Series Complete Overlay
+                if (uiState.showSeriesCompleteOverlay) {
+                    SeriesCompleteOverlay(
+                        onDismiss = viewModel::dismissSeriesComplete,
+                        onNavigateBack = onNavigateBack
+                    )
+                }
+
+                // Recommendations Overlay
+                if (uiState.showRecommendationsOverlay) {
+                    RecommendationsOverlay(
+                        recommendations = uiState.movieRecommendations ?: emptyList(),
+                        selectedRecommendation = uiState.selectedRecommendation,
+                        countdown = uiState.autoPlayCountdown,
+                        onSelectRecommendation = viewModel::selectRecommendation,
+                        onCancel = {
+                            viewModel.cancelAutoPlay()
+                            viewModel.dismissRecommendations()
+                        },
+                        onNavigateBack = onNavigateBack
+                    )
+                }
+
+                // Next Episode Countdown
+                if (uiState.autoPlayCountdown > 0 && uiState.nextEpisodeInfo != null) {
+                    NextEpisodeOverlay(
+                        nextEpisode = uiState.nextEpisodeInfo!!,
+                        countdown = uiState.autoPlayCountdown,
+                        onCancel = viewModel::cancelAutoPlay
                     )
                 }
             }
@@ -205,12 +262,14 @@ private fun PlayerControls(
     isLoading: Boolean,
     currentPosition: Long,
     duration: Long,
+    isAutoPlayEnabled: Boolean,
     onPlayPauseClick: () -> Unit,
     onSeekForward: () -> Unit,
     onSeekBackward: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onBackClick: () -> Unit,
     onShowTracks: () -> Unit,
+    onToggleAutoPlay: () -> Unit,
     onHideControls: () -> Unit
 ) {
     val playPauseFocusRequester = remember { FocusRequester() }
@@ -240,7 +299,10 @@ private fun PlayerControls(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 48.dp, vertical = 24.dp)
+                .padding(
+                    horizontal = com.duckflix.lite.ui.components.TVSafeArea.HorizontalPadding,
+                    vertical = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding
+                )
                 .align(Alignment.TopStart),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -268,9 +330,11 @@ private fun PlayerControls(
             }
         }
 
-        // Center playback control
+        // Center playback control (with top padding to avoid top bar)
         Box(
-            modifier = Modifier.align(Alignment.Center)
+            modifier = Modifier
+                .align(Alignment.Center)
+                .padding(top = 80.dp)
         ) {
             // Play/Pause button
             com.duckflix.lite.ui.components.FocusableButton(
@@ -292,10 +356,36 @@ private fun PlayerControls(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 48.dp, vertical = 32.dp)
+                .padding(
+                    horizontal = com.duckflix.lite.ui.components.TVSafeArea.HorizontalPadding,
+                    vertical = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding
+                )
                 .align(Alignment.BottomCenter),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Auto-play toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isAutoPlayEnabled) "Auto-play: ON" else "Auto-play: OFF",
+                    color = if (isAutoPlayEnabled) Color(0xFF00FF00) else Color.White.copy(0.7f),
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                com.duckflix.lite.ui.components.FocusableButton(
+                    onClick = onToggleAutoPlay,
+                    modifier = Modifier.padding(8.dp)
+                ) {
+                    Text(
+                        text = if (isAutoPlayEnabled) "⏯ Disable" else "⏯ Enable",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White
+                    )
+                }
+            }
+
             // Timeline with position and duration
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -315,16 +405,42 @@ private fun PlayerControls(
                 )
             }
 
-            // Progress bar (focusable slider)
+            // Progress bar (focusable slider with scrubbing support)
+            var isDragging by remember { mutableStateOf(false) }
+            var previewPosition by remember { mutableStateOf(currentPosition) }
+            val sliderInteractionSource = remember { MutableInteractionSource() }
+
+            // Monitor drag interactions
+            LaunchedEffect(sliderInteractionSource) {
+                sliderInteractionSource.interactions.collect { interaction ->
+                    when (interaction) {
+                        is DragInteraction.Start -> {
+                            isDragging = true
+                        }
+                        is DragInteraction.Stop, is DragInteraction.Cancel -> {
+                            if (isDragging) {
+                                onSeekTo(previewPosition)
+                                isDragging = false
+                            }
+                        }
+                    }
+                }
+            }
+
             androidx.compose.material3.Slider(
-                value = if (duration > 0) currentPosition.toFloat() else 0f,
+                value = if (isDragging) previewPosition.toFloat() else currentPosition.toFloat(),
                 onValueChange = { newValue ->
-                    onSeekTo(newValue.toLong())
+                    if (isDragging) {
+                        previewPosition = newValue.toLong()
+                    } else {
+                        onSeekTo(newValue.toLong())
+                    }
                 },
                 valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusable(),
+                interactionSource = sliderInteractionSource,
                 colors = androidx.compose.material3.SliderDefaults.colors(
                     thumbColor = MaterialTheme.colorScheme.primary,
                     activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -362,6 +478,30 @@ private fun TrackSelectionDialog(
     onSubtitleTrackSelected: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    var audioExpanded by remember { mutableStateOf(false) }
+    var subtitleExpanded by remember { mutableStateOf(false) }
+
+    val selectedAudio = audioTracks.find { it.isSelected }
+    val selectedSubtitle = subtitleTracks.find { it.isSelected }
+
+    val audioFocusRequester = remember { FocusRequester() }
+    val subtitleFocusRequester = remember { FocusRequester() }
+    val closeFocusRequester = remember { FocusRequester() }
+
+    // Request initial focus on the first available dropdown
+    LaunchedEffect(Unit) {
+        delay(100)
+        try {
+            if (audioTracks.isNotEmpty()) {
+                audioFocusRequester.requestFocus()
+            } else {
+                subtitleFocusRequester.requestFocus()
+            }
+        } catch (e: IllegalArgumentException) {
+            // Focus system not ready or dialog closing, ignore
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -370,71 +510,397 @@ private fun TrackSelectionDialog(
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            modifier = Modifier
-                .widthIn(max = 600.dp)
-                .heightIn(max = 500.dp),
+            modifier = Modifier.widthIn(max = 400.dp),
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(32.dp)
+                    .padding(32.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
                 Text(
                     text = "Audio & Subtitles",
-                    style = MaterialTheme.typography.headlineMedium,
-                    modifier = Modifier.padding(bottom = 24.dp)
+                    style = MaterialTheme.typography.headlineMedium
                 )
 
-                // Audio tracks
+                // Audio track dropdown
                 if (audioTracks.isNotEmpty()) {
-                    Text(
-                        text = "Audio Tracks",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    audioTracks.forEach { track ->
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
-                            text = "${if (track.isSelected) "✓ " else "  "}${track.label}",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (track.isSelected)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(vertical = 4.dp)
+                            text = "Audio Track",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
+                        Box {
+                            com.duckflix.lite.ui.components.FocusableButton(
+                                onClick = { audioExpanded = !audioExpanded },
+                                modifier = Modifier
+                                    .width(260.dp)
+                                    .height(48.dp)
+                                    .focusRequester(audioFocusRequester)
+                                    .focusProperties {
+                                        down = subtitleFocusRequester
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = selectedAudio?.label ?: "Default",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = Color.White,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = if (audioExpanded) "▲" else "▼",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = audioExpanded,
+                                onDismissRequest = { audioExpanded = false },
+                                modifier = Modifier.width(260.dp)
+                            ) {
+                                audioTracks.forEach { track ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = track.label,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    maxLines = 1,
+                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                if (track.isSelected) {
+                                                    Text(
+                                                        text = " ✓",
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        style = MaterialTheme.typography.bodyLarge
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            onAudioTrackSelected(track.id)
+                                            audioExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
-                    Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                // Subtitle tracks
-                if (subtitleTracks.isNotEmpty()) {
+                // Subtitle track dropdown
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = "Subtitles",
                         style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(bottom = 8.dp)
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                    subtitleTracks.forEach { track ->
-                        Text(
-                            text = "${if (track.isSelected) "✓ " else "  "}${track.label}",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = if (track.isSelected)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(vertical = 4.dp)
-                        )
+                    Box {
+                        com.duckflix.lite.ui.components.FocusableButton(
+                            onClick = { subtitleExpanded = !subtitleExpanded },
+                            modifier = Modifier
+                                .width(260.dp)
+                                .height(48.dp)
+                                .focusRequester(subtitleFocusRequester)
+                                .focusProperties {
+                                    up = if (audioTracks.isNotEmpty()) audioFocusRequester else FocusRequester.Default
+                                    down = closeFocusRequester
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = selectedSubtitle?.label ?: "None",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = if (subtitleExpanded) "▲" else "▼",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = Color.White
+                                )
+                            }
+                        }
+
+                        DropdownMenu(
+                            expanded = subtitleExpanded,
+                            onDismissRequest = { subtitleExpanded = false },
+                            modifier = Modifier.width(260.dp)
+                        ) {
+                            // "None" option to disable subtitles
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "None (Disable Subtitles)",
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        if (subtitleTracks.none { it.isSelected }) {
+                                            Text(
+                                                text = " ✓",
+                                                color = MaterialTheme.colorScheme.primary,
+                                                style = MaterialTheme.typography.bodyLarge
+                                            )
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    onSubtitleTrackSelected("none")
+                                    subtitleExpanded = false
+                                }
+                            )
+
+                            subtitleTracks.forEach { track ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = track.label,
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            if (track.isSelected) {
+                                                Text(
+                                                    text = " ✓",
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    style = MaterialTheme.typography.bodyLarge
+                                                )
+                                            }
+                                        }
+                                    },
+                                    onClick = {
+                                        onSubtitleTrackSelected(track.id)
+                                        subtitleExpanded = false
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(24.dp))
-
+                // Close button
                 com.duckflix.lite.ui.components.FocusableButton(
                     onClick = onDismiss,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(closeFocusRequester)
+                        .focusProperties {
+                            up = subtitleFocusRequester
+                        }
                 ) {
                     Text("Close")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SeriesCompleteOverlay(
+    onDismiss: () -> Unit,
+    onNavigateBack: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.9f)),
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.compose.material3.Surface(
+            modifier = Modifier
+                .width(500.dp)
+                .padding(48.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Text(
+                    text = "Series Complete",
+                    style = MaterialTheme.typography.headlineLarge
+                )
+                Text(
+                    text = "You've reached the end of this series",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    com.duckflix.lite.ui.components.FocusableButton(onClick = onNavigateBack) {
+                        Text("Back to Series")
+                    }
+                    com.duckflix.lite.ui.components.FocusableButton(onClick = onDismiss) {
+                        Text("Close")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NextEpisodeOverlay(
+    nextEpisode: com.duckflix.lite.data.remote.dto.NextEpisodeResponse,
+    countdown: Int,
+    onCancel: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f)),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        androidx.compose.material3.Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(48.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.padding(24.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Next Episode",
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Text(
+                        text = "S${nextEpisode.season}E${nextEpisode.episode}: ${nextEpisode.title}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    Text(
+                        text = "Starting in $countdown seconds...",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                com.duckflix.lite.ui.components.FocusableButton(onClick = onCancel) {
+                    Text("Cancel")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecommendationsOverlay(
+    recommendations: List<com.duckflix.lite.data.remote.dto.MovieRecommendationItem>,
+    selectedRecommendation: com.duckflix.lite.data.remote.dto.MovieRecommendationItem?,
+    countdown: Int,
+    onSelectRecommendation: (com.duckflix.lite.data.remote.dto.MovieRecommendationItem) -> Unit,
+    onCancel: () -> Unit,
+    onNavigateBack: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.9f)),
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.compose.material3.Surface(
+            modifier = Modifier
+                .widthIn(max = 800.dp)
+                .padding(48.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Text(
+                    text = if (countdown > 0) "Playing next in $countdown..." else "Recommended",
+                    style = MaterialTheme.typography.headlineMedium
+                )
+
+                // 2x2 grid of recommendation cards
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    recommendations.chunked(2).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            row.forEach { rec ->
+                                com.duckflix.lite.ui.components.FocusableCard(
+                                    onClick = { onSelectRecommendation(rec) },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(220.dp)
+                                ) {
+                                    Column {
+                                        coil.compose.AsyncImage(
+                                            model = rec.posterUrl,
+                                            contentDescription = rec.title,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(160.dp),
+                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                                        )
+                                        Column(modifier = Modifier.padding(8.dp)) {
+                                            Text(
+                                                text = rec.title,
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.bodyMedium
+                                            )
+                                            if (rec.tmdbId == selectedRecommendation?.tmdbId) {
+                                                Text(
+                                                    text = "✓ Selected",
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    style = MaterialTheme.typography.bodySmall
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    com.duckflix.lite.ui.components.FocusableButton(onClick = onNavigateBack) {
+                        Text("Back")
+                    }
+                    com.duckflix.lite.ui.components.FocusableButton(onClick = onCancel) {
+                        Text("Cancel")
+                    }
                 }
             }
         }

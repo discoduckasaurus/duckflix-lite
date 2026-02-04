@@ -129,6 +129,62 @@ curl -X DELETE http://localhost:3001/api/admin/users/2 \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+### 14. Get User Recommendations
+```bash
+curl "http://localhost:3001/api/user/recommendations?page=1&limit=20" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 15. Get Trending Content
+```bash
+curl "http://localhost:3001/api/user/trending?mediaType=movie&timeWindow=week" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 16. Add to Watchlist
+```bash
+curl -X POST http://localhost:3001/api/user/watchlist \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tmdbId": 603,
+    "type": "movie",
+    "title": "The Matrix",
+    "posterPath": "/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg",
+    "releaseDate": "1999-03-30",
+    "voteAverage": 8.2
+  }'
+```
+
+### 17. Get Watchlist
+```bash
+curl http://localhost:3001/api/user/watchlist \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### 18. Update Watch Progress
+```bash
+curl -X POST http://localhost:3001/api/user/watch-progress \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tmdbId": 27205,
+    "type": "movie",
+    "title": "Inception",
+    "posterPath": "/9gk7adHYeDvHkCSEqAvQNLV5Uge.jpg",
+    "releaseDate": "2010-07-15",
+    "position": 1800000,
+    "duration": 8880000,
+    "voteAverage": 8.4
+  }'
+```
+
+### 19. Get Watch Progress
+```bash
+curl http://localhost:3001/api/user/watch-progress \
+  -H "Authorization: Bearer $TOKEN"
+```
+
 ## Testing Scenarios
 
 ### Scenario 1: IP Blocking Test

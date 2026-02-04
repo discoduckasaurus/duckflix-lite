@@ -6,11 +6,74 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
-// Simple in-memory cache (5 minute TTL)
+// Simple in-memory cache (5 minute TTL for search, 1 hour for trending)
 const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
+const TRENDING_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 router.use(authenticateToken);
+
+/**
+ * Calculate relevance score for search result
+ * Higher score = more relevant
+ */
+function calculateRelevanceScore(title, searchQuery) {
+  const titleLower = title.toLowerCase().trim();
+  const queryLower = searchQuery.toLowerCase().trim();
+
+  // Exact match (case-insensitive) = highest score
+  if (titleLower === queryLower) {
+    return 1000;
+  }
+
+  // Starts with query = very high score
+  if (titleLower.startsWith(queryLower)) {
+    return 900;
+  }
+
+  // Contains exact query as substring = high score
+  if (titleLower.includes(queryLower)) {
+    return 800;
+  }
+
+  // All query words present in order = good score
+  const queryWords = queryLower.split(/\s+/);
+  const titleWords = titleLower.split(/\s+/);
+
+  let allWordsPresent = true;
+  let lastIndex = -1;
+  for (const qWord of queryWords) {
+    const foundIndex = titleWords.findIndex((tWord, idx) => idx > lastIndex && tWord.includes(qWord));
+    if (foundIndex === -1) {
+      allWordsPresent = false;
+      break;
+    }
+    lastIndex = foundIndex;
+  }
+
+  if (allWordsPresent) {
+    return 700;
+  }
+
+  // Count matching words (order doesn't matter)
+  const matchingWords = queryWords.filter(qWord =>
+    titleWords.some(tWord => tWord.includes(qWord) || qWord.includes(tWord))
+  );
+
+  const matchRatio = matchingWords.length / queryWords.length;
+
+  // Partial word matches
+  if (matchRatio > 0.5) {
+    return 500 + (matchRatio * 200); // 500-700 range
+  }
+
+  if (matchRatio > 0) {
+    return 300 + (matchRatio * 200); // 300-500 range
+  }
+
+  // No good matches
+  return 0;
+}
 
 /**
  * GET /api/search/tmdb
@@ -48,15 +111,52 @@ router.get('/tmdb', async (req, res) => {
       }
     });
 
-    const results = response.data.results.map(item => ({
-      id: item.id,
-      title: item.title || item.name,
-      year: (item.release_date || item.first_air_date || '').substring(0, 4),
-      posterPath: item.poster_path,
-      overview: item.overview,
-      voteAverage: item.vote_average,
-      mediaType: item.media_type || searchType // Include media type for multi-search
-    }));
+    const results = response.data.results
+      .filter(item => {
+        // Filter out garbage results: must have poster
+        const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
+
+        // Filter out unrated (0 rating) - usually fake/placeholder entries
+        const isRated = item.vote_average && item.vote_average > 0;
+
+        // Optional: Also require at least 1 vote to avoid completely unknown entries
+        const hasVotes = item.vote_count && item.vote_count > 0;
+
+        return hasPoster && isRated && hasVotes;
+      })
+      .map(item => {
+        const title = item.title || item.name;
+        const relevanceScore = calculateRelevanceScore(title, query);
+
+        return {
+          id: item.id,
+          title,
+          year: (item.release_date || item.first_air_date || '').substring(0, 4),
+          posterPath: item.poster_path,
+          overview: item.overview,
+          voteAverage: item.vote_average,
+          mediaType: item.media_type || searchType,
+          relevanceScore, // Add relevance score to each result
+          // Popularity bonus: rating * reviews (helps surface well-known content)
+          popularityBonus: Math.log10((item.vote_count || 1) + 1) * (item.vote_average || 0)
+        };
+      })
+      .sort((a, b) => {
+        // Primary sort: Relevance score
+        const relevanceDiff = b.relevanceScore - a.relevanceScore;
+        if (Math.abs(relevanceDiff) > 50) {
+          return relevanceDiff;
+        }
+
+        // Secondary sort: Popularity (for items with similar relevance)
+        const popularityDiff = b.popularityBonus - a.popularityBonus;
+        if (Math.abs(popularityDiff) > 5) {
+          return popularityDiff;
+        }
+
+        // Tertiary sort: Rating
+        return (b.voteAverage || 0) - (a.voteAverage || 0);
+      });
 
     const responseData = { results };
 
@@ -70,6 +170,92 @@ router.get('/tmdb', async (req, res) => {
   } catch (error) {
     logger.error('TMDB search error:', error);
     res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+/**
+ * GET /api/search/tmdb/trending
+ * Get TMDB trending content
+ * Supports type: 'movie', 'tv', or 'all' (default: 'all')
+ * Supports timeWindow: 'week' (7-day trending)
+ */
+router.get('/tmdb/trending', async (req, res) => {
+  try {
+    const { type = 'all', timeWindow = 'week' } = req.query;
+
+    // Validate type parameter
+    const validTypes = ['movie', 'tv', 'all'];
+    if (!validTypes.includes(type)) {
+      return res.status(400).json({
+        error: 'Invalid type parameter. Must be one of: movie, tv, all'
+      });
+    }
+
+    // Validate timeWindow parameter
+    const validTimeWindows = ['week'];
+    if (!validTimeWindows.includes(timeWindow)) {
+      return res.status(400).json({
+        error: 'Invalid timeWindow parameter. Must be: week'
+      });
+    }
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    // Check cache first (1 hour TTL)
+    const cacheKey = `trending_${type}_${timeWindow}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    // Call TMDB trending API
+    const url = `https://api.themoviedb.org/3/trending/${type}/${timeWindow}`;
+
+    const response = await axios.get(url, {
+      params: {
+        api_key: tmdbApiKey
+      }
+    });
+
+    // Format results consistently with search endpoint
+    const results = response.data.results
+      .filter(item => {
+        // Filter out garbage results: must have poster
+        const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
+
+        // Filter out unrated (0 rating) - usually fake/placeholder entries
+        const isRated = item.vote_average && item.vote_average > 0;
+
+        // Optional: Also require at least 1 vote to avoid completely unknown entries
+        const hasVotes = item.vote_count && item.vote_count > 0;
+
+        return hasPoster && isRated && hasVotes;
+      })
+      .map(item => ({
+        id: item.id,
+        title: item.title || item.name,
+        year: (item.release_date || item.first_air_date || '').substring(0, 4),
+        posterPath: item.poster_path,
+        overview: item.overview,
+        voteAverage: item.vote_average,
+        mediaType: item.media_type || type
+      }));
+
+    const responseData = { results };
+
+    // Cache the result (1 hour)
+    cache.set(cacheKey, {
+      data: responseData,
+      timestamp: Date.now()
+    });
+
+    res.json(responseData);
+  } catch (error) {
+    logger.error('TMDB trending error:', error);
+    res.status(500).json({ error: 'Failed to fetch trending content' });
   }
 });
 

@@ -2,15 +2,19 @@ package com.duckflix.lite.data.local
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import com.duckflix.lite.data.local.dao.AutoPlaySettingsDao
 import com.duckflix.lite.data.local.dao.ChannelDao
 import com.duckflix.lite.data.local.dao.EpgDao
+import com.duckflix.lite.data.local.dao.PlaybackErrorDao
 import com.duckflix.lite.data.local.dao.RecentSearchDao
 import com.duckflix.lite.data.local.dao.RecordingDao
 import com.duckflix.lite.data.local.dao.UserDao
 import com.duckflix.lite.data.local.dao.WatchProgressDao
 import com.duckflix.lite.data.local.dao.WatchlistDao
+import com.duckflix.lite.data.local.entity.AutoPlaySettingsEntity
 import com.duckflix.lite.data.local.entity.ChannelEntity
 import com.duckflix.lite.data.local.entity.EpgProgramEntity
+import com.duckflix.lite.data.local.entity.PlaybackErrorEntity
 import com.duckflix.lite.data.local.entity.RecentSearchEntity
 import com.duckflix.lite.data.local.entity.RecordingEntity
 import com.duckflix.lite.data.local.entity.UserEntity
@@ -25,9 +29,11 @@ import com.duckflix.lite.data.local.entity.WatchlistEntity
         RecordingEntity::class,
         WatchProgressEntity::class,
         RecentSearchEntity::class,
-        WatchlistEntity::class
+        WatchlistEntity::class,
+        PlaybackErrorEntity::class,
+        AutoPlaySettingsEntity::class
     ],
-    version = 4,
+    version = 8,
     exportSchema = false
 )
 abstract class DuckFlixDatabase : RoomDatabase() {
@@ -38,4 +44,6 @@ abstract class DuckFlixDatabase : RoomDatabase() {
     abstract fun watchProgressDao(): WatchProgressDao
     abstract fun recentSearchDao(): RecentSearchDao
     abstract fun watchlistDao(): WatchlistDao
+    abstract fun playbackErrorDao(): PlaybackErrorDao
+    abstract fun autoPlaySettingsDao(): AutoPlaySettingsDao
 }

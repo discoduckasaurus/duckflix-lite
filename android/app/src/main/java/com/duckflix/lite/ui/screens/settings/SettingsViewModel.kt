@@ -15,7 +15,9 @@ data class SettingsUiState(
     val username: String? = null,
     val rdExpiryDate: String? = null,
     val serverUrl: String = "https://lite.duckflix.tv",
-    val appVersion: String = "1.0.0"
+    val appVersion: String = "1.0.0",
+    val isLoggingOut: Boolean = false,
+    val logoutMessage: String? = null
 )
 
 @HiltViewModel
@@ -42,9 +44,27 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun logout() {
+    fun logout(onLogoutComplete: () -> Unit) {
         viewModelScope.launch {
-            authRepository.logout()
+            _uiState.value = _uiState.value.copy(isLoggingOut = true)
+            val result = authRepository.logout()
+
+            if (result.isSuccess) {
+                _uiState.value = _uiState.value.copy(
+                    isLoggingOut = false,
+                    logoutMessage = "Logged out successfully"
+                )
+                onLogoutComplete()
+            } else {
+                _uiState.value = _uiState.value.copy(
+                    isLoggingOut = false,
+                    logoutMessage = "Logout failed: ${result.exceptionOrNull()?.message}"
+                )
+            }
         }
+    }
+
+    fun clearLogoutMessage() {
+        _uiState.value = _uiState.value.copy(logoutMessage = null)
     }
 }

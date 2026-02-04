@@ -3,6 +3,7 @@ package com.duckflix.lite.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -19,6 +20,7 @@ fun FocusableButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    contentPadding: PaddingValues = ButtonDefaults.ContentPadding,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() },
     content: @Composable () -> Unit
 ) {
@@ -28,6 +30,7 @@ fun FocusableButton(
         onClick = onClick,
         modifier = modifier,
         enabled = enabled,
+        contentPadding = contentPadding,
         interactionSource = interactionSource,
         border = if (isFocused) {
             BorderStroke(3.dp, MaterialTheme.colorScheme.onPrimary)

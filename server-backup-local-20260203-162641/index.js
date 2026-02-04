@@ -15,6 +15,7 @@ const searchRoutes = require('./routes/search');
 const rdRoutes = require('./routes/rd');
 const vodRoutes = require('./routes/vod');
 const apkRoutes = require('./routes/apk');
+const userRoutes = require('./routes/user');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -57,6 +58,7 @@ app.use('/api/search', searchRoutes);
 app.use('/api/rd', rdRoutes);
 app.use('/api/vod', vodRoutes);
 app.use('/api/apk', apkRoutes);
+app.use('/api/user', userRoutes);
 
 // Static files (APK hosting)
 app.use('/static', express.static(path.join(__dirname, 'static')));

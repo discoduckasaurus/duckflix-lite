@@ -1,19 +1,33 @@
 package com.duckflix.lite.ui.screens.detail
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.duckflix.lite.data.remote.dto.CastDto
@@ -21,15 +35,25 @@ import com.duckflix.lite.data.remote.dto.TmdbDetailResponse
 import com.duckflix.lite.ui.components.ErrorScreen
 import com.duckflix.lite.ui.components.FocusableButton
 import com.duckflix.lite.ui.components.LoadingIndicator
+import com.duckflix.lite.ui.components.MediaCard
 
 @Composable
 fun DetailScreen(
-    onPlayClick: (Int, String, String?, String, Int?, Int?, Long?, String?) -> Unit, // Added posterUrl param
+    onPlayClick: (Int, String, String?, String, Int?, Int?, Long?, String?, String?, String?) -> Unit, // Added posterUrl, logoUrl, and originalLanguage params
     onSearchTorrents: (Int, String) -> Unit,
     onNavigateBack: () -> Unit,
+    onActorClick: (Int) -> Unit,
     viewModel: DetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    BackHandler {
+        if (uiState.selectedSeason != null) {
+            viewModel.resetToSeriesView()
+        } else {
+            onNavigateBack()
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         when {
@@ -60,13 +84,21 @@ fun DetailScreen(
                     isLoadingSeasons = uiState.isLoadingSeasons,
                     watchProgress = uiState.watchProgress,
                     isInWatchlist = uiState.isInWatchlist,
-                    onPlayClick = { content, type, season, episode, resumePosition, posterUrl ->
-                        onPlayClick(content.id, content.title, content.year, type, season, episode, resumePosition, posterUrl)
+                    isLoadingRandomEpisode = uiState.isLoadingRandomEpisode,
+                    randomEpisodeError = uiState.randomEpisodeError,
+                    onPlayClick = { content, type, season, episode, resumePosition, posterUrl, logoUrl ->
+                        onPlayClick(content.id, content.title, content.year, type, season, episode, resumePosition, posterUrl, logoUrl, content.originalLanguage)
                     },
                     onSearchTorrents = { onSearchTorrents(it.id, it.title) },
                     onNavigateBack = onNavigateBack,
                     onSelectSeason = viewModel::selectSeason,
-                    onToggleWatchlist = viewModel::toggleWatchlist
+                    onToggleWatchlist = viewModel::toggleWatchlist,
+                    onPlayRandomEpisode = {
+                        viewModel.playRandomEpisode { season, episode ->
+                            onPlayClick(uiState.content!!.id, uiState.content!!.title, uiState.content!!.year, "tv", season, episode, null, uiState.content!!.posterUrl, uiState.content!!.logoUrl, uiState.content!!.originalLanguage)
+                        }
+                    },
+                    onActorClick = onActorClick
                 )
             }
         }
@@ -84,11 +116,15 @@ private fun ContentDetailView(
     isLoadingSeasons: Boolean,
     watchProgress: com.duckflix.lite.data.local.entity.WatchProgressEntity?,
     isInWatchlist: Boolean,
-    onPlayClick: (TmdbDetailResponse, String, Int?, Int?, Long?, String?) -> Unit,
+    isLoadingRandomEpisode: Boolean,
+    randomEpisodeError: String?,
+    onPlayClick: (TmdbDetailResponse, String, Int?, Int?, Long?, String?, String?) -> Unit, // Added logoUrl param (originalLanguage extracted from TmdbDetailResponse)
     onSearchTorrents: (TmdbDetailResponse) -> Unit,
     onNavigateBack: () -> Unit,
     onSelectSeason: (Int) -> Unit,
-    onToggleWatchlist: () -> Unit
+    onToggleWatchlist: () -> Unit,
+    onPlayRandomEpisode: () -> Unit,
+    onActorClick: (Int) -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         // Backdrop image with gradient
@@ -119,7 +155,7 @@ private fun ContentDetailView(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 64.dp, vertical = 48.dp)
+                .padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 24.dp)
         ) {
             // Back button and Watchlist toggle
             Row(
@@ -127,97 +163,107 @@ private fun ContentDetailView(
             ) {
                 FocusableButton(
                     onClick = onNavigateBack,
-                    modifier = Modifier.width(120.dp)
+                    modifier = Modifier.width(100.dp)
                 ) {
                     Text("Back")
                 }
 
                 FocusableButton(
                     onClick = onToggleWatchlist,
-                    modifier = Modifier.width(180.dp)
+                    modifier = Modifier.width(140.dp)
                 ) {
-                    Text(if (isInWatchlist) "♥ In Watchlist" else "♡ Add to Watchlist")
+                    Text("+ Watchlist")
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(11.dp))
 
             // Main content area
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(32.dp)
+                horizontalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 // Poster
                 AsyncImage(
                     model = content.posterUrl,
                     contentDescription = content.title,
                     modifier = Modifier
-                        .width(300.dp)
-                        .height(450.dp)
+                        .width(180.dp)
+                        .height(270.dp)
                 )
 
                 // Info
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     // Title
                     Text(
                         text = content.title,
-                        style = MaterialTheme.typography.displayMedium,
+                        style = MaterialTheme.typography.headlineLarge,
                         color = Color.White
                     )
 
-                    // Meta info
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        content.year?.let { year ->
-                            Text(
-                                text = year,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White.copy(alpha = 0.8f)
-                            )
+                    // --- Combined meta info line with | delimiters and gold star ---
+                    val metaText = buildAnnotatedString {
+                        val defaultStyle = SpanStyle(color = Color.White.copy(alpha = 0.8f))
+                        val goldStyle = SpanStyle(color = Color(0xFFFFD700))
+                        var needsSeparator = false
+
+                        fun appendSeparator() {
+                            if (needsSeparator) {
+                                withStyle(defaultStyle) { append(" | ") }
+                            }
+                            needsSeparator = true
                         }
-                        if (content.runtime != null) {
-                            Text(
-                                text = "${content.runtime} min",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White.copy(alpha = 0.8f)
-                            )
+
+                        content.year?.let {
+                            appendSeparator()
+                            withStyle(defaultStyle) { append(it) }
                         }
-                        if (content.voteAverage != null) {
-                            Text(
-                                text = "★ ${String.format("%.1f", content.voteAverage)}",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color(0xFFFFD700)
-                            )
+                        content.runtime?.let {
+                            appendSeparator()
+                            withStyle(defaultStyle) { append("$it min") }
+                        }
+                        content.voteAverage?.let {
+                            appendSeparator()
+                            withStyle(goldStyle) { append("\u2605") }
+                            withStyle(defaultStyle) { append(" ${String.format("%.1f", it)}") }
+                        }
+                        if (content.genreText.isNotEmpty()) {
+                            appendSeparator()
+                            withStyle(defaultStyle) { append(content.genreText) }
+                        }
+                        if (contentType == "tv" && content.numberOfSeasons != null) {
+                            appendSeparator()
+                            withStyle(defaultStyle) {
+                                append("${content.numberOfSeasons} Season${if (content.numberOfSeasons > 1) "s" else ""}")
+                            }
                         }
                     }
-
-                    // Genres
-                    if (content.genreText.isNotEmpty()) {
+                    if (metaText.isNotEmpty()) {
                         Text(
-                            text = content.genreText,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Color.White.copy(alpha = 0.7f)
+                            text = metaText,
+                            style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(1.dp))
 
                     // Action buttons
                     when {
                         isCheckingZurg -> {
                             Row(
-                                modifier = Modifier.height(56.dp),
+                                modifier = Modifier.height(48.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 LoadingIndicator()
                                 Text(
                                     text = "Searching for content...",
-                                    style = MaterialTheme.typography.bodyLarge,
+                                    style = MaterialTheme.typography.bodyMedium,
                                     color = Color.White.copy(alpha = 0.8f)
                                 )
                             }
@@ -226,19 +272,19 @@ private fun ContentDetailView(
                         contentType == "movie" && watchProgress != null && !watchProgress.isCompleted -> {
                             // Movie with watch progress - show Resume and Restart
                             val progressPercent = ((watchProgress.position.toFloat() / watchProgress.duration) * 100).toInt()
-                            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     FocusableButton(
-                                        onClick = { onPlayClick(content, contentType, null, null, watchProgress.position, content.posterUrl) },
-                                        modifier = Modifier.width(200.dp).height(56.dp)
+                                        onClick = { onPlayClick(content, contentType, null, null, watchProgress.position, content.posterUrl, content.logoUrl) },
+                                        modifier = Modifier.width(140.dp).height(48.dp)
                                     ) {
-                                        Text("▶ Resume ($progressPercent%)", style = MaterialTheme.typography.titleMedium)
+                                        Text("\u25B6 Resume ($progressPercent%)", style = MaterialTheme.typography.bodyLarge)
                                     }
                                     FocusableButton(
-                                        onClick = { onPlayClick(content, contentType, null, null, 0L, content.posterUrl) },
-                                        modifier = Modifier.width(150.dp).height(56.dp)
+                                        onClick = { onPlayClick(content, contentType, null, null, 0L, content.posterUrl, content.logoUrl) },
+                                        modifier = Modifier.width(120.dp).height(48.dp)
                                     ) {
-                                        Text("⟲ Restart", style = MaterialTheme.typography.titleMedium)
+                                        Text("\u27F2 Restart", style = MaterialTheme.typography.bodyLarge)
                                     }
                                 }
                                 if (zurgMatch != null) {
@@ -253,12 +299,12 @@ private fun ContentDetailView(
 
                         zurgMatch != null && contentType == "movie" -> {
                             // Movie without progress - show Play
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 FocusableButton(
-                                    onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl) },
-                                    modifier = Modifier.width(200.dp).height(56.dp)
+                                    onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl, content.logoUrl) },
+                                    modifier = Modifier.width(140.dp).height(48.dp)
                                 ) {
-                                    Text("▶ Play", style = MaterialTheme.typography.titleLarge)
+                                    Text("\u25B6 Play", style = MaterialTheme.typography.titleMedium)
                                 }
                                 Text(
                                     text = "Available in library",
@@ -269,27 +315,18 @@ private fun ContentDetailView(
                         }
 
                         contentType == "tv" -> {
-                            // For TV shows, show season/episode count
-                            // TODO: Show resume info for TV shows with watch progress
-                            Text(
-                                text = if (content.numberOfSeasons != null) {
-                                    "${content.numberOfSeasons} Season${if (content.numberOfSeasons > 1) "s" else ""}"
-                                } else {
-                                    "Select an episode to play"
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                color = Color.White.copy(alpha = 0.8f)
-                            )
+                            // TV shows: season count is now in the meta line above;
+                            // no separate text needed here
                         }
 
                         else -> {
                             // Movie not in library
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 FocusableButton(
-                                    onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl) },
-                                    modifier = Modifier.width(200.dp).height(56.dp)
+                                    onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl, content.logoUrl) },
+                                    modifier = Modifier.width(140.dp).height(48.dp)
                                 ) {
-                                    Text("▶ Play", style = MaterialTheme.typography.titleLarge)
+                                    Text("\u25B6 Play", style = MaterialTheme.typography.titleMedium)
                                 }
                                 Text(
                                     text = "Not in library",
@@ -300,50 +337,55 @@ private fun ContentDetailView(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
 
                     // Overview
                     if (content.overview != null) {
                         Text(
                             text = "Overview",
-                            style = MaterialTheme.typography.titleLarge,
+                            style = MaterialTheme.typography.titleMedium,
                             color = Color.White
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = content.overview,
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = Color.White.copy(alpha = 0.9f)
                         )
                     }
-                }
-            }
 
-            // Seasons (for TV shows)
-            if (contentType == "tv" && !content.seasons.isNullOrEmpty()) {
-                Spacer(modifier = Modifier.height(32.dp))
-                SeasonsSection(
-                    seasons = content.seasons.sortedBy { it.seasonNumber },
-                    loadedSeasons = seasons,
-                    selectedSeason = selectedSeason,
-                    isLoadingSeasons = isLoadingSeasons,
-                    onSelectSeason = onSelectSeason,
-                    onEpisodeClick = { season, episode, resumePos, posterUrl ->
-                        onPlayClick(content, contentType, season, episode, resumePos, posterUrl)
+                    // Seasons section directly below overview with minimal padding
+                    if (contentType == "tv" && !content.seasons.isNullOrEmpty()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        SeasonsSection(
+                            seasons = content.seasons.sortedBy { it.seasonNumber },
+                            loadedSeasons = seasons,
+                            selectedSeason = selectedSeason,
+                            isLoadingSeasons = isLoadingSeasons,
+                            isLoadingRandomEpisode = isLoadingRandomEpisode,
+                            randomEpisodeError = randomEpisodeError,
+                            seriesPosterUrl = content.posterUrl, // Pass series poster down
+                            onSelectSeason = onSelectSeason,
+                            onEpisodeClick = { season, episode, resumePos, posterUrl ->
+                                onPlayClick(content, contentType, season, episode, resumePos, posterUrl, content.logoUrl)
+                            },
+                            onPlayRandomEpisode = onPlayRandomEpisode
+                        )
                     }
-                )
+
+                }
             }
 
             // Cast
             if (!content.cast.isNullOrEmpty()) {
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(22.dp))
                 Text(
                     text = "Cast",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     color = Color.White
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                CastRow(cast = content.cast)
+                Spacer(modifier = Modifier.height(12.dp))
+                CastRow(cast = content.cast, onActorClick = onActorClick)
             }
         }
     }
@@ -355,67 +397,126 @@ private fun SeasonsSection(
     loadedSeasons: Map<Int, com.duckflix.lite.data.remote.dto.TmdbSeasonResponse>,
     selectedSeason: Int?,
     isLoadingSeasons: Boolean,
+    isLoadingRandomEpisode: Boolean,
+    randomEpisodeError: String?,
+    seriesPosterUrl: String?, // Series poster for Continue Watching
     onSelectSeason: (Int) -> Unit,
-    onEpisodeClick: (Int, Int, Long?, String?) -> Unit
+    onEpisodeClick: (Int, Int, Long?, String?) -> Unit,
+    onPlayRandomEpisode: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
 
     Column(
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Season dropdown selector
-        Text(
-            text = "Select Season",
-            style = MaterialTheme.typography.titleLarge,
-            color = Color.White
-        )
-
-        Box {
-            FocusableButton(
-                onClick = { expanded = !expanded },
-                modifier = Modifier.width(300.dp).height(56.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+        // Season dropdown selector and random button
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box {
+                FocusableButton(
+                    onClick = { expanded = !expanded },
+                    modifier = Modifier.width(260.dp).height(48.dp)
                 ) {
-                    val currentSeason = seasons.find { it.seasonNumber == selectedSeason }
-                    Text(
-                        text = currentSeason?.name ?: "Select a season",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White
-                    )
-                    Text(
-                        text = if (expanded) "▲" else "▼",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White
-                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val currentSeason = seasons.find { it.seasonNumber == selectedSeason }
+                        Text(
+                            text = currentSeason?.name ?: "Select Season",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White
+                        )
+                        Text(
+                            text = if (expanded) "\u25B2" else "\u25BC",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White
+                        )
+                    }
+                }
+
+                DropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                    modifier = Modifier.width(260.dp)
+                ) {
+                    seasons.forEach { season ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    text = "${season.name} (${season.episodeCount ?: 0} episodes)",
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            },
+                            onClick = {
+                                onSelectSeason(season.seasonNumber)
+                                expanded = false
+                            }
+                        )
+                    }
                 }
             }
 
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-                modifier = Modifier.width(300.dp)
-            ) {
-                seasons.forEach { season ->
-                    DropdownMenuItem(
-                        text = {
+            // Random episode button with tooltip
+            if (!isLoadingRandomEpisode) {
+                Box {
+                    val interactionSource = remember { MutableInteractionSource() }
+                    val isFocused by interactionSource.collectIsFocusedAsState()
+
+                    FocusableButton(
+                        onClick = onPlayRandomEpisode,
+                        modifier = Modifier.size(48.dp),
+                        contentPadding = PaddingValues(0.dp),
+                        interactionSource = interactionSource
+                    ) {
+                        Text(
+                            text = "🎰",
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = Color.White
+                        )
+                    }
+
+                    // Tooltip on focus - 50% bigger font and border
+                    if (isFocused) {
+                        Surface(
+                            modifier = Modifier
+                                .offset(y = (-62).dp) // Centered above button top border
+                                .zIndex(10f),
+                            color = Color.Black.copy(alpha = 0.9f),
+                            shape = RoundedCornerShape(6.dp) // Increased from 4dp
+                        ) {
                             Text(
-                                text = "${season.name} (${season.episodeCount ?: 0} episodes)",
-                                style = MaterialTheme.typography.titleMedium
+                                text = "Play Random Episode",
+                                style = MaterialTheme.typography.bodyLarge, // Increased from bodySmall
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), // Increased padding
+                                textAlign = TextAlign.Center
                             )
-                        },
-                        onClick = {
-                            onSelectSeason(season.seasonNumber)
-                            expanded = false
                         }
-                    )
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier.size(48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    LoadingIndicator()
                 }
             }
+        }
+
+        // Random episode error
+        randomEpisodeError?.let { errorMsg ->
+            Text(
+                text = errorMsg,
+                color = Color.Red,
+                style = MaterialTheme.typography.bodySmall
+            )
         }
 
         // Show selected season info and episodes
@@ -425,15 +526,15 @@ private fun SeasonsSection(
 
             // Season overview
             if (loadedSeason?.overview != null && loadedSeason.overview.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = loadedSeason.overview,
-                    style = MaterialTheme.typography.bodyLarge,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = Color.White.copy(alpha = 0.9f)
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Episodes grid
             if (isLoadingSeasons && loadedSeason == null) {
@@ -447,6 +548,7 @@ private fun SeasonsSection(
                 EpisodeGrid(
                     episodes = loadedSeason.episodes,
                     seasonNumber = selectedSeason,
+                    seriesPosterUrl = seriesPosterUrl, // Pass series poster
                     onEpisodeClick = onEpisodeClick
                 )
             }
@@ -458,28 +560,30 @@ private fun SeasonsSection(
 private fun EpisodeGrid(
     episodes: List<com.duckflix.lite.data.remote.dto.EpisodeDto>,
     seasonNumber: Int,
+    seriesPosterUrl: String?, // Series poster for Continue Watching
     onEpisodeClick: (Int, Int, Long?, String?) -> Unit
 ) {
     Column(
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        episodes.chunked(2).forEach { rowEpisodes ->
+        episodes.chunked(3).forEach { rowEpisodes ->
             Row(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 rowEpisodes.forEach { episode ->
                     Box(modifier = Modifier.weight(1f)) {
                         EpisodeCard(
                             episode = episode,
+                            seriesPosterUrl = seriesPosterUrl, // Pass series poster
                             onEpisodeClick = { resumePos, posterUrl ->
                                 onEpisodeClick(seasonNumber, episode.episodeNumber, resumePos, posterUrl)
                             }
                         )
                     }
                 }
-                // Fill remaining space if odd number of episodes in last row
-                if (rowEpisodes.size == 1) {
+                // Fill remaining space for incomplete last row
+                repeat(3 - rowEpisodes.size) {
                     Spacer(modifier = Modifier.weight(1f))
                 }
             }
@@ -487,70 +591,84 @@ private fun EpisodeGrid(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EpisodeCard(
     episode: com.duckflix.lite.data.remote.dto.EpisodeDto,
+    seriesPosterUrl: String?, // Series poster for Continue Watching (not episode still)
     onEpisodeClick: (Long?, String?) -> Unit
 ) {
-    FocusableButton(
-        onClick = { onEpisodeClick(null, episode.stillUrl) },
-        modifier = Modifier.fillMaxWidth().height(220.dp)
+    // --- Task 5: Track focus state for marquee scrolling ---
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    MediaCard(
+        onClick = { onEpisodeClick(null, seriesPosterUrl) }, // Use series poster, not episode still
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(252.dp), // --- Task 4: Increased from 240dp to 252dp (5% increase) ---
+        interactionSource = interactionSource
     ) {
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-            // Episode still/thumbnail
+            // Episode still/thumbnail with 16:9 aspect ratio and 6dp top rounded corners
             if (episode.stillUrl != null) {
                 AsyncImage(
                     model = episode.stillUrl,
                     contentDescription = episode.name,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(120.dp),
+                        .weight(1f)
+                        .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp)),
                     contentScale = ContentScale.Crop
                 )
             } else {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(120.dp)
+                        .weight(1f)
+                        .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
                         .background(Color.DarkGray),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "No Image",
+                        text = "E${episode.episodeNumber}",
                         color = Color.White.copy(alpha = 0.5f),
-                        style = MaterialTheme.typography.bodySmall
+                        style = MaterialTheme.typography.bodyLarge
                     )
                 }
             }
 
-            // Episode info
+            // Grey overlay info area at bottom
+            // --- Task 4: Increased info area from 80dp to 88dp for proportional scaling ---
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                    .height(88.dp)
+                    .padding(horizontal = 10.dp, vertical = 6.dp)
             ) {
                 Text(
                     text = "E${episode.episodeNumber}: ${episode.name}",
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = Color.White,
-                    maxLines = 1
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                if (episode.runtime != null) {
-                    Text(
-                        text = "${episode.runtime} min",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.6f)
-                    )
-                }
-                if (episode.overview != null) {
+                if (episode.overview != null && episode.overview.isNotBlank()) {
                     Text(
                         text = episode.overview,
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.8f),
-                        maxLines = 2
+                        color = Color.White.copy(alpha = 0.7f),
+                        maxLines = 7, // --- Task 4: Increased from 5 to 7 for taller card ---
+                        overflow = TextOverflow.Ellipsis,
+                        lineHeight = 16.sp,
+                        // --- Task 5: Marquee scroll when focused and text is truncated ---
+                        modifier = if (isFocused) {
+                            Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                        } else {
+                            Modifier
+                        }
                     )
                 }
             }
@@ -559,35 +677,43 @@ private fun EpisodeCard(
 }
 
 @Composable
-private fun CastRow(cast: List<CastDto>) {
+private fun CastRow(cast: List<CastDto>, onActorClick: (Int) -> Unit) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         items(cast) { member ->
-            Column(
-                modifier = Modifier.width(120.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+            MediaCard(
+                onClick = { onActorClick(member.id) },
+                modifier = Modifier.width(120.dp)
             ) {
-                AsyncImage(
-                    model = member.profileUrl,
-                    contentDescription = member.name,
-                    modifier = Modifier
-                        .size(120.dp)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = member.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White,
-                    maxLines = 2
-                )
-                if (member.character != null) {
-                    Text(
-                        text = member.character,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.7f),
-                        maxLines = 1
+                Column(
+                    modifier = Modifier.padding(8.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    AsyncImage(
+                        model = member.profileUrl,
+                        contentDescription = member.name,
+                        modifier = Modifier
+                            .size(120.dp)
+                            .clip(RoundedCornerShape(8.dp))
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = member.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White,
+                        maxLines = 2,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    if (member.character != null) {
+                        Text(
+                            text = member.character,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.7f),
+                            maxLines = 1,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
                 }
             }
         }
