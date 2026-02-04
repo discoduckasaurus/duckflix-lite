@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,7 +27,9 @@ import androidx.media3.ui.PlayerView
 import com.duckflix.lite.ui.components.ErrorScreen
 import com.duckflix.lite.ui.components.LoadingIndicator
 import com.duckflix.lite.ui.components.SourceSelectionScreen
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun VideoPlayerScreen(
@@ -56,6 +59,15 @@ fun VideoPlayerScreen(
         }
     }
 
+    // Track last seek time to enable continuous seeking
+    var lastSeekTime by remember { mutableStateOf(0L) }
+    val seekDebounceMs = 150L // Allow seeking every 150ms when holding key
+
+    // Seek indicator state
+    var seekIndicator by remember { mutableStateOf<String?>(null) }
+    var indicatorJob by remember { mutableStateOf<Job?>(null) }
+    val coroutineScope = rememberCoroutineScope()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -66,20 +78,49 @@ fun VideoPlayerScreen(
                     Modifier
                         .focusRequester(backgroundFocusRequester)
                         .onKeyEvent { keyEvent ->
-                            if (keyEvent.type == KeyEventType.KeyUp) {
+                            val currentTime = System.currentTimeMillis()
+
+                            // Handle on KeyDown for continuous seeking
+                            if (keyEvent.type == KeyEventType.KeyDown) {
                                 when (keyEvent.key) {
-                                    Key.DirectionCenter, Key.Enter, Key.Spacebar -> {
-                                        viewModel.togglePlayPause()
-                                        viewModel.showControls()
-                                        true
-                                    }
                                     Key.DirectionRight -> {
-                                        viewModel.seekForward()
-                                        viewModel.showControls()
+                                        // Allow seeking if enough time has passed (debounce)
+                                        if (currentTime - lastSeekTime >= seekDebounceMs) {
+                                            viewModel.seekForward()
+                                            lastSeekTime = currentTime
+
+                                            // Show +10s indicator
+                                            seekIndicator = "+10s"
+                                            indicatorJob?.cancel()
+                                            indicatorJob = coroutineScope.launch {
+                                                delay(1000)
+                                                seekIndicator = null
+                                            }
+                                        }
                                         true
                                     }
                                     Key.DirectionLeft -> {
-                                        viewModel.seekBackward()
+                                        // Allow seeking if enough time has passed (debounce)
+                                        if (currentTime - lastSeekTime >= seekDebounceMs) {
+                                            viewModel.seekBackward()
+                                            lastSeekTime = currentTime
+
+                                            // Show -10s indicator
+                                            seekIndicator = "-10s"
+                                            indicatorJob?.cancel()
+                                            indicatorJob = coroutineScope.launch {
+                                                delay(1000)
+                                                seekIndicator = null
+                                            }
+                                        }
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            } else if (keyEvent.type == KeyEventType.KeyUp) {
+                                when (keyEvent.key) {
+                                    Key.DirectionCenter, Key.Enter, Key.Spacebar -> {
+                                        viewModel.togglePlayPause()
                                         viewModel.showControls()
                                         true
                                     }
@@ -128,6 +169,28 @@ fun VideoPlayerScreen(
                     modifier = Modifier.fillMaxSize()
                 )
 
+                // Seek indicator (shows +10s / -10s when seeking without controls)
+                seekIndicator?.let { text ->
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(bottom = 80.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = text,
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = Color.White,
+                            modifier = Modifier
+                                .background(
+                                    Color.Black.copy(alpha = 0.6f),
+                                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 24.dp, vertical = 12.dp)
+                        )
+                    }
+                }
+
                 // Custom controls overlay
                 if (uiState.showControls) {
                     PlayerControls(
@@ -156,6 +219,16 @@ fun VideoPlayerScreen(
                     SeriesCompleteOverlay(
                         onDismiss = viewModel::dismissSeriesComplete,
                         onNavigateBack = onNavigateBack
+                    )
+                }
+
+                // Random Episode Error Overlay
+                if (uiState.showRandomEpisodeError) {
+                    RandomEpisodeErrorOverlay(
+                        onNavigateBack = {
+                            viewModel.dismissRandomEpisodeError()
+                            onNavigateBack()
+                        }
                     )
                 }
 
@@ -191,6 +264,7 @@ fun VideoPlayerScreen(
                 // Show slot machine animation for Zurg cache check (no extra messaging)
                 SourceSelectionScreen(
                     message = "",
+                    sourceStatus = uiState.sourceStatus,
                     showProgress = false,
                     logoUrl = uiState.logoUrl,
                     backdropUrl = uiState.posterUrl,
@@ -205,6 +279,7 @@ fun VideoPlayerScreen(
                 // Show slot machine animation with Prowlarr search message
                 SourceSelectionScreen(
                     message = "One moment, finding the best source",
+                    sourceStatus = uiState.sourceStatus,
                     showProgress = false,
                     logoUrl = uiState.logoUrl,
                     backdropUrl = uiState.posterUrl,
@@ -219,6 +294,7 @@ fun VideoPlayerScreen(
                 // Show slot machine animation WITH progress bar
                 SourceSelectionScreen(
                     message = uiState.downloadMessage,
+                    sourceStatus = uiState.sourceStatus,
                     showProgress = true,
                     progress = uiState.downloadProgress,
                     logoUrl = uiState.logoUrl,
@@ -537,8 +613,11 @@ private fun PlayerControls(
 
             // Progress bar (focusable slider with scrubbing support)
             var isDragging by remember { mutableStateOf(false) }
+            var isKeyboardSeeking by remember { mutableStateOf(false) }
             var previewPosition by remember { mutableStateOf(currentPosition) }
             val sliderInteractionSource = remember { MutableInteractionSource() }
+            val isSliderFocused by sliderInteractionSource.collectIsFocusedAsState()
+            var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
 
             // Monitor drag interactions
             LaunchedEffect(sliderInteractionSource) {
@@ -558,9 +637,9 @@ private fun PlayerControls(
             }
 
             androidx.compose.material3.Slider(
-                value = if (isDragging) previewPosition.toFloat() else currentPosition.toFloat(),
+                value = if (isDragging || isKeyboardSeeking) previewPosition.toFloat() else currentPosition.toFloat(),
                 onValueChange = { newValue ->
-                    if (isDragging) {
+                    if (isDragging || isKeyboardSeeking) {
                         previewPosition = newValue.toLong()
                     } else {
                         onSeekTo(newValue.toLong())
@@ -569,10 +648,61 @@ private fun PlayerControls(
                 valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .onKeyEvent { keyEvent ->
+                        val seekStep = 10000L // 10 seconds in milliseconds
+
+                        if (keyEvent.type == KeyEventType.KeyDown) {
+                            when (keyEvent.key) {
+                                Key.DirectionRight -> {
+                                    if (!isKeyboardSeeking) {
+                                        // First key press - pause and start seeking
+                                        isKeyboardSeeking = true
+                                        wasPlayingBeforeSeek = isPlaying
+                                        if (isPlaying) onPlayPauseClick() // Pause
+                                        previewPosition = currentPosition
+                                    }
+                                    // Seek forward
+                                    previewPosition = (previewPosition + seekStep).coerceAtMost(duration)
+                                    true
+                                }
+                                Key.DirectionLeft -> {
+                                    if (!isKeyboardSeeking) {
+                                        // First key press - pause and start seeking
+                                        isKeyboardSeeking = true
+                                        wasPlayingBeforeSeek = isPlaying
+                                        if (isPlaying) onPlayPauseClick() // Pause
+                                        previewPosition = currentPosition
+                                    }
+                                    // Seek backward
+                                    previewPosition = (previewPosition - seekStep).coerceAtLeast(0)
+                                    true
+                                }
+                                else -> false
+                            }
+                        } else if (keyEvent.type == KeyEventType.KeyUp) {
+                            when (keyEvent.key) {
+                                Key.DirectionRight, Key.DirectionLeft -> {
+                                    if (isKeyboardSeeking) {
+                                        // Apply the seek
+                                        onSeekTo(previewPosition)
+                                        isKeyboardSeeking = false
+                                        // Resume playback if it was playing before
+                                        if (wasPlayingBeforeSeek && !isPlaying) {
+                                            onPlayPauseClick()
+                                        }
+                                    }
+                                    true
+                                }
+                                else -> false
+                            }
+                        } else {
+                            false
+                        }
+                    }
                     .focusable(),
                 interactionSource = sliderInteractionSource,
                 colors = androidx.compose.material3.SliderDefaults.colors(
-                    thumbColor = MaterialTheme.colorScheme.primary,
+                    thumbColor = if (isSliderFocused) Color.White else MaterialTheme.colorScheme.primary,
                     activeTrackColor = MaterialTheme.colorScheme.primary,
                     inactiveTrackColor = Color.White.copy(alpha = 0.3f)
                 )
@@ -638,6 +768,43 @@ private fun SeriesCompleteOverlay(
                     com.duckflix.lite.ui.components.FocusableButton(onClick = onDismiss) {
                         Text("Close")
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RandomEpisodeErrorOverlay(
+    onNavigateBack: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.9f)),
+        contentAlignment = Alignment.Center
+    ) {
+        androidx.compose.material3.Surface(
+            modifier = Modifier
+                .width(500.dp)
+                .padding(48.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                Text(
+                    text = "Failed to Fetch Random Episode",
+                    style = MaterialTheme.typography.headlineLarge
+                )
+                Text(
+                    text = "Please try again later",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+                com.duckflix.lite.ui.components.FocusableButton(onClick = onNavigateBack) {
+                    Text("Home")
                 }
             }
         }

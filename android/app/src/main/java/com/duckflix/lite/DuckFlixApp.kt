@@ -34,7 +34,7 @@ sealed class Screen(val route: String) {
     object ActorFilmography : Screen("actor/{personId}") {
         fun createRoute(personId: Int) = "actor/$personId"
     }
-    object Player : Screen("player/{tmdbId}/{title}?year={year}&type={type}&season={season}&episode={episode}&resumePosition={resumePosition}&posterUrl={posterUrl}&logoUrl={logoUrl}&originalLanguage={originalLanguage}") {
+    object Player : Screen("player/{tmdbId}/{title}?year={year}&type={type}&season={season}&episode={episode}&resumePosition={resumePosition}&posterUrl={posterUrl}&logoUrl={logoUrl}&originalLanguage={originalLanguage}&isRandom={isRandom}") {
         fun createRoute(
             tmdbId: Int,
             title: String,
@@ -45,7 +45,8 @@ sealed class Screen(val route: String) {
             resumePosition: Long? = null,
             posterUrl: String? = null,
             logoUrl: String? = null,
-            originalLanguage: String? = null
+            originalLanguage: String? = null,
+            isRandom: Boolean = false
         ) = "player/$tmdbId/${java.net.URLEncoder.encode(title, "UTF-8")}?" +
                 "year=${year ?: ""}&type=$type" +
                 "&season=${season ?: -1}" +
@@ -53,7 +54,8 @@ sealed class Screen(val route: String) {
                 "&resumePosition=${resumePosition ?: -1L}" +
                 (if (posterUrl != null) "&posterUrl=${java.net.URLEncoder.encode(posterUrl, "UTF-8")}" else "") +
                 (if (logoUrl != null) "&logoUrl=${java.net.URLEncoder.encode(logoUrl, "UTF-8")}" else "") +
-                (if (originalLanguage != null) "&originalLanguage=$originalLanguage" else "")
+                (if (originalLanguage != null) "&originalLanguage=$originalLanguage" else "") +
+                "&isRandom=$isRandom"
     }
     object Vod : Screen("vod")
     object LiveTV : Screen("livetv")
@@ -152,12 +154,13 @@ fun DuckFlixApp(
             )
         ) {
             DetailScreen(
-                onPlayClick = { tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage ->
+                onPlayClick = { tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage, isRandom ->
                     println("[LOGO-DEBUG-NAV] Navigation to player:")
                     println("[LOGO-DEBUG-NAV]   title: $title")
                     println("[LOGO-DEBUG-NAV]   posterUrl: $posterUrl")
                     println("[LOGO-DEBUG-NAV]   logoUrl: $logoUrl")
-                    val route = Screen.Player.createRoute(tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage)
+                    println("[LOGO-DEBUG-NAV]   isRandom: $isRandom")
+                    val route = Screen.Player.createRoute(tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage, isRandom)
                     println("[LOGO-DEBUG-NAV]   route: $route")
                     navController.navigate(route)
                 },
@@ -229,6 +232,10 @@ fun DuckFlixApp(
                     type = NavType.StringType
                     nullable = true
                     defaultValue = null
+                },
+                navArgument("isRandom") {
+                    type = NavType.BoolType
+                    defaultValue = false
                 }
             )
         ) {
@@ -243,9 +250,10 @@ fun DuckFlixApp(
                 val posterUrl = currentEntry.arguments?.getString("posterUrl")
                 val logoUrl = currentEntry.arguments?.getString("logoUrl")
                 val originalLanguage = currentEntry.arguments?.getString("originalLanguage")
+                val isRandom = currentEntry.arguments?.getBoolean("isRandom") ?: false
 
                 navController.navigate(
-                    Screen.Player.createRoute(tmdbId, title, year, "tv", season, episode, null, posterUrl, logoUrl, originalLanguage)
+                    Screen.Player.createRoute(tmdbId, title, year, "tv", season, episode, null, posterUrl, logoUrl, originalLanguage, isRandom)
                 ) {
                     popUpTo(Screen.Player.route) { inclusive = true }
                 }

@@ -57,6 +57,7 @@ data class PlayerUiState(
     val loadingPhase: LoadingPhase = LoadingPhase.CHECKING_CACHE,
     val downloadProgress: Int = 0,
     val downloadMessage: String = "",
+    val sourceStatus: String = "", // Secondary status like "Trying source 1", "Requesting Download"
     val downloadJobId: String? = null,
     val error: String? = null,
     val isPlaying: Boolean = false,
@@ -75,6 +76,7 @@ data class PlayerUiState(
     val isLoadingNextContent: Boolean = false,
     val showSeriesCompleteOverlay: Boolean = false,
     val showRecommendationsOverlay: Boolean = false,
+    val showRandomEpisodeError: Boolean = false,
     val autoPlayCountdown: Int = 0
 )
 
@@ -101,6 +103,7 @@ class VideoPlayerViewModel @Inject constructor(
     private val posterUrl: String? = savedStateHandle["posterUrl"]
     private val logoUrl: String? = savedStateHandle["logoUrl"]
     private val originalLanguage: String? = savedStateHandle["originalLanguage"]
+    private val isRandomPlayback: Boolean = savedStateHandle.get<Boolean>("isRandom") ?: false
     private var pendingSeekPosition: Long? = null
     private var currentStreamUrl: String? = null
     private var currentErrorId: Int? = null
@@ -263,7 +266,8 @@ class VideoPlayerViewModel @Inject constructor(
 
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
-                        error = "Playback error: ${error.errorCodeName}\n${error.message}"
+                        loadingPhase = LoadingPhase.READY,
+                        error = "⚠️ Unfortunately this title isn't available at the moment. Please try again later."
                     )
                 }
             })
@@ -420,7 +424,8 @@ class VideoPlayerViewModel @Inject constructor(
 
                 _uiState.value = _uiState.value.copy(
                     loadingPhase = LoadingPhase.CHECKING_CACHE,
-                    downloadMessage = "Checking for cached content..."
+                    downloadMessage = "Checking for cached content...",
+                    sourceStatus = "Trying source 1"
                 )
 
                 val streamRequest = StreamUrlRequest(
@@ -441,7 +446,8 @@ class VideoPlayerViewModel @Inject constructor(
 
                     _uiState.value = _uiState.value.copy(
                         loadingPhase = LoadingPhase.SEARCHING,
-                        downloadMessage = "Preparing playback..."
+                        downloadMessage = "Preparing playback...",
+                        sourceStatus = "Source Found!"
                     )
 
                     // Start player loading in background immediately
@@ -461,7 +467,8 @@ class VideoPlayerViewModel @Inject constructor(
 
                     _uiState.value = _uiState.value.copy(
                         loadingPhase = LoadingPhase.SEARCHING,
-                        downloadJobId = jobId
+                        downloadJobId = jobId,
+                        sourceStatus = "Requesting Download"
                     )
 
                     pollDownloadProgress(jobId)
@@ -470,7 +477,8 @@ class VideoPlayerViewModel @Inject constructor(
                 println("[ERROR] VideoPlayerViewModel: Failed to load video: ${e.message}")
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
-                    error = "Failed to start playback: ${e.message}"
+                    loadingPhase = LoadingPhase.READY,
+                    error = "⚠️ Unfortunately this title isn't available at the moment. Please try again later."
                 )
             }
         }
@@ -490,10 +498,19 @@ class VideoPlayerViewModel @Inject constructor(
                     else -> _uiState.value.loadingPhase
                 }
 
+                // Extract source status from message or derive from status
+                val sourceStatus = when {
+                    progress.message.contains("source", ignoreCase = true) -> progress.message
+                    progress.status == "searching" -> "Trying source 2"
+                    progress.status == "downloading" -> "Requesting Download"
+                    else -> _uiState.value.sourceStatus
+                }
+
                 _uiState.value = _uiState.value.copy(
                     loadingPhase = loadingPhase,
                     downloadProgress = progress.progress,
-                    downloadMessage = progress.message
+                    downloadMessage = progress.message,
+                    sourceStatus = sourceStatus
                 )
 
                 when (progress.status) {
@@ -532,7 +549,8 @@ class VideoPlayerViewModel @Inject constructor(
             println("[ERROR] Download polling failed: ${e.message}")
             _uiState.value = _uiState.value.copy(
                 isLoading = false,
-                error = "Download failed: ${e.message}"
+                loadingPhase = LoadingPhase.READY,
+                error = "⚠️ Unfortunately this title isn't available at the moment. Please try again later."
             )
         }
     }
@@ -938,11 +956,29 @@ class VideoPlayerViewModel @Inject constructor(
             try {
                 _uiState.value = _uiState.value.copy(isLoadingNextContent = true)
                 if (contentType == "tv" && season != null && episode != null) {
-                    val nextEpisode = api.getNextEpisode(tmdbId, season, episode)
-                    _uiState.value = _uiState.value.copy(
-                        nextEpisodeInfo = nextEpisode,
-                        isLoadingNextContent = false
-                    )
+                    if (isRandomPlayback) {
+                        // For random playback, get another random episode
+                        val randomEpisode = api.getRandomEpisode(tmdbId)
+                        // Convert to NextEpisodeResponse format
+                        val nextEpisode = com.duckflix.lite.data.remote.dto.NextEpisodeResponse(
+                            hasNext = true,
+                            season = randomEpisode.season,
+                            episode = randomEpisode.episode,
+                            title = randomEpisode.title,
+                            inCurrentPack = true // Random episodes are always available
+                        )
+                        _uiState.value = _uiState.value.copy(
+                            nextEpisodeInfo = nextEpisode,
+                            isLoadingNextContent = false
+                        )
+                    } else {
+                        // For sequential playback, get next episode
+                        val nextEpisode = api.getNextEpisode(tmdbId, season, episode)
+                        _uiState.value = _uiState.value.copy(
+                            nextEpisodeInfo = nextEpisode,
+                            isLoadingNextContent = false
+                        )
+                    }
                 } else {
                     val recommendations = api.getContentRecommendations(tmdbId, limit = 4)
                     _uiState.value = _uiState.value.copy(
@@ -966,11 +1002,49 @@ class VideoPlayerViewModel @Inject constructor(
     private fun handleTVEpisodeEnded() {
         val nextEpisode = _uiState.value.nextEpisodeInfo
         if (nextEpisode == null || !nextEpisode.hasNext) {
+            // In random mode, try to fetch a random episode on-the-fly if prefetch failed
+            if (isRandomPlayback) {
+                fetchRandomEpisodeAndPlay()
+                return
+            }
+            // Show series complete only in sequential mode
             _uiState.value = _uiState.value.copy(showSeriesCompleteOverlay = true)
             return
         }
+
+        // Validate season and episode are not null before invoking
+        val season = nextEpisode.season
+        val episode = nextEpisode.episode
+        if (season == null || episode == null) {
+            println("[ERROR] Next episode has hasNext=true but season or episode is null: season=$season, episode=$episode")
+            // Don't show series complete in random mode
+            if (!isRandomPlayback) {
+                _uiState.value = _uiState.value.copy(showSeriesCompleteOverlay = true)
+            }
+            return
+        }
+
         startAutoPlayCountdown {
-            onAutoPlayNext?.invoke(nextEpisode.season!!, nextEpisode.episode!!)
+            onAutoPlayNext?.invoke(season, episode)
+        }
+    }
+
+    private fun fetchRandomEpisodeAndPlay() {
+        viewModelScope.launch {
+            try {
+                println("[AutoPlay] Fetching random episode on-the-fly for tmdbId=$tmdbId")
+                val randomEpisode = api.getRandomEpisode(tmdbId)
+                println("[AutoPlay] Got random episode: S${randomEpisode.season}E${randomEpisode.episode}")
+
+                // Start countdown and play
+                startAutoPlayCountdown {
+                    onAutoPlayNext?.invoke(randomEpisode.season, randomEpisode.episode)
+                }
+            } catch (e: Exception) {
+                println("[AutoPlay] Failed to fetch random episode: ${e.message}")
+                // Show error overlay to user
+                _uiState.value = _uiState.value.copy(showRandomEpisodeError = true)
+            }
         }
     }
 
@@ -1002,7 +1076,8 @@ class VideoPlayerViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             autoPlayCountdown = 0,
             showSeriesCompleteOverlay = false,
-            showRecommendationsOverlay = false
+            showRecommendationsOverlay = false,
+            showRandomEpisodeError = false
         )
     }
 
@@ -1012,6 +1087,10 @@ class VideoPlayerViewModel @Inject constructor(
 
     fun dismissRecommendations() {
         _uiState.value = _uiState.value.copy(showRecommendationsOverlay = false)
+    }
+
+    fun dismissRandomEpisodeError() {
+        _uiState.value = _uiState.value.copy(showRandomEpisodeError = false)
     }
 
     fun selectRecommendation(rec: com.duckflix.lite.data.remote.dto.MovieRecommendationItem) {
