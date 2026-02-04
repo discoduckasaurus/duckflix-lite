@@ -296,17 +296,26 @@ router.get('/tmdb/:id', async (req, res) => {
     const response = await axios.get(url, {
       params: {
         api_key: tmdbApiKey,
-        append_to_response: type === 'tv' ? 'credits,videos,external_ids,seasons' : 'credits,videos,external_ids'
+        append_to_response: type === 'tv' ? 'credits,videos,external_ids,seasons,images' : 'credits,videos,external_ids,images',
+        include_image_language: 'en,null' // Only English and language-neutral images
       }
     });
 
     const data = response.data;
+
+    // Filter images for English/null only and pick best logo
+    const englishLogos = data.images?.logos?.filter(img =>
+      img.iso_639_1 === 'en' || img.iso_639_1 === null
+    ) || [];
+    const logoPath = englishLogos.length > 0 ? englishLogos[0].file_path : null;
+
     const result = {
       id: data.id,
       title: data.title || data.name,
       overview: data.overview,
       posterPath: data.poster_path,
       backdropPath: data.backdrop_path,
+      logoPath: logoPath, // Add English logo
       releaseDate: data.release_date || data.first_air_date,
       voteAverage: data.vote_average,
       runtime: data.runtime || (data.episode_run_time && data.episode_run_time[0]),
