@@ -20,7 +20,13 @@ data class TmdbSearchResult(
     @Json(name = "mediaType") val type: String = "movie" // Map server's mediaType to type field
 ) {
     val posterUrl: String?
-        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = posterPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 }
 
 @JsonClass(generateAdapter = true)
@@ -42,13 +48,31 @@ data class TmdbDetailResponse(
     @Json(name = "spokenLanguages") val spokenLanguages: List<SpokenLanguageDto>?
 ) {
     val posterUrl: String?
-        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = posterPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 
     val backdropUrl: String?
-        get() = backdropPath?.let { "https://image.tmdb.org/t/p/w1280$it" }
+        get() = backdropPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w1280$it"  // TMDB path, prepend base URL
+            }
+        }
 
     val logoUrl: String?
-        get() = logoPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = logoPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 
     // Prefer logo over poster for title display (logos are transparent PNGs)
     val titleImageUrl: String?
@@ -81,7 +105,13 @@ data class CastDto(
     @Json(name = "profilePath") val profilePath: String?
 ) {
     val profileUrl: String?
-        get() = profilePath?.let { "https://image.tmdb.org/t/p/w185$it" }
+        get() = profilePath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w185$it"  // TMDB path, prepend base URL
+            }
+        }
 }
 
 @JsonClass(generateAdapter = true)
@@ -94,7 +124,13 @@ data class SeasonInfoDto(
     val overview: String?
 ) {
     val posterUrl: String?
-        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = posterPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 }
 
 @JsonClass(generateAdapter = true)
@@ -107,7 +143,13 @@ data class TmdbSeasonResponse(
     val episodes: List<EpisodeDto>?
 ) {
     val posterUrl: String?
-        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = posterPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 }
 
 @JsonClass(generateAdapter = true)
@@ -122,7 +164,13 @@ data class EpisodeDto(
     val runtime: Int?
 ) {
     val stillUrl: String?
-        get() = stillPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = stillPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 }
 
 // Trending API DTOs
@@ -137,7 +185,13 @@ data class TrendingResult(
     @Json(name = "media_type") val mediaType: String = "movie"
 ) {
     val posterUrl: String?
-        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = posterPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 }
 
 @JsonClass(generateAdapter = true)
@@ -156,7 +210,13 @@ data class RecommendationItem(
     val voteAverage: Double?
 ) {
     val posterUrl: String?
-        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = posterPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 
     val year: String?
         get() = releaseDate?.take(4)
@@ -220,7 +280,13 @@ data class PersonDetailsResponse(
     @Json(name = "knownForDepartment") val knownForDepartment: String?
 ) {
     val profileUrl: String?
-        get() = profilePath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = profilePath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 }
 
 @JsonClass(generateAdapter = true)
@@ -247,5 +313,11 @@ data class PersonCreditItem(
     @Json(name = "ratingScore") val ratingScore: Double?
 ) {
     val posterUrl: String?
-        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = posterPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 }

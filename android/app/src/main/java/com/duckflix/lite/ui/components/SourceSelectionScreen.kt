@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil.compose.rememberAsyncImagePainter
+import com.duckflix.lite.utils.LoadingPhraseGenerator
 import kotlinx.coroutines.delay
 import kotlin.math.sin
 import kotlin.random.Random
@@ -35,6 +36,11 @@ fun SourceSelectionScreen(
     onComeBackLater: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    println("[LOGO-DEBUG-SCREEN] SourceSelectionScreen parameters:")
+    println("[LOGO-DEBUG-SCREEN]   logoUrl: $logoUrl")
+    println("[LOGO-DEBUG-SCREEN]   backdropUrl: $backdropUrl")
+    println("[LOGO-DEBUG-SCREEN]   message: $message")
+
     // Slot machine phrase pairs (A phrases + B phrases with same starting letter)
     val phrasePairs = listOf(
         "Fabricating" to "Films",

@@ -27,8 +27,17 @@ data class MovieRecommendationItem(
     val tmdbId: Int,
     val title: String,
     val year: String?,
+    val posterPath: String?
+) {
     val posterUrl: String?
-)
+        get() = posterPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
+}
 
 @JsonClass(generateAdapter = true)
 data class MovieRecommendationsResponse(
@@ -62,7 +71,13 @@ data class ContinueWatchingItem(
     val updatedAt: String
 ) {
     val posterUrl: String?
-        get() = posterPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+        get() = posterPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it  // Already a full URL, use as-is
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
 
     val isReadyToPlay: Boolean
         get() = !isDownloading && !isFailed && position >= 0
@@ -93,11 +108,4 @@ data class ContinueWatchingResponse(
     val continueWatching: List<ContinueWatchingItem>,
     val activeDownloads: Int = 0,
     val failedDownloads: Int = 0
-)
-
-// Loading Phrases
-@JsonClass(generateAdapter = true)
-data class LoadingPhrasesResponse(
-    val phrasesA: List<String>,
-    val phrasesB: List<String>
 )

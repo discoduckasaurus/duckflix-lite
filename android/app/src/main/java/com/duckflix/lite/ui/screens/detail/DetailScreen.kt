@@ -87,6 +87,10 @@ fun DetailScreen(
                     isLoadingRandomEpisode = uiState.isLoadingRandomEpisode,
                     randomEpisodeError = uiState.randomEpisodeError,
                     onPlayClick = { content, type, season, episode, resumePosition, posterUrl, logoUrl ->
+                        println("[LOGO-DEBUG-DETAIL] Preparing to play: ${content.title}")
+                        println("[LOGO-DEBUG-DETAIL] logoUrl from content: ${content.logoUrl}")
+                        println("[LOGO-DEBUG-DETAIL] logoUrl parameter: $logoUrl")
+                        println("[LOGO-DEBUG-DETAIL] posterUrl: $posterUrl")
                         onPlayClick(content.id, content.title, content.year, type, season, episode, resumePosition, posterUrl, logoUrl, content.originalLanguage)
                     },
                     onSearchTorrents = { onSearchTorrents(it.id, it.title) },

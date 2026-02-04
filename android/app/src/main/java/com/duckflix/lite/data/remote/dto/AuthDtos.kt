@@ -27,3 +27,9 @@ data class UserDto(
 data class UserResponse(
     val user: UserDto
 )
+
+@JsonClass(generateAdapter = true)
+data class LoadingPhrasesResponse(
+    val phrasesA: List<String>,
+    val phrasesB: List<String>
+)

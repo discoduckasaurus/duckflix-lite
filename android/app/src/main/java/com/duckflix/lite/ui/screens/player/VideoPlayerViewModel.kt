@@ -61,7 +61,6 @@ data class PlayerUiState(
     val error: String? = null,
     val isPlaying: Boolean = false,
     val showControls: Boolean = true,
-    val showTrackSelection: Boolean = false,
     val audioTracks: List<TrackInfo> = emptyList(),
     val subtitleTracks: List<TrackInfo> = emptyList(),
     val currentPosition: Long = 0,
@@ -105,6 +104,7 @@ class VideoPlayerViewModel @Inject constructor(
     private var pendingSeekPosition: Long? = null
     private var currentStreamUrl: String? = null
     private var currentErrorId: Int? = null
+    private var isSelectingTrack = false // Prevent infinite loop during auto-selection
 
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
@@ -118,11 +118,14 @@ class VideoPlayerViewModel @Inject constructor(
     var onAutoPlayRecommendation: ((tmdbId: Int) -> Unit)? = null
 
     init {
-        // Set initial posterUrl
+        // Set initial posterUrl and logoUrl from server
         _uiState.value = _uiState.value.copy(
             posterUrl = posterUrl,
             logoUrl = logoUrl
         )
+
+        println("[LOGO-DEBUG] Received logoUrl from navigation: $logoUrl")
+        println("[LOGO-DEBUG] Received posterUrl from navigation: $posterUrl")
 
         // Initialize stutter detector with playback settings
         viewModelScope.launch {
@@ -134,7 +137,9 @@ class VideoPlayerViewModel @Inject constructor(
         initializePlayer()
         loadVideoUrl()
         startPositionUpdates()
-        fetchTmdbLogo()
+
+        // NEVER fetch from TMDB - ONLY use server-provided logoUrl
+        // If logoUrl is null, the loading screen will fallback to posterUrl automatically
     }
 
     private fun startPositionUpdates() {
@@ -284,6 +289,7 @@ class VideoPlayerViewModel @Inject constructor(
                         format.sampleMimeType?.startsWith("audio/") == true -> {
                             val trackId = "${group.mediaTrackGroup.id}_$i"
                             val label = format.label ?: format.language ?: "Audio ${audioTracks.size + 1}"
+                            println("[TRACK-CREATE] Audio: ID='$trackId', Label='$label', Lang='${format.language}', Selected=$isSelected")
 
                             audioTracks.add(
                                 TrackInfo(
@@ -305,10 +311,14 @@ class VideoPlayerViewModel @Inject constructor(
                         }
                         format.sampleMimeType?.startsWith("text/") == true ||
                         format.sampleMimeType?.startsWith("application/") == true -> {
+                            val subtitleId = "${group.mediaTrackGroup.id}_$i"
+                            val label = format.label ?: format.language ?: "Subtitle ${subtitleTracks.size + 1}"
+                            println("[TRACK-CREATE] Subtitle: ID='$subtitleId', Label='$label', Selected=$isSelected")
+
                             subtitleTracks.add(
                                 TrackInfo(
-                                    id = "${group.mediaTrackGroup.id}_$i",
-                                    label = format.label ?: format.language ?: "Subtitle ${subtitleTracks.size + 1}",
+                                    id = subtitleId,
+                                    label = label,
                                     isSelected = isSelected
                                 )
                             )
@@ -322,13 +332,20 @@ class VideoPlayerViewModel @Inject constructor(
                 subtitleTracks = subtitleTracks
             )
 
-            // Auto-select best audio track if no track selected
-            val hasSelectedAudio = audioTracks.any { it.isSelected }
-            if (!hasSelectedAudio && candidates.isNotEmpty()) {
-                val bestTrack = selectBestAudioTrack(candidates)
-                if (bestTrack != null) {
-                    println("[AUTO-SELECT] Selecting best track: ${bestTrack.trackId} (${bestTrack.label})")
-                    selectAudioTrack(bestTrack.trackId)
+            // ALWAYS run smart audio track selection (don't let ExoPlayer's default selection override us)
+            // Use flag to prevent infinite loop when selectAudioTrack calls updateAvailableTracks
+            if (candidates.isNotEmpty() && !isSelectingTrack) {
+                isSelectingTrack = true
+                try {
+                    val bestTrack = selectBestAudioTrack(candidates)
+                    if (bestTrack != null && !bestTrack.isSelected) {
+                        println("[AUTO-SELECT] Overriding ExoPlayer's selection - selecting best track: ${bestTrack.trackId} (${bestTrack.label})")
+                        selectAudioTrack(bestTrack.trackId)
+                    } else if (bestTrack != null && bestTrack.isSelected) {
+                        println("[AUTO-SELECT] Best track already selected: ${bestTrack.trackId} (${bestTrack.label})")
+                    }
+                } finally {
+                    isSelectingTrack = false
                 }
             }
         }
@@ -342,9 +359,9 @@ class VideoPlayerViewModel @Inject constructor(
 
         val origLang = originalLanguage?.lowercase() ?: "en"
         println("[AudioTrack] Movie original language: $origLang")
-
+        println("[AudioTrack] Available tracks:")
         candidates.forEachIndexed { index, track ->
-            println("[AudioTrack] [$index] lang=${track.language}, title=${track.title}, label=${track.label}")
+            println("[AudioTrack]   [$index] ID='${track.trackId}', Lang='${track.language}', Title='${track.title}', Label='${track.label}'")
         }
 
         // Priority order for matching
@@ -385,7 +402,7 @@ class VideoPlayerViewModel @Inject constructor(
         for (matcher in priorities) {
             val matchedTrack = candidates.firstOrNull(matcher)
             if (matchedTrack != null) {
-                println("[AudioTrack] Selected track: ${matchedTrack.trackId} via priority matcher")
+                println("[AudioTrack] Selected best track: ID='${matchedTrack.trackId}', Label='${matchedTrack.label}', Lang='${matchedTrack.language}'")
                 return matchedTrack
             }
         }
@@ -695,14 +712,6 @@ class VideoPlayerViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(showControls = false)
     }
 
-    fun showTrackSelection() {
-        _uiState.value = _uiState.value.copy(showTrackSelection = true)
-    }
-
-    fun hideTrackSelection() {
-        _uiState.value = _uiState.value.copy(showTrackSelection = false)
-    }
-
     fun retryPlayback() {
         _uiState.value = _uiState.value.copy(
             error = null,
@@ -714,18 +723,41 @@ class VideoPlayerViewModel @Inject constructor(
     fun selectAudioTrack(trackId: String) {
         _player?.let { player ->
             try {
-                val parts = trackId.split("_")
-                if (parts.size >= 2) {
-                    val trackIndex = parts.last().toIntOrNull() ?: return
+                println("[TRACK-SELECT] Attempting to select audio track: $trackId")
 
-                    player.currentTracks.groups.forEachIndexed { groupIndex, group ->
-                        for (i in 0 until group.length) {
-                            val format = group.getTrackFormat(i)
-                            if (format.sampleMimeType?.startsWith("audio/") == true && i == trackIndex) {
+                val parts = trackId.split("_")
+                if (parts.size < 2) {
+                    println("[TRACK-SELECT] ERROR: Invalid track ID format: $trackId")
+                    return
+                }
+
+                // Extract BOTH group ID and track index
+                val groupId = parts.dropLast(1).joinToString("_")
+                val trackIndex = parts.last().toIntOrNull()
+
+                if (trackIndex == null) {
+                    println("[TRACK-SELECT] ERROR: Invalid track index in ID: $trackId")
+                    return
+                }
+
+                println("[TRACK-SELECT] Parsed - Group ID: '$groupId', Track Index: $trackIndex")
+
+                // Find matching group by comparing group ID
+                player.currentTracks.groups.forEachIndexed { groupIndex, group ->
+                    val currentGroupId = group.mediaTrackGroup.id
+
+                    // CRITICAL FIX: Check BOTH group ID and track index
+                    if (currentGroupId == groupId) {
+                        if (trackIndex < group.length) {
+                            val format = group.getTrackFormat(trackIndex)
+                            if (format.sampleMimeType?.startsWith("audio/") == true) {
+                                val label = format.label ?: format.language ?: "Audio $trackIndex"
+                                println("[TRACK-SELECT] SUCCESS: Selecting audio - Group: '$currentGroupId', Index: $trackIndex, Label: '$label'")
+
                                 player.trackSelectionParameters = player.trackSelectionParameters
                                     .buildUpon()
                                     .setOverrideForType(
-                                        TrackSelectionOverride(group.mediaTrackGroup, listOf(i))
+                                        TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex))
                                     )
                                     .build()
                                 updateAvailableTracks()
@@ -734,8 +766,11 @@ class VideoPlayerViewModel @Inject constructor(
                         }
                     }
                 }
+
+                println("[TRACK-SELECT] ERROR: No matching track found for ID: $trackId")
             } catch (e: Exception) {
                 println("[ERROR] Failed to select audio track: ${e.message}")
+                e.printStackTrace()
             }
         }
     }
@@ -743,7 +778,10 @@ class VideoPlayerViewModel @Inject constructor(
     fun selectSubtitleTrack(trackId: String) {
         _player?.let { player ->
             try {
+                println("[TRACK-SELECT] Attempting to select subtitle track: $trackId")
+
                 if (trackId == "none") {
+                    println("[TRACK-SELECT] Disabling subtitles")
                     player.trackSelectionParameters = player.trackSelectionParameters
                         .buildUpon()
                         .clearOverridesOfType(C.TRACK_TYPE_TEXT)
@@ -753,19 +791,39 @@ class VideoPlayerViewModel @Inject constructor(
                 }
 
                 val parts = trackId.split("_")
-                if (parts.size >= 2) {
-                    val trackIndex = parts.last().toIntOrNull() ?: return
+                if (parts.size < 2) {
+                    println("[TRACK-SELECT] ERROR: Invalid track ID format: $trackId")
+                    return
+                }
 
-                    player.currentTracks.groups.forEachIndexed { groupIndex, group ->
-                        for (i in 0 until group.length) {
-                            val format = group.getTrackFormat(i)
-                            if ((format.sampleMimeType?.startsWith("text/") == true ||
-                                 format.sampleMimeType?.startsWith("application/") == true) &&
-                                i == trackIndex) {
+                // Extract BOTH group ID and track index
+                val groupId = parts.dropLast(1).joinToString("_")
+                val trackIndex = parts.last().toIntOrNull()
+
+                if (trackIndex == null) {
+                    println("[TRACK-SELECT] ERROR: Invalid track index in ID: $trackId")
+                    return
+                }
+
+                println("[TRACK-SELECT] Parsed - Group ID: '$groupId', Track Index: $trackIndex")
+
+                // Find matching group by comparing group ID
+                player.currentTracks.groups.forEachIndexed { groupIndex, group ->
+                    val currentGroupId = group.mediaTrackGroup.id
+
+                    // CRITICAL FIX: Check BOTH group ID and track index
+                    if (currentGroupId == groupId) {
+                        if (trackIndex < group.length) {
+                            val format = group.getTrackFormat(trackIndex)
+                            if (format.sampleMimeType?.startsWith("text/") == true ||
+                                format.sampleMimeType?.startsWith("application/") == true) {
+                                val label = format.label ?: format.language ?: "Subtitle $trackIndex"
+                                println("[TRACK-SELECT] SUCCESS: Selecting subtitle - Group: '$currentGroupId', Index: $trackIndex, Label: '$label'")
+
                                 player.trackSelectionParameters = player.trackSelectionParameters
                                     .buildUpon()
                                     .setOverrideForType(
-                                        TrackSelectionOverride(group.mediaTrackGroup, listOf(i))
+                                        TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex))
                                     )
                                     .build()
                                 updateAvailableTracks()
@@ -774,70 +832,17 @@ class VideoPlayerViewModel @Inject constructor(
                         }
                     }
                 }
+
+                println("[TRACK-SELECT] ERROR: No matching track found for ID: $trackId")
             } catch (e: Exception) {
                 println("[ERROR] Failed to select subtitle track: ${e.message}")
-            }
-        }
-    }
-
-    private fun fetchTmdbLogo() {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            try {
-                val apiKey = "2e0fbf76c02c5ed160c195b216daa7b3"
-                val endpoint = if (contentType == "tv") "tv" else "movie"
-                val url = "https://api.themoviedb.org/3/$endpoint/$tmdbId/images?api_key=$apiKey"
-
-                println("[DEBUG] Fetching TMDB logo from: $url")
-
-                val request = okhttp3.Request.Builder()
-                    .url(url)
-                    .build()
-
-                val response = okHttpClient.newCall(request).execute()
-                val jsonString = response.body?.string()
-
-                println("[DEBUG] TMDB API response code: ${response.code}")
-
-                if (response.isSuccessful && jsonString != null) {
-                    println("[DEBUG] TMDB response length: ${jsonString.length}")
-
-                    // Parse JSON to extract logo file_path
-                    // Using simple string matching since we don't have Gson/Moshi in scope
-                    val logosMatch = """"logos"\s*:\s*\[(.*?)\]""".toRegex(RegexOption.DOT_MATCHES_ALL)
-                        .find(jsonString)
-
-                    if (logosMatch != null) {
-                        val logosArray = logosMatch.groupValues[1]
-                        println("[DEBUG] Logos array found, length: ${logosArray.length}")
-
-                        val filePathMatch = """"file_path"\s*:\s*"(/[^"]+)"""".toRegex()
-                            .find(logosArray)
-
-                        if (filePathMatch != null) {
-                            val filePath = filePathMatch.groupValues[1]
-                            val logoUrl = "https://image.tmdb.org/t/p/w500$filePath" // Use w500 for better quality
-                            println("[INFO] ✅ Fetched TMDB logo: $logoUrl")
-
-                            _uiState.value = _uiState.value.copy(logoUrl = logoUrl)
-                        } else {
-                            println("[WARN] ⚠️ No logo file_path found in logos array")
-                            println("[DEBUG] First 200 chars of logos array: ${logosArray.take(200)}")
-                        }
-                    } else {
-                        println("[WARN] ⚠️ No logos array found in TMDB response")
-                        println("[DEBUG] First 500 chars of response: ${jsonString.take(500)}")
-                    }
-                } else {
-                    println("[ERROR] ❌ Failed to fetch TMDB images: ${response.code}")
-                    println("[DEBUG] Response body: ${jsonString?.take(200)}")
-                }
-            } catch (e: Exception) {
-                println("[ERROR] ❌ Exception fetching TMDB logo: ${e.message}")
                 e.printStackTrace()
-                // Non-critical, continue without logo
             }
         }
     }
+
+    // fetchTmdbLogo() method REMOVED - We ONLY use server-provided logoPath from our API
+    // Server API returns logoPath in detail endpoint, which is passed via navigation
 
     /**
      * Handle buffering event for adaptive bitrate - detect stuttering

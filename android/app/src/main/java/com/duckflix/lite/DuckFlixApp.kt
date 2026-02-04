@@ -153,7 +153,13 @@ fun DuckFlixApp(
         ) {
             DetailScreen(
                 onPlayClick = { tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage ->
-                    navController.navigate(Screen.Player.createRoute(tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage))
+                    println("[LOGO-DEBUG-NAV] Navigation to player:")
+                    println("[LOGO-DEBUG-NAV]   title: $title")
+                    println("[LOGO-DEBUG-NAV]   posterUrl: $posterUrl")
+                    println("[LOGO-DEBUG-NAV]   logoUrl: $logoUrl")
+                    val route = Screen.Player.createRoute(tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage)
+                    println("[LOGO-DEBUG-NAV]   route: $route")
+                    navController.navigate(route)
                 },
                 onSearchTorrents = { tmdbId, title ->
                     // TODO: Navigate to torrent search/Prowlarr flow
@@ -214,6 +220,11 @@ fun DuckFlixApp(
                     nullable = true
                     defaultValue = null
                 },
+                navArgument("logoUrl") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
                 navArgument("originalLanguage") {
                     type = NavType.StringType
                     nullable = true
@@ -230,10 +241,11 @@ fun DuckFlixApp(
                 val title = currentEntry.arguments?.getString("title") ?: return@onAutoPlayNext
                 val year = currentEntry.arguments?.getString("year")
                 val posterUrl = currentEntry.arguments?.getString("posterUrl")
+                val logoUrl = currentEntry.arguments?.getString("logoUrl")
                 val originalLanguage = currentEntry.arguments?.getString("originalLanguage")
 
                 navController.navigate(
-                    Screen.Player.createRoute(tmdbId, title, year, "tv", season, episode, null, posterUrl, null, originalLanguage)
+                    Screen.Player.createRoute(tmdbId, title, year, "tv", season, episode, null, posterUrl, logoUrl, originalLanguage)
                 ) {
                     popUpTo(Screen.Player.route) { inclusive = true }
                 }
