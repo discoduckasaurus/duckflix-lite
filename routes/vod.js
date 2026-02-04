@@ -218,8 +218,9 @@ router.post('/stream-url/start', async (req, res) => {
 
     logger.info(`Created download job ${jobId} for ${title}`);
 
-    // Start download in background
-    processRdDownload(jobId, { tmdbId, title, year, type, season, episode, userId });
+    // Start download in background (pass host for stream proxy URL generation)
+    const serverHost = req.get('host');
+    processRdDownload(jobId, { tmdbId, title, year, type, season, episode, userId, serverHost });
 
     res.json({
       immediate: false,
@@ -303,7 +304,7 @@ router.delete('/stream-url/cancel/:jobId', (req, res) => {
  * Background RD download processor with progressive updates
  */
 async function processRdDownload(jobId, contentInfo) {
-  const { tmdbId, title, year, type, season, episode, userId } = contentInfo;
+  const { tmdbId, title, year, type, season, episode, userId, serverHost } = contentInfo;
 
   try {
     const rdApiKey = getUserRdApiKey(userId);
@@ -353,12 +354,17 @@ async function processRdDownload(jobId, contentInfo) {
 
     // If Zurg selected (shouldn't happen, but handle it)
     if (resolution.source === 'zurg') {
+      // Create stream proxy URL instead of direct Zurg URL
+      const streamId = Buffer.from(resolution.zurgPath, 'utf-8').toString('base64url');
+      const proxyUrl = `https://${serverHost}/api/vod/stream/${streamId}`;
+
       downloadJobManager.updateJob(jobId, {
         status: 'completed',
         progress: 100,
         message: 'Ready to play',
-        streamUrl: `${process.env.ZURG_BASE_URL || 'http://localhost:9999'}${resolution.zurgPath}`,
-        fileName: resolution.zurgPath.split('/').pop()
+        streamUrl: proxyUrl,
+        fileName: resolution.zurgPath.split('/').pop(),
+        source: 'zurg'
       });
       return;
     }
