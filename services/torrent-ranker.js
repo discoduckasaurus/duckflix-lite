@@ -158,10 +158,14 @@ const rankTorrents = (torrents, type, downloadType, episodeCount = 1, cachedHash
         score += 50;
       }
 
-      // Subtitle indicators (embedded subs are valuable)
-      const hasSubs = /\b(SUBS|SUBTITLES|SUBBED)\b/.test(titleUpper);
-      if (hasSubs) {
-        score += 20;
+      // Subtitle indicators (embedded subs strongly preferred)
+      const hasSubs = /\b(SUBS?|SUBTITLES?|SUBBED|MULTISUBS?|MULTI[\.\-_\s]?SUBS?)\b/.test(titleUpper);
+      const hasEngSubs = /\b(ENG[\.\-_\s]?SUBS?|ENGLISH[\.\-_\s]?SUBS?|ENGSUB)\b/.test(titleUpper);
+      if (hasSubs || hasEngSubs) {
+        score += 500;  // Strong preference: 720p+subs beats 1080p, but 480p+subs doesn't beat 1080p
+      }
+      if (hasEngSubs) {
+        score += 50;   // Additional English sub preference
       }
 
       // Foreign language markers (penalize if no English indicator)
