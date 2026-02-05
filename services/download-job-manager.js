@@ -33,11 +33,33 @@ class DownloadJobManager {
       fileSize: null,
       source: null,
       error: null,
+      attemptedSources: [], // Track all sources tried
       createdAt: Date.now(),
       completedAt: null
     });
 
     return jobId;
+  }
+
+  /**
+   * Track that a source was attempted for this job
+   */
+  addAttemptedSource(jobId, sourceInfo) {
+    const job = this.jobs.get(jobId);
+    if (job && job.attemptedSources) {
+      job.attemptedSources.push({
+        ...sourceInfo,
+        attemptedAt: Date.now()
+      });
+    }
+  }
+
+  /**
+   * Get list of attempted sources for a job
+   */
+  getAttemptedSources(jobId) {
+    const job = this.jobs.get(jobId);
+    return job?.attemptedSources || [];
   }
 
   updateJob(jobId, updates) {
