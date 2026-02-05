@@ -41,7 +41,14 @@ object NetworkModule {
         val cacheSize = 10 * 1024 * 1024L // 10 MB
         val cache = Cache(File(context.cacheDir, "http_cache"), cacheSize)
 
-        val logging = HttpLoggingInterceptor().apply {
+        val logging = HttpLoggingInterceptor { message ->
+            // Add marker for logo-related responses
+            if (message.contains("logoPath") || message.contains("/search/tmdb/")) {
+                println("[LOGO-DEBUG-HTTP] $message")
+            } else {
+                println(message)
+            }
+        }.apply {
             level = HttpLoggingInterceptor.Level.BODY
         }
 
@@ -62,7 +69,7 @@ object NetworkModule {
             .addInterceptor(authInterceptor)
             .addInterceptor(logging)
             .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)  // Increased to 90s for stream polling
             .writeTimeout(30, TimeUnit.SECONDS)
             .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
             .hostnameVerifier { _, _ -> true }

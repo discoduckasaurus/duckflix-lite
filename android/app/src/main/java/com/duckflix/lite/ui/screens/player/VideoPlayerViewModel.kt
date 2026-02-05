@@ -45,16 +45,15 @@ data class AudioTrackCandidate(
 )
 
 enum class LoadingPhase {
-    CHECKING_CACHE,      // Checking Zurg + RD cache
-    SEARCHING,           // Searching for sources (no progress UI shown)
-    DOWNLOADING,         // RD downloading torrent
-    BUFFERING,           // ExoPlayer buffering
-    READY                // Ready to play
+    SEARCHING,    // Finding sources (unified - no cache check phase)
+    DOWNLOADING,  // Server downloading from Real-Debrid
+    BUFFERING,    // ExoPlayer buffering
+    READY         // Ready to play
 }
 
 data class PlayerUiState(
     val isLoading: Boolean = true,
-    val loadingPhase: LoadingPhase = LoadingPhase.CHECKING_CACHE,
+    val loadingPhase: LoadingPhase = LoadingPhase.SEARCHING,
     val downloadProgress: Int = 0,
     val downloadMessage: String = "",
     val sourceStatus: String = "", // Secondary status like "Trying source 1", "Requesting Download"
@@ -77,7 +76,12 @@ data class PlayerUiState(
     val showSeriesCompleteOverlay: Boolean = false,
     val showRecommendationsOverlay: Boolean = false,
     val showRandomEpisodeError: Boolean = false,
-    val autoPlayCountdown: Int = 0
+    val autoPlayCountdown: Int = 0,
+    val showVideoIssuesPanel: Boolean = false,
+    val showAudioPanel: Boolean = false,
+    val showSubtitlePanel: Boolean = false,
+    val isReportingBadLink: Boolean = false,
+    val displayQuality: String = "" // e.g., "2160p" from server
 )
 
 @HiltViewModel
@@ -108,6 +112,7 @@ class VideoPlayerViewModel @Inject constructor(
     private var currentStreamUrl: String? = null
     private var currentErrorId: Int? = null
     private var isSelectingTrack = false // Prevent infinite loop during auto-selection
+    private var isAddingSubtitles = false // Don't show errors during subtitle loading
 
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
@@ -151,8 +156,10 @@ class VideoPlayerViewModel @Inject constructor(
             while (_player != null) {
                 delay(1000)
                 _player?.let { player ->
+                    val currentPos = player.currentPosition
+
                     _uiState.value = _uiState.value.copy(
-                        currentPosition = player.currentPosition,
+                        currentPosition = currentPos,
                         duration = player.duration.coerceAtLeast(0),
                         bufferedPercentage = player.bufferedPercentage
                     )
@@ -170,7 +177,14 @@ class VideoPlayerViewModel @Inject constructor(
                 .setUserAgent("ExoPlayer/DuckFlix")
         )
 
-        _player = ExoPlayer.Builder(context)
+        // Audio codec support: Enable FFmpeg extension for DDP5.1 Atmos, DTS, TrueHD, etc.
+        // EXTENSION_RENDERER_MODE_PREFER tries FFmpeg software decoder first (handles EAC3/Atmos)
+        // and falls back to MediaCodec hardware decoders if needed
+        val renderersFactory = androidx.media3.exoplayer.DefaultRenderersFactory(context)
+            .setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+            .setEnableDecoderFallback(true)
+
+        _player = ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .build().apply {
             addListener(object : Player.Listener {
@@ -194,6 +208,12 @@ class VideoPlayerViewModel @Inject constructor(
 
                     if (playbackState == Player.STATE_READY) {
                         println("[INFO] ExoPlayer: Media ready, duration=${duration}ms, playing=${isPlaying}")
+
+                        // Clear subtitle loading flag on successful ready state
+                        if (isAddingSubtitles) {
+                            println("[SUBTITLES] Subtitle loading completed successfully")
+                            isAddingSubtitles = false
+                        }
 
                         // Handle pending seek position now that we know the duration
                         pendingSeekPosition?.let { seekPos ->
@@ -232,6 +252,13 @@ class VideoPlayerViewModel @Inject constructor(
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                     println("[ERROR] ExoPlayer error: ${error.errorCodeName} - ${error.message}")
                     println("[ERROR] ExoPlayer error cause: ${error.cause?.message}")
+
+                    // If error occurred while adding subtitles, don't crash playback
+                    if (isAddingSubtitles) {
+                        println("[SUBTITLES] Error during subtitle loading - ignoring and continuing playback")
+                        isAddingSubtitles = false
+                        return
+                    }
 
                     // Log error to database for tracking and fallback strategies
                     viewModelScope.launch {
@@ -416,6 +443,13 @@ class VideoPlayerViewModel @Inject constructor(
         return candidates.firstOrNull()
     }
 
+    /**
+     * Validates that a stream URL is valid before attempting playback
+     */
+    private fun isValidStreamUrl(url: String?): Boolean {
+        return url != null && url.startsWith("http")
+    }
+
     private fun loadVideoUrl() {
         viewModelScope.launch {
             try {
@@ -423,9 +457,8 @@ class VideoPlayerViewModel @Inject constructor(
                 api.checkVodSession()
 
                 _uiState.value = _uiState.value.copy(
-                    loadingPhase = LoadingPhase.CHECKING_CACHE,
-                    downloadMessage = "Checking for cached content...",
-                    sourceStatus = "Trying source 1"
+                    loadingPhase = LoadingPhase.SEARCHING,
+                    downloadMessage = ""  // Server will provide via polling
                 )
 
                 val streamRequest = StreamUrlRequest(
@@ -444,14 +477,21 @@ class VideoPlayerViewModel @Inject constructor(
                     // Content is cached (Zurg or RD cache) - start loading immediately in background
                     println("[INFO] Immediate playback from ${startResponse.source}")
 
+                    // Validate stream URL before attempting playback
+                    if (!isValidStreamUrl(startResponse.streamUrl)) {
+                        throw Exception("Unable to find a working stream. Please try again later.")
+                    }
+
                     _uiState.value = _uiState.value.copy(
                         loadingPhase = LoadingPhase.SEARCHING,
-                        downloadMessage = "Preparing playback...",
-                        sourceStatus = "Source Found!"
+                        downloadMessage = "Preparing playback..."
                     )
 
                     // Start player loading in background immediately
                     startPlayback(startResponse.streamUrl!!, startResponse.fileName)
+
+                    // Fetch subtitles in background (non-blocking)
+                    fetchSubtitlesInBackground(startResponse.subtitles)
 
                     // Wait 3 seconds for animation while player loads in background
                     delay(3000)
@@ -467,8 +507,7 @@ class VideoPlayerViewModel @Inject constructor(
 
                     _uiState.value = _uiState.value.copy(
                         loadingPhase = LoadingPhase.SEARCHING,
-                        downloadJobId = jobId,
-                        sourceStatus = "Requesting Download"
+                        downloadJobId = jobId
                     )
 
                     pollDownloadProgress(jobId)
@@ -485,64 +524,86 @@ class VideoPlayerViewModel @Inject constructor(
     }
 
     private suspend fun pollDownloadProgress(jobId: String) {
+        var consecutiveErrors = 0
+        val maxConsecutiveErrors = 3
+
         try {
             while (true) {
                 delay(2000) // Poll every 2 seconds
 
-                val progress = api.getStreamProgress(jobId)
+                try {
+                    val progress = api.getStreamProgress(jobId)
+                    consecutiveErrors = 0 // Reset error counter on successful poll
 
-                // Update loading phase based on server status
-                val loadingPhase = when (progress.status) {
-                    "searching" -> LoadingPhase.SEARCHING
-                    "downloading" -> LoadingPhase.DOWNLOADING
-                    else -> _uiState.value.loadingPhase
-                }
+                    println("[POLL] Status: ${progress.status}, Progress: ${progress.progress}%, Message: '${progress.message}'")
 
-                // Extract source status from message or derive from status
-                val sourceStatus = when {
-                    progress.message.contains("source", ignoreCase = true) -> progress.message
-                    progress.status == "searching" -> "Trying source 2"
-                    progress.status == "downloading" -> "Requesting Download"
-                    else -> _uiState.value.sourceStatus
-                }
-
-                _uiState.value = _uiState.value.copy(
-                    loadingPhase = loadingPhase,
-                    downloadProgress = progress.progress,
-                    downloadMessage = progress.message,
-                    sourceStatus = sourceStatus
-                )
-
-                when (progress.status) {
-                    "completed" -> {
-                        println("[INFO] Download complete, preparing playback")
-
-                        // Update to preparing state
-                        _uiState.value = _uiState.value.copy(
-                            loadingPhase = LoadingPhase.SEARCHING,
-                            downloadProgress = 100,
-                            downloadMessage = "Preparing playback..."
-                        )
-
-                        // Start player loading in background immediately
-                        startPlayback(progress.streamUrl!!, progress.fileName)
-
-                        // Wait 3 seconds for animation while player loads in background
-                        delay(3000)
-
-                        // After animation, transition to ready state (will hide overlay and show player)
-                        _uiState.value = _uiState.value.copy(
-                            loadingPhase = LoadingPhase.READY
-                        )
-                        break
+                    // Update loading phase based on server status
+                    val loadingPhase = when (progress.status) {
+                        "searching" -> LoadingPhase.SEARCHING
+                        "downloading" -> LoadingPhase.DOWNLOADING
+                        else -> _uiState.value.loadingPhase
                     }
-                    "error" -> {
-                        throw Exception(progress.error ?: "Download failed")
+
+                    // Use server message directly - server provides comprehensive, user-friendly messages
+                    _uiState.value = _uiState.value.copy(
+                        loadingPhase = loadingPhase,
+                        downloadProgress = progress.progress,
+                        downloadMessage = progress.message
+                    )
+
+                    when (progress.status) {
+                        "completed" -> {
+                            // Validate stream URL before attempting playback
+                            if (!isValidStreamUrl(progress.streamUrl)) {
+                                throw Exception("Unable to find a working stream. Please try again later.")
+                            }
+
+                            println("[INFO] Download complete, preparing playback")
+
+                            // Update to preparing state
+                            _uiState.value = _uiState.value.copy(
+                                loadingPhase = LoadingPhase.SEARCHING,
+                                downloadProgress = 100,
+                                downloadMessage = "Preparing playback..."
+                            )
+
+                            // Start player loading in background immediately
+                            startPlayback(progress.streamUrl!!, progress.fileName)
+
+                            // Fetch subtitles in background (non-blocking)
+                            fetchSubtitlesInBackground(progress.subtitles)
+
+                            // Wait 3 seconds for animation while player loads in background
+                            delay(3000)
+
+                            // After animation, transition to ready state (will hide overlay and show player)
+                            _uiState.value = _uiState.value.copy(
+                                loadingPhase = LoadingPhase.READY
+                            )
+                            break
+                        }
+                        "failed" -> {
+                            throw Exception("Unable to find a working stream. Please try again later.")
+                        }
+                        "searching", "downloading" -> {
+                            // Continue polling - these are expected active states
+                            println("[POLL] Still ${progress.status}, continuing poll loop")
+                        }
+                        else -> {
+                            // Continue polling for unknown states
+                            println("[POLL] Unknown status '${progress.status}', continuing poll loop")
+                        }
                     }
-                    else -> {
-                        // Continue polling
-                        println("[DEBUG] Download progress: ${progress.progress}% - ${progress.message}")
+                } catch (e: Exception) {
+                    consecutiveErrors++
+                    println("[ERROR] Poll request failed (${consecutiveErrors}/$maxConsecutiveErrors): ${e.message}")
+
+                    if (consecutiveErrors >= maxConsecutiveErrors) {
+                        println("[ERROR] Too many consecutive poll failures, giving up")
+                        throw Exception("Connection lost while searching for stream")
                     }
+
+                    // Continue polling despite individual request failures
                 }
             }
         } catch (e: Exception) {
@@ -550,7 +611,7 @@ class VideoPlayerViewModel @Inject constructor(
             _uiState.value = _uiState.value.copy(
                 isLoading = false,
                 loadingPhase = LoadingPhase.READY,
-                error = "⚠️ Unfortunately this title isn't available at the moment. Please try again later."
+                error = "⚠️ ${e.message ?: "Unfortunately this title isn't available at the moment. Please try again later."}"
             )
         }
     }
@@ -802,7 +863,7 @@ class VideoPlayerViewModel @Inject constructor(
                     println("[TRACK-SELECT] Disabling subtitles")
                     player.trackSelectionParameters = player.trackSelectionParameters
                         .buildUpon()
-                        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                         .build()
                     updateAvailableTracks()
                     return
@@ -840,6 +901,7 @@ class VideoPlayerViewModel @Inject constructor(
 
                                 player.trackSelectionParameters = player.trackSelectionParameters
                                     .buildUpon()
+                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                                     .setOverrideForType(
                                         TrackSelectionOverride(group.mediaTrackGroup, listOf(trackIndex))
                                     )
@@ -1095,6 +1157,257 @@ class VideoPlayerViewModel @Inject constructor(
 
     fun selectRecommendation(rec: com.duckflix.lite.data.remote.dto.MovieRecommendationItem) {
         _uiState.value = _uiState.value.copy(selectedRecommendation = rec)
+    }
+
+    fun setVideoIssuesPanelVisible(visible: Boolean) {
+        _uiState.value = _uiState.value.copy(
+            showVideoIssuesPanel = visible,
+            showAudioPanel = if (visible) false else _uiState.value.showAudioPanel,
+            showSubtitlePanel = if (visible) false else _uiState.value.showSubtitlePanel
+        )
+    }
+
+    fun toggleAudioPanel() {
+        val newState = !_uiState.value.showAudioPanel
+        _uiState.value = _uiState.value.copy(
+            showAudioPanel = newState,
+            showSubtitlePanel = false,
+            showVideoIssuesPanel = false
+        )
+    }
+
+    fun toggleSubtitlePanel() {
+        val newState = !_uiState.value.showSubtitlePanel
+        _uiState.value = _uiState.value.copy(
+            showSubtitlePanel = newState,
+            showAudioPanel = false,
+            showVideoIssuesPanel = false
+        )
+    }
+
+    fun reportBadLink() {
+        viewModelScope.launch {
+            try {
+                _uiState.value = _uiState.value.copy(isReportingBadLink = true)
+
+                // Use current job ID if available, or create a new request
+                val jobId = _uiState.value.downloadJobId ?: "unknown"
+                val request = com.duckflix.lite.data.remote.dto.ReportBadRequest(
+                    jobId = jobId,
+                    reason = "User reported bad stream from player"
+                )
+
+                val response = api.reportBadStream(request)
+
+                if (response.success && response.newJobId != null) {
+                    // Server provided new job - start polling for new stream
+                    println("[REPORT-BAD] Got new job ID: ${response.newJobId}")
+                    _uiState.value = _uiState.value.copy(
+                        isReportingBadLink = false,
+                        showVideoIssuesPanel = false,
+                        loadingPhase = LoadingPhase.SEARCHING,
+                        downloadJobId = response.newJobId
+                    )
+                    pollDownloadProgress(response.newJobId)
+                } else {
+                    println("[REPORT-BAD] No new stream available: ${response.message}")
+                    _uiState.value = _uiState.value.copy(
+                        isReportingBadLink = false,
+                        error = response.message ?: "No alternative streams available"
+                    )
+                }
+            } catch (e: Exception) {
+                println("[ERROR] Failed to report bad link: ${e.message}")
+                _uiState.value = _uiState.value.copy(
+                    isReportingBadLink = false,
+                    error = "Failed to report issue: ${e.message}"
+                )
+            }
+        }
+    }
+
+    /**
+     * Fetch subtitles in background after playback starts
+     * This is non-blocking - subtitles will be added dynamically when available
+     */
+    private fun fetchSubtitlesInBackground(initialSubtitles: List<com.duckflix.lite.data.remote.dto.SubtitleDto>?) {
+        // If subtitles already provided, process them
+        if (!initialSubtitles.isNullOrEmpty()) {
+            println("[SUBTITLES] Using ${initialSubtitles.size} subtitles from stream response")
+            processSubtitles(initialSubtitles)
+            return
+        }
+
+        // Fetch subtitles in background
+        viewModelScope.launch {
+            try {
+                println("[SUBTITLES] Fetching subtitles in background for $contentTitle")
+
+                val request = com.duckflix.lite.data.remote.dto.SubtitleSearchRequest(
+                    tmdbId = tmdbId,
+                    title = contentTitle,
+                    year = year,
+                    type = contentType,
+                    season = season,
+                    episode = episode
+                )
+
+                val response = api.searchSubtitles(request)
+
+                if (response.subtitles.isNotEmpty()) {
+                    println("[SUBTITLES] Found ${response.subtitles.size} subtitles, processing...")
+                    processSubtitles(response.subtitles)
+                } else {
+                    println("[SUBTITLES] No subtitles found")
+                }
+            } catch (e: Exception) {
+                println("[SUBTITLES] Failed to fetch subtitles: ${e.message}")
+                // Non-critical - playback continues without subtitles
+            }
+        }
+    }
+
+    /**
+     * Process subtitles - route embedded vs external subtitles differently
+     */
+    private fun processSubtitles(subtitles: List<com.duckflix.lite.data.remote.dto.SubtitleDto>) {
+        // Separate embedded from external subtitles
+        val embeddedSubs = subtitles.filter { it.source == "embedded" && it.streamIndex != null }
+        val externalSubs = subtitles.filter { it.source != "embedded" && it.url != null }
+
+        println("[SUBTITLES] Found ${embeddedSubs.size} embedded, ${externalSubs.size} external subtitles")
+
+        // Store embedded subtitle info for track selection
+        if (embeddedSubs.isNotEmpty()) {
+            storeEmbeddedSubtitleInfo(embeddedSubs)
+        }
+
+        // Add external subtitles to player
+        if (externalSubs.isNotEmpty()) {
+            addExternalSubtitles(externalSubs)
+        }
+    }
+
+    // Store server-provided embedded subtitle metadata for enhanced track info
+    private var embeddedSubtitleInfo: Map<Int, com.duckflix.lite.data.remote.dto.SubtitleDto> = emptyMap()
+
+    /**
+     * Store embedded subtitle info from server for use when selecting tracks
+     */
+    private fun storeEmbeddedSubtitleInfo(subtitles: List<com.duckflix.lite.data.remote.dto.SubtitleDto>) {
+        embeddedSubtitleInfo = subtitles.associateBy { it.streamIndex!! }
+        println("[SUBTITLES] Stored ${embeddedSubtitleInfo.size} embedded subtitle track mappings")
+
+        // Update track list to include enhanced metadata
+        updateAvailableTracks()
+    }
+
+    /**
+     * Select an embedded subtitle track by stream index
+     */
+    fun selectEmbeddedSubtitleByIndex(streamIndex: Int) {
+        _player?.let { player ->
+            try {
+                println("[SUBTITLES] Selecting embedded subtitle at stream index: $streamIndex")
+
+                // Enable text track type
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .build()
+
+                // Find and select the subtitle track at the given stream index
+                var trackFound = false
+                player.currentTracks.groups.forEachIndexed { groupIndex, group ->
+                    for (i in 0 until group.length) {
+                        val format = group.getTrackFormat(i)
+                        if (format.sampleMimeType?.startsWith("text/") == true ||
+                            format.sampleMimeType?.startsWith("application/") == true) {
+                            // Check if this matches the stream index
+                            // Stream index in video files typically maps to track order
+                            if (groupIndex == streamIndex || i == streamIndex) {
+                                println("[SUBTITLES] Found embedded subtitle track at group $groupIndex, index $i")
+                                player.trackSelectionParameters = player.trackSelectionParameters
+                                    .buildUpon()
+                                    .setOverrideForType(
+                                        TrackSelectionOverride(group.mediaTrackGroup, listOf(i))
+                                    )
+                                    .build()
+                                trackFound = true
+                                updateAvailableTracks()
+                                return
+                            }
+                        }
+                    }
+                }
+
+                if (!trackFound) {
+                    println("[SUBTITLES] Could not find embedded subtitle at stream index $streamIndex")
+                }
+            } catch (e: Exception) {
+                println("[ERROR] Failed to select embedded subtitle: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Add external subtitle tracks to ExoPlayer
+     * Only processes subtitles with valid URLs (filters out embedded subtitles)
+     */
+    private fun addExternalSubtitles(subtitles: List<com.duckflix.lite.data.remote.dto.SubtitleDto>) {
+        _player?.let { player ->
+            try {
+                val currentMediaItem = player.currentMediaItem ?: return
+
+                // Filter to only subtitles with URLs (external/OpenSubtitles)
+                val externalSubs = subtitles.filter { it.url != null }
+                if (externalSubs.isEmpty()) {
+                    println("[SUBTITLES] No external subtitles with URLs to add")
+                    return
+                }
+
+                val subtitleConfigs = externalSubs.mapNotNull { subtitle ->
+                    val url = subtitle.url ?: return@mapNotNull null
+                    MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(url))
+                        .setMimeType("text/vtt") // Assuming VTT format
+                        .setLanguage(subtitle.languageCode ?: subtitle.language)
+                        .setLabel(subtitle.label ?: subtitle.language)
+                        .setId(subtitle.id?.toString() ?: "ext_${subtitle.language}")
+                        .build()
+                }
+
+                if (subtitleConfigs.isEmpty()) {
+                    println("[SUBTITLES] No valid subtitle configurations to add")
+                    return
+                }
+
+                // Create new media item with subtitles
+                val newMediaItem = currentMediaItem.buildUpon()
+                    .setSubtitleConfigurations(subtitleConfigs)
+                    .build()
+
+                // Save current position
+                val currentPosition = player.currentPosition
+                val wasPlaying = player.isPlaying
+
+                // Set flag so error handler ignores errors during subtitle loading
+                // Flag is cleared in onPlaybackStateChanged when STATE_READY or in onPlayerError
+                isAddingSubtitles = true
+
+                // Replace media item with subtitle-enabled version
+                player.setMediaItem(newMediaItem)
+                player.prepare()
+                player.seekTo(currentPosition)
+                if (wasPlaying) {
+                    player.play()
+                }
+
+                println("[SUBTITLES] Added ${subtitleConfigs.size} external subtitle tracks")
+            } catch (e: Exception) {
+                isAddingSubtitles = false // Clear on synchronous exceptions
+                println("[ERROR] Failed to add external subtitles: ${e.message}")
+            }
+        }
     }
 
     override fun onCleared() {

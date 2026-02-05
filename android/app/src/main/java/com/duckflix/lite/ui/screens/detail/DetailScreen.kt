@@ -26,9 +26,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
+import android.widget.Toast
+import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import com.duckflix.lite.data.remote.dto.CastDto
 import com.duckflix.lite.data.remote.dto.TmdbDetailResponse
@@ -39,13 +43,28 @@ import com.duckflix.lite.ui.components.MediaCard
 
 @Composable
 fun DetailScreen(
-    onPlayClick: (Int, String, String?, String, Int?, Int?, Long?, String?, String?, String?) -> Unit, // Added posterUrl, logoUrl, and originalLanguage params
+    onPlayClick: (Int, String, String?, String, Int?, Int?, Long?, String?, String?, String?, Boolean) -> Unit, // tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage, isRandom
     onSearchTorrents: (Int, String) -> Unit,
     onNavigateBack: () -> Unit,
     onActorClick: (Int) -> Unit,
     viewModel: DetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+
+    // Handle one-time events from ViewModel (toast, navigation)
+    LaunchedEffect(Unit) {
+        viewModel.events.collect { event ->
+            when (event) {
+                is DetailEvent.ShowToast -> {
+                    Toast.makeText(context, event.message, Toast.LENGTH_SHORT).show()
+                }
+                is DetailEvent.NavigateBack -> {
+                    onNavigateBack()
+                }
+            }
+        }
+    }
 
     BackHandler {
         if (uiState.selectedSeason != null) {
@@ -74,6 +93,21 @@ fun DetailScreen(
             }
 
             uiState.content != null -> {
+                // Create a focus requester for the primary action (Play button or Season dropdown)
+                val primaryActionFocusRequester = remember { FocusRequester() }
+
+                // Request focus on the primary action when content loads
+                LaunchedEffect(uiState.content, uiState.isCheckingZurg) {
+                    // Wait for zurg check to complete before focusing
+                    if (!uiState.isCheckingZurg) {
+                        try {
+                            primaryActionFocusRequester.requestFocus()
+                        } catch (_: IllegalStateException) {
+                            // FocusRequester not yet attached, ignore
+                        }
+                    }
+                }
+
                 ContentDetailView(
                     content = uiState.content!!,
                     contentType = uiState.contentType,
@@ -86,12 +120,13 @@ fun DetailScreen(
                     isInWatchlist = uiState.isInWatchlist,
                     isLoadingRandomEpisode = uiState.isLoadingRandomEpisode,
                     randomEpisodeError = uiState.randomEpisodeError,
+                    primaryActionFocusRequester = primaryActionFocusRequester,
                     onPlayClick = { content, type, season, episode, resumePosition, posterUrl, logoUrl ->
                         println("[LOGO-DEBUG-DETAIL] Preparing to play: ${content.title}")
                         println("[LOGO-DEBUG-DETAIL] logoUrl from content: ${content.logoUrl}")
                         println("[LOGO-DEBUG-DETAIL] logoUrl parameter: $logoUrl")
                         println("[LOGO-DEBUG-DETAIL] posterUrl: $posterUrl")
-                        onPlayClick(content.id, content.title, content.year, type, season, episode, resumePosition, posterUrl, logoUrl, content.originalLanguage)
+                        onPlayClick(content.id, content.title, content.year, type, season, episode, resumePosition, posterUrl, logoUrl, content.originalLanguage, false)
                     },
                     onSearchTorrents = { onSearchTorrents(it.id, it.title) },
                     onNavigateBack = onNavigateBack,
@@ -99,7 +134,7 @@ fun DetailScreen(
                     onToggleWatchlist = viewModel::toggleWatchlist,
                     onPlayRandomEpisode = {
                         viewModel.playRandomEpisode { season, episode ->
-                            onPlayClick(uiState.content!!.id, uiState.content!!.title, uiState.content!!.year, "tv", season, episode, null, uiState.content!!.posterUrl, uiState.content!!.logoUrl, uiState.content!!.originalLanguage)
+                            onPlayClick(uiState.content!!.id, uiState.content!!.title, uiState.content!!.year, "tv", season, episode, null, uiState.content!!.posterUrl, uiState.content!!.logoUrl, uiState.content!!.originalLanguage, true)
                         }
                     },
                     onActorClick = onActorClick
@@ -122,6 +157,7 @@ private fun ContentDetailView(
     isInWatchlist: Boolean,
     isLoadingRandomEpisode: Boolean,
     randomEpisodeError: String?,
+    primaryActionFocusRequester: FocusRequester,
     onPlayClick: (TmdbDetailResponse, String, Int?, Int?, Long?, String?, String?) -> Unit, // Added logoUrl param (originalLanguage extracted from TmdbDetailResponse)
     onSearchTorrents: (TmdbDetailResponse) -> Unit,
     onNavigateBack: () -> Unit,
@@ -280,7 +316,8 @@ private fun ContentDetailView(
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     FocusableButton(
                                         onClick = { onPlayClick(content, contentType, null, null, watchProgress.position, content.posterUrl, content.logoUrl) },
-                                        modifier = Modifier.width(140.dp).height(48.dp)
+                                        modifier = Modifier.width(140.dp).height(48.dp),
+                                        focusRequester = primaryActionFocusRequester
                                     ) {
                                         Text("\u25B6 Resume ($progressPercent%)", style = MaterialTheme.typography.bodyLarge)
                                     }
@@ -306,7 +343,8 @@ private fun ContentDetailView(
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 FocusableButton(
                                     onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl, content.logoUrl) },
-                                    modifier = Modifier.width(140.dp).height(48.dp)
+                                    modifier = Modifier.width(140.dp).height(48.dp),
+                                    focusRequester = primaryActionFocusRequester
                                 ) {
                                     Text("\u25B6 Play", style = MaterialTheme.typography.titleMedium)
                                 }
@@ -328,7 +366,8 @@ private fun ContentDetailView(
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 FocusableButton(
                                     onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl, content.logoUrl) },
-                                    modifier = Modifier.width(140.dp).height(48.dp)
+                                    modifier = Modifier.width(140.dp).height(48.dp),
+                                    focusRequester = primaryActionFocusRequester
                                 ) {
                                     Text("\u25B6 Play", style = MaterialTheme.typography.titleMedium)
                                 }
@@ -358,26 +397,34 @@ private fun ContentDetailView(
                         )
                     }
 
-                    // Seasons section directly below overview with minimal padding
+                    // Season controls (dropdown + random button) - stays in info column
                     if (contentType == "tv" && !content.seasons.isNullOrEmpty()) {
                         Spacer(modifier = Modifier.height(6.dp))
-                        SeasonsSection(
+                        SeasonControls(
                             seasons = content.seasons.sortedBy { it.seasonNumber },
-                            loadedSeasons = seasons,
                             selectedSeason = selectedSeason,
-                            isLoadingSeasons = isLoadingSeasons,
                             isLoadingRandomEpisode = isLoadingRandomEpisode,
                             randomEpisodeError = randomEpisodeError,
-                            seriesPosterUrl = content.posterUrl, // Pass series poster down
+                            focusRequester = primaryActionFocusRequester,
                             onSelectSeason = onSelectSeason,
-                            onEpisodeClick = { season, episode, resumePos, posterUrl ->
-                                onPlayClick(content, contentType, season, episode, resumePos, posterUrl, content.logoUrl)
-                            },
                             onPlayRandomEpisode = onPlayRandomEpisode
                         )
                     }
-
                 }
+            }
+
+            // Episode grid - full width below poster/info row
+            if (contentType == "tv" && selectedSeason != null) {
+                Spacer(modifier = Modifier.height(18.dp))
+                SeasonEpisodes(
+                    loadedSeasons = seasons,
+                    selectedSeason = selectedSeason,
+                    isLoadingSeasons = isLoadingSeasons,
+                    seriesPosterUrl = content.posterUrl,
+                    onEpisodeClick = { season, episode, resumePos, posterUrl ->
+                        onPlayClick(content, contentType, season, episode, resumePos, posterUrl, content.logoUrl)
+                    }
+                )
             }
 
             // Cast
@@ -395,17 +442,17 @@ private fun ContentDetailView(
     }
 }
 
+/**
+ * Season controls (dropdown + random button) - displayed in info column
+ */
 @Composable
-private fun SeasonsSection(
+private fun SeasonControls(
     seasons: List<com.duckflix.lite.data.remote.dto.SeasonInfoDto>,
-    loadedSeasons: Map<Int, com.duckflix.lite.data.remote.dto.TmdbSeasonResponse>,
     selectedSeason: Int?,
-    isLoadingSeasons: Boolean,
     isLoadingRandomEpisode: Boolean,
     randomEpisodeError: String?,
-    seriesPosterUrl: String?, // Series poster for Continue Watching
+    focusRequester: FocusRequester,
     onSelectSeason: (Int) -> Unit,
-    onEpisodeClick: (Int, Int, Long?, String?) -> Unit,
     onPlayRandomEpisode: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -421,7 +468,8 @@ private fun SeasonsSection(
             Box {
                 FocusableButton(
                     onClick = { expanded = !expanded },
-                    modifier = Modifier.width(260.dp).height(48.dp)
+                    modifier = Modifier.width(260.dp).height(48.dp),
+                    focusRequester = focusRequester
                 ) {
                     Row(
                         modifier = Modifier
@@ -485,20 +533,20 @@ private fun SeasonsSection(
                         )
                     }
 
-                    // Tooltip on focus - 50% bigger font and border
+                    // Tooltip on focus
                     if (isFocused) {
                         Surface(
                             modifier = Modifier
-                                .offset(y = (-62).dp) // Centered above button top border
+                                .offset(y = (-62).dp)
                                 .zIndex(10f),
                             color = Color.Black.copy(alpha = 0.9f),
-                            shape = RoundedCornerShape(6.dp) // Increased from 4dp
+                            shape = RoundedCornerShape(6.dp)
                         ) {
                             Text(
                                 text = "Play Random Episode",
-                                style = MaterialTheme.typography.bodyLarge, // Increased from bodySmall
+                                style = MaterialTheme.typography.bodyLarge,
                                 color = Color.White,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), // Increased padding
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                 textAlign = TextAlign.Center
                             )
                         }
@@ -522,40 +570,49 @@ private fun SeasonsSection(
                 style = MaterialTheme.typography.bodySmall
             )
         }
+    }
+}
 
-        // Show selected season info and episodes
-        if (selectedSeason != null) {
-            val loadedSeason = loadedSeasons[selectedSeason]
-            val seasonInfo = seasons.find { it.seasonNumber == selectedSeason }
+/**
+ * Season episodes (overview + grid) - displayed full width below poster/info
+ */
+@Composable
+private fun SeasonEpisodes(
+    loadedSeasons: Map<Int, com.duckflix.lite.data.remote.dto.TmdbSeasonResponse>,
+    selectedSeason: Int,
+    isLoadingSeasons: Boolean,
+    seriesPosterUrl: String?,
+    onEpisodeClick: (Int, Int, Long?, String?) -> Unit
+) {
+    val loadedSeason = loadedSeasons[selectedSeason]
 
-            // Season overview
-            if (loadedSeason?.overview != null && loadedSeason.overview.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = loadedSeason.overview,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.9f)
-                )
+    Column(
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        // Season overview
+        if (loadedSeason?.overview != null && loadedSeason.overview.isNotEmpty()) {
+            Text(
+                text = loadedSeason.overview,
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.9f)
+            )
+        }
+
+        // Episodes grid
+        if (isLoadingSeasons && loadedSeason == null) {
+            Box(
+                modifier = Modifier.fillMaxWidth().height(200.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                LoadingIndicator()
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Episodes grid
-            if (isLoadingSeasons && loadedSeason == null) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(200.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    LoadingIndicator()
-                }
-            } else if (loadedSeason != null && !loadedSeason.episodes.isNullOrEmpty()) {
-                EpisodeGrid(
-                    episodes = loadedSeason.episodes,
-                    seasonNumber = selectedSeason,
-                    seriesPosterUrl = seriesPosterUrl, // Pass series poster
-                    onEpisodeClick = onEpisodeClick
-                )
-            }
+        } else if (loadedSeason != null && !loadedSeason.episodes.isNullOrEmpty()) {
+            EpisodeGrid(
+                episodes = loadedSeason.episodes,
+                seasonNumber = selectedSeason,
+                seriesPosterUrl = seriesPosterUrl,
+                onEpisodeClick = onEpisodeClick
+            )
         }
     }
 }

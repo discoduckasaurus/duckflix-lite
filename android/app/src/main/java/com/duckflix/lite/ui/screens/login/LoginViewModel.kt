@@ -19,7 +19,8 @@ data class LoginUiState(
     val isLoggedIn: Boolean = false,
     val isMeasuringBandwidth: Boolean = false,
     val bandwidthMbps: Double? = null,
-    val error: String? = null
+    val error: String? = null,
+    val isCheckingAuth: Boolean = true  // Start with checking auth status
 )
 
 @HiltViewModel
@@ -36,7 +37,9 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             authRepository.isLoggedIn().collect { isLoggedIn ->
                 if (isLoggedIn) {
-                    _uiState.update { it.copy(isLoggedIn = true) }
+                    _uiState.update { it.copy(isLoggedIn = true, isCheckingAuth = false) }
+                } else {
+                    _uiState.update { it.copy(isCheckingAuth = false) }
                 }
             }
         }

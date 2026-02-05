@@ -64,6 +64,9 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
@@ -124,6 +127,9 @@ dependencies {
     implementation("androidx.media3:media3-decoder:$mediaVersion")
     implementation("androidx.media3:media3-exoplayer-dash:$mediaVersion") // DASH support
     implementation("androidx.media3:media3-datasource-okhttp:$mediaVersion") // Better HTTP handling
+
+    // Note: FFmpeg extension (media3-decoder-ffmpeg) requires building native libs from source
+    // For now, using setEnableDecoderFallback(true) + EXTENSION_RENDERER_MODE_PREFER for best effort
 
     // Coil (Image Loading)
     implementation("io.coil-kt:coil-compose:2.5.0")

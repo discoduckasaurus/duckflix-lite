@@ -124,7 +124,7 @@ fun MediaCard(
             )
             .focusable(interactionSource = interactionSource),
         interactionSource = interactionSource,
-        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp), // Less rounded corners (default is 12dp)
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
         border = if (isFocused) {
             BorderStroke(4.dp, MaterialTheme.colorScheme.primary)
         } else {

@@ -1,21 +1,15 @@
 package com.duckflix.lite.utils
 
 /**
- * Generates random loading phrase pairs with matching first letters
- * and anti-repetition for B phrases
+ * Generates loading phrase pairs with matching first letter and anti-repetition
  */
 class LoadingPhraseGenerator {
     private var lastBPhrase: String? = null
 
-    /**
-     * Generates a pair of phrases where both start with the same letter
-     * @return Pair<phraseA, phraseB> e.g., ("Buffering", "buffers")
-     */
     fun generatePair(): Pair<String, String> {
         val phrasesA = LoadingPhrasesCache.phrasesA
         val phrasesB = LoadingPhrasesCache.phrasesB
 
-        // Fallback if cache is empty
         if (phrasesA.isEmpty() || phrasesB.isEmpty()) {
             return Pair("Loading", "content")
         }
@@ -29,7 +23,7 @@ class LoadingPhraseGenerator {
             it.first().uppercaseChar() == firstLetter
         }
 
-        // If no matches (shouldn't happen with proper server data), use all B phrases
+        // If no matches (shouldn't happen with proper API data), use all B phrases
         if (matchingB.isEmpty()) {
             matchingB = phrasesB
         }
@@ -50,8 +44,7 @@ class LoadingPhraseGenerator {
     }
 
     /**
-     * Generates a combined phrase string
-     * @return String e.g., "Buffering buffers"
+     * Generate a complete phrase as a single string (for simpler use cases)
      */
     fun generatePhrase(): String {
         val (a, b) = generatePair()

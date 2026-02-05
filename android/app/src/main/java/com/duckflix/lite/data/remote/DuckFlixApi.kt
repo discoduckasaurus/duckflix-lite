@@ -198,5 +198,13 @@ interface DuckFlixApi {
     @GET("search/person/{personId}/credits")
     suspend fun getPersonCredits(@Path("personId") personId: Int): com.duckflix.lite.data.remote.dto.PersonCreditsResponse
 
+    // Report bad stream
+    @POST("vod/report-bad")
+    suspend fun reportBadStream(@Body request: com.duckflix.lite.data.remote.dto.ReportBadRequest): com.duckflix.lite.data.remote.dto.ReportBadResponse
+
+    // Subtitle search
+    @POST("vod/subtitles/search")
+    suspend fun searchSubtitles(@Body request: com.duckflix.lite.data.remote.dto.SubtitleSearchRequest): com.duckflix.lite.data.remote.dto.SubtitleSearchResponse
+
     // TODO: Add remaining API endpoints (Prowlarr search UI, etc.)
 }

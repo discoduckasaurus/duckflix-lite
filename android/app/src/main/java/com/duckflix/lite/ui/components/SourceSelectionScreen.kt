@@ -19,7 +19,6 @@ import coil.compose.rememberAsyncImagePainter
 import com.duckflix.lite.utils.LoadingPhraseGenerator
 import kotlinx.coroutines.delay
 import kotlin.math.sin
-import kotlin.random.Random
 
 /**
  * Unified source selection screen with slot machine animation
@@ -41,17 +40,9 @@ fun SourceSelectionScreen(
     println("[LOGO-DEBUG-SCREEN]   backdropUrl: $backdropUrl")
     println("[LOGO-DEBUG-SCREEN]   message: $message")
 
-    // Slot machine phrase pairs (A phrases + B phrases with same starting letter)
-    val phrasePairs = listOf(
-        "Fabricating" to "Films",
-        "Mixing" to "Movies",
-        "Tabulating" to "TV Shows",
-        "Synchronizing" to "Series",
-        "Finagling" to "Features",
-        "Edifying" to "Episodes"
-    )
-
-    var currentPairIndex by remember { mutableStateOf(Random.nextInt(phrasePairs.size)) }
+    // Dynamic phrase generator with API-loaded phrases
+    val phraseGenerator = remember { LoadingPhraseGenerator() }
+    var currentPair by remember { mutableStateOf(phraseGenerator.generatePair()) }
     var isSpinning by remember { mutableStateOf(false) }
     var showPhrase by remember { mutableStateOf(true) }
 
@@ -67,9 +58,8 @@ fun SourceSelectionScreen(
             isSpinning = true
             delay(800) // Spin duration
 
-            // Pick new random phrase
-            val newIndex = (currentPairIndex + Random.nextInt(1, phrasePairs.size)) % phrasePairs.size
-            currentPairIndex = newIndex
+            // Generate new phrase pair
+            currentPair = phraseGenerator.generatePair()
             isSpinning = false
         }
     }
@@ -137,30 +127,36 @@ fun SourceSelectionScreen(
 
             // Slot machine animated phrase
             SlotMachinePhrase(
-                phraseA = phrasePairs[currentPairIndex].first,
-                phraseB = phrasePairs[currentPairIndex].second,
+                phraseA = currentPair.first,
+                phraseB = currentPair.second,
                 isSpinning = isSpinning,
                 showPhrase = showPhrase
             )
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Source info message (e.g., "Source 1 1080p", "One moment, finding the best source")
+            // Source info message - server provides comprehensive, user-friendly messages
             Text(
                 text = message,
-                style = MaterialTheme.typography.bodyLarge, // Reduced from headlineLarge
+                style = MaterialTheme.typography.bodyLarge,
                 color = Color.White.copy(alpha = 0.9f),
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 32.dp) // Add horizontal padding for better text wrapping
+                modifier = Modifier.padding(horizontal = 32.dp)
             )
 
-            // Progress bar (only shown for DOWNLOADING phase)
+            // Progress bar (only shown when progress is significant or downloading)
             if (showProgress) {
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Linear progress bar
+                // Smooth animated progress bar
+                val animatedProgress by animateFloatAsState(
+                    targetValue = progress / 100f,
+                    animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
+                    label = "progressAnimation"
+                )
+
                 LinearProgressIndicator(
-                    progress = { progress / 100f },
+                    progress = { animatedProgress },
                     modifier = Modifier
                         .width(600.dp)
                         .height(16.dp),

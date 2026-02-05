@@ -110,6 +110,17 @@ class SearchViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(error = null)
     }
 
+    fun removeFromRecentlyWatched(item: RecentItem) {
+        viewModelScope.launch {
+            try {
+                api.deleteWatchProgress(item.tmdbId, item.type)
+                // The local DB will refresh automatically via Flow
+            } catch (e: Exception) {
+                println("[SearchViewModel] Failed to remove from recently watched: ${e.message}")
+            }
+        }
+    }
+
     private fun performSearch(query: String) {
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(isLoading = true, error = null)

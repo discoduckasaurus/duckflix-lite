@@ -2,16 +2,19 @@ package com.duckflix.lite.ui.screens.player
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
@@ -39,6 +42,14 @@ fun VideoPlayerScreen(
     val uiState by viewModel.uiState.collectAsState()
     val backgroundFocusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
 
+    // Track when controls become visible to trigger focus request
+    var controlsVisibleKey by remember { mutableStateOf(0) }
+    LaunchedEffect(uiState.showControls) {
+        if (uiState.showControls) {
+            controlsVisibleKey++
+        }
+    }
+
     // Request focus on background only when controls are hidden
     LaunchedEffect(uiState.showControls) {
         if (!uiState.showControls) {
@@ -51,8 +62,12 @@ fun VideoPlayerScreen(
         }
     }
 
+    // Activity counter - incremented on user interaction to reset auto-hide timer
+    var activityCounter by remember { mutableStateOf(0) }
+
     // Auto-hide controls after 5 seconds of inactivity
-    LaunchedEffect(uiState.showControls, uiState.isPlaying) {
+    // Restarts when activityCounter changes (user interaction)
+    LaunchedEffect(uiState.showControls, uiState.isPlaying, activityCounter) {
         if (uiState.showControls && uiState.isPlaying) {
             delay(5000)
             viewModel.hideControls()
@@ -68,6 +83,10 @@ fun VideoPlayerScreen(
     var indicatorJob by remember { mutableStateOf<Job?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
+    // Accumulated seek state for smooth rapid seeking (Bug 4 fix)
+    var accumulatedSeekTarget by remember { mutableStateOf<Long?>(null) }
+    var seekApplyJob by remember { mutableStateOf<Job?>(null) }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -80,20 +99,30 @@ fun VideoPlayerScreen(
                         .onKeyEvent { keyEvent ->
                             val currentTime = System.currentTimeMillis()
 
-                            // Handle on KeyDown for continuous seeking
+                            // Handle on KeyDown for continuous seeking with accumulation
                             if (keyEvent.type == KeyEventType.KeyDown) {
                                 when (keyEvent.key) {
                                     Key.DirectionRight -> {
                                         // Allow seeking if enough time has passed (debounce)
                                         if (currentTime - lastSeekTime >= seekDebounceMs) {
-                                            viewModel.seekForward()
+                                            // Accumulate seek target locally instead of calling seekForward each time
+                                            val basePosition = accumulatedSeekTarget ?: uiState.currentPosition
+                                            accumulatedSeekTarget = (basePosition + 10000).coerceAtMost(uiState.duration)
                                             lastSeekTime = currentTime
 
-                                            // Show +10s indicator
-                                            seekIndicator = "+10s"
-                                            indicatorJob?.cancel()
-                                            indicatorJob = coroutineScope.launch {
-                                                delay(1000)
+                                            // Show accumulated offset indicator
+                                            val totalOffset = accumulatedSeekTarget!! - uiState.currentPosition
+                                            seekIndicator = if (totalOffset >= 0) "+${totalOffset / 1000}s" else "${totalOffset / 1000}s"
+
+                                            // Cancel previous apply job and schedule new one
+                                            seekApplyJob?.cancel()
+                                            seekApplyJob = coroutineScope.launch {
+                                                delay(300) // Wait for rapid key events to settle
+                                                accumulatedSeekTarget?.let { target ->
+                                                    viewModel.seekTo(target)
+                                                    accumulatedSeekTarget = null
+                                                }
+                                                delay(700)
                                                 seekIndicator = null
                                             }
                                         }
@@ -102,14 +131,24 @@ fun VideoPlayerScreen(
                                     Key.DirectionLeft -> {
                                         // Allow seeking if enough time has passed (debounce)
                                         if (currentTime - lastSeekTime >= seekDebounceMs) {
-                                            viewModel.seekBackward()
+                                            // Accumulate seek target locally instead of calling seekBackward each time
+                                            val basePosition = accumulatedSeekTarget ?: uiState.currentPosition
+                                            accumulatedSeekTarget = (basePosition - 10000).coerceAtLeast(0)
                                             lastSeekTime = currentTime
 
-                                            // Show -10s indicator
-                                            seekIndicator = "-10s"
-                                            indicatorJob?.cancel()
-                                            indicatorJob = coroutineScope.launch {
-                                                delay(1000)
+                                            // Show accumulated offset indicator
+                                            val totalOffset = accumulatedSeekTarget!! - uiState.currentPosition
+                                            seekIndicator = if (totalOffset >= 0) "+${totalOffset / 1000}s" else "${totalOffset / 1000}s"
+
+                                            // Cancel previous apply job and schedule new one
+                                            seekApplyJob?.cancel()
+                                            seekApplyJob = coroutineScope.launch {
+                                                delay(300) // Wait for rapid key events to settle
+                                                accumulatedSeekTarget?.let { target ->
+                                                    viewModel.seekTo(target)
+                                                    accumulatedSeekTarget = null
+                                                }
+                                                delay(700)
                                                 seekIndicator = null
                                             }
                                         }
@@ -194,11 +233,14 @@ fun VideoPlayerScreen(
                 // Custom controls overlay
                 if (uiState.showControls) {
                     PlayerControls(
+                        controlsVisibleKey = controlsVisibleKey,
                         isPlaying = uiState.isPlaying,
                         isLoading = uiState.isLoading,
                         currentPosition = uiState.currentPosition,
                         duration = uiState.duration,
                         isAutoPlayEnabled = uiState.autoPlayEnabled,
+                        logoUrl = uiState.logoUrl,
+                        displayQuality = uiState.displayQuality,
                         onPlayPauseClick = viewModel::togglePlayPause,
                         onSeekForward = viewModel::seekForward,
                         onSeekBackward = viewModel::seekBackward,
@@ -209,7 +251,19 @@ fun VideoPlayerScreen(
                         onAudioTrackSelected = viewModel::selectAudioTrack,
                         onSubtitleTrackSelected = viewModel::selectSubtitleTrack,
                         onToggleAutoPlay = viewModel::toggleAutoPlay,
-                        onHideControls = viewModel::hideControls
+                        onHideControls = viewModel::hideControls,
+                        showVideoIssuesPanel = uiState.showVideoIssuesPanel,
+                        showAudioPanel = uiState.showAudioPanel,
+                        showSubtitlePanel = uiState.showSubtitlePanel,
+                        isReportingBadLink = uiState.isReportingBadLink,
+                        onToggleVideoIssuesPanel = { viewModel.setVideoIssuesPanelVisible(!uiState.showVideoIssuesPanel) },
+                        onToggleAudioPanel = viewModel::toggleAudioPanel,
+                        onToggleSubtitlePanel = viewModel::toggleSubtitlePanel,
+                        onReportBadLink = viewModel::reportBadLink,
+                        onDismissVideoIssuesPanel = { viewModel.setVideoIssuesPanelVisible(false) },
+                        onDismissAudioPanel = { viewModel.toggleAudioPanel() },
+                        onDismissSubtitlePanel = { viewModel.toggleSubtitlePanel() },
+                        onUserActivity = { activityCounter++ }
                     )
                 }
 
@@ -258,68 +312,42 @@ fun VideoPlayerScreen(
             }
         }
 
-        // Loading/Download progress overlay
-        when {
-            uiState.loadingPhase == LoadingPhase.CHECKING_CACHE -> {
-                // Show slot machine animation for Zurg cache check (no extra messaging)
-                SourceSelectionScreen(
-                    message = "",
-                    sourceStatus = uiState.sourceStatus,
-                    showProgress = false,
-                    logoUrl = uiState.logoUrl,
-                    backdropUrl = uiState.posterUrl,
-                    onCancel = {
-                        viewModel.cancelDownload()
-                        onNavigateBack()
-                    }
-                )
-            }
+        // Loading overlay - shown during SEARCHING or DOWNLOADING
+        if (uiState.loadingPhase == LoadingPhase.SEARCHING ||
+            uiState.loadingPhase == LoadingPhase.DOWNLOADING) {
 
-            uiState.loadingPhase == LoadingPhase.SEARCHING -> {
-                // Show slot machine animation with Prowlarr search message
-                SourceSelectionScreen(
-                    message = "One moment, finding the best source",
-                    sourceStatus = uiState.sourceStatus,
-                    showProgress = false,
-                    logoUrl = uiState.logoUrl,
-                    backdropUrl = uiState.posterUrl,
-                    onCancel = {
-                        viewModel.cancelDownload()
-                        onNavigateBack()
-                    }
-                )
-            }
+            // Show progress bar when progress >= 20 OR in DOWNLOADING phase
+            val shouldShowProgress = uiState.downloadProgress >= 20 ||
+                                    uiState.loadingPhase == LoadingPhase.DOWNLOADING
 
-            uiState.loadingPhase == LoadingPhase.DOWNLOADING -> {
-                // Show slot machine animation WITH progress bar
-                SourceSelectionScreen(
-                    message = uiState.downloadMessage,
-                    sourceStatus = uiState.sourceStatus,
-                    showProgress = true,
-                    progress = uiState.downloadProgress,
-                    logoUrl = uiState.logoUrl,
-                    backdropUrl = uiState.posterUrl,
-                    onCancel = {
-                        viewModel.cancelDownload()
-                        onNavigateBack()
-                    },
-                    onComeBackLater = {
-                        // Don't cancel download, just go back
-                        onNavigateBack()
-                    }
-                )
-            }
+            SourceSelectionScreen(
+                message = uiState.downloadMessage,
+                showProgress = shouldShowProgress,
+                progress = uiState.downloadProgress,
+                logoUrl = uiState.logoUrl,
+                backdropUrl = uiState.posterUrl,
+                onCancel = {
+                    viewModel.cancelDownload()
+                    onNavigateBack()
+                },
+                onComeBackLater = if (shouldShowProgress && uiState.downloadProgress < 100) {
+                    { onNavigateBack() }
+                } else null
+            )
         }
     }
 }
 
 @Composable
 private fun PlayerControls(
+    controlsVisibleKey: Int,
     isPlaying: Boolean,
     isLoading: Boolean,
     currentPosition: Long,
     duration: Long,
     isAutoPlayEnabled: Boolean,
+    logoUrl: String?,
+    displayQuality: String,
     onPlayPauseClick: () -> Unit,
     onSeekForward: () -> Unit,
     onSeekBackward: () -> Unit,
@@ -330,217 +358,116 @@ private fun PlayerControls(
     onAudioTrackSelected: (String) -> Unit,
     onSubtitleTrackSelected: (String) -> Unit,
     onToggleAutoPlay: () -> Unit,
-    onHideControls: () -> Unit
+    onHideControls: () -> Unit,
+    showVideoIssuesPanel: Boolean,
+    showAudioPanel: Boolean,
+    showSubtitlePanel: Boolean,
+    isReportingBadLink: Boolean,
+    onToggleVideoIssuesPanel: () -> Unit,
+    onToggleAudioPanel: () -> Unit,
+    onToggleSubtitlePanel: () -> Unit,
+    onReportBadLink: () -> Unit,
+    onDismissVideoIssuesPanel: () -> Unit,
+    onDismissAudioPanel: () -> Unit,
+    onDismissSubtitlePanel: () -> Unit,
+    onUserActivity: () -> Unit = {}
 ) {
     val playPauseFocusRequester = remember { FocusRequester() }
-    var audioExpanded by remember { mutableStateOf(false) }
-    var subtitleExpanded by remember { mutableStateOf(false) }
+    val autoplayButtonFocusRequester = remember { FocusRequester() }
+    val audioButtonFocusRequester = remember { FocusRequester() }
+    val ccButtonFocusRequester = remember { FocusRequester() }
+    val issuesButtonFocusRequester = remember { FocusRequester() }
+    val backButtonFocusRequester = remember { FocusRequester() }
+    val sliderFocusRequester = remember { FocusRequester() }
+    val coroutineScope = rememberCoroutineScope()
 
-    // Request focus on play/pause button when controls appear
-    LaunchedEffect(Unit) {
+    // Request focus on play/pause button when controls appear (unless a panel is open)
+    LaunchedEffect(controlsVisibleKey) {
         delay(100)
-        playPauseFocusRequester.requestFocus()
+        if (!showVideoIssuesPanel && !showAudioPanel && !showSubtitlePanel) {
+            playPauseFocusRequester.requestFocus()
+        }
     }
+
+    // Dim controls when any panel is open
+    val controlsAlpha = if (showVideoIssuesPanel || showAudioPanel || showSubtitlePanel) 0.3f else 1f
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.6f))
             .onKeyEvent { keyEvent ->
-                // Handle Back key to hide controls
+                // Handle Back key to hide controls (unless a panel is open - they handle their own back)
                 if (keyEvent.type == KeyEventType.KeyUp &&
                     (keyEvent.key == Key.Back || keyEvent.key == Key.Escape)) {
-                    onHideControls()
-                    true
+                    if (!showVideoIssuesPanel && !showAudioPanel && !showSubtitlePanel) {
+                        onHideControls()
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }
             }
     ) {
-        // Top bar with back button and track selection
-        Row(
+        // Top bar with back button and centered logo
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
                     horizontal = com.duckflix.lite.ui.components.TVSafeArea.HorizontalPadding,
                     vertical = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding
                 )
-                .align(Alignment.TopStart),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .align(Alignment.TopStart)
+                .alpha(controlsAlpha)
         ) {
-            com.duckflix.lite.ui.components.FocusableButton(
+            // Back button - left aligned
+            CircularBackButton(
                 onClick = onBackClick,
-                modifier = Modifier.padding(8.dp)
-            ) {
-                Text(
-                    text = "◀ Back",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Color.White
-                )
-            }
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .focusProperties {
+                        right = playPauseFocusRequester
+                    },
+                focusRequester = backButtonFocusRequester
+            )
 
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
+            // Logo + quality - centered
+            Column(
+                modifier = Modifier.align(Alignment.TopCenter),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // Audio button with dropdown
-                Box {
-                    com.duckflix.lite.ui.components.FocusableButton(
-                        onClick = {
-                            audioExpanded = !audioExpanded
-                            if (audioExpanded) subtitleExpanded = false
-                        }
-                    ) {
-                        Text(
-                            text = "\uD83D\uDD0A",
-                            style = MaterialTheme.typography.headlineSmall,
-                            color = Color.White
-                        )
-                    }
-
-                    if (audioExpanded && audioTracks.isNotEmpty()) {
-                        Column(
-                            modifier = Modifier
-                                .width(280.dp)
-                                .background(MaterialTheme.colorScheme.surface)
-                                .padding(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            audioTracks.forEach { track ->
-                                com.duckflix.lite.ui.components.FocusableButton(
-                                    onClick = {
-                                        onAudioTrackSelected(track.id)
-                                        audioExpanded = false
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = track.label,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            maxLines = 1,
-                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        if (track.isSelected) {
-                                            Text(
-                                                text = "✓",
-                                                color = MaterialTheme.colorScheme.primary,
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if (logoUrl != null) {
+                    coil.compose.AsyncImage(
+                        model = logoUrl,
+                        contentDescription = "Title",
+                        modifier = Modifier
+                            .height(80.dp)
+                            .widthIn(max = 300.dp),
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit
+                    )
                 }
-
-                // Subtitle button with dropdown
-                Box {
-                    com.duckflix.lite.ui.components.FocusableButton(
-                        onClick = {
-                            subtitleExpanded = !subtitleExpanded
-                            if (subtitleExpanded) audioExpanded = false
-                        }
-                    ) {
-                        Text(
-                            text = "CC",
-                            style = MaterialTheme.typography.titleLarge,
-                            color = Color.White
-                        )
-                    }
-
-                    if (subtitleExpanded) {
-                        Column(
-                            modifier = Modifier
-                                .width(280.dp)
-                                .background(MaterialTheme.colorScheme.surface)
-                                .padding(4.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            // "None" option
-                            com.duckflix.lite.ui.components.FocusableButton(
-                                onClick = {
-                                    onSubtitleTrackSelected("none")
-                                    subtitleExpanded = false
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "None",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    if (subtitleTracks.none { it.isSelected }) {
-                                        Text(
-                                            text = "✓",
-                                            color = MaterialTheme.colorScheme.primary,
-                                            style = MaterialTheme.typography.bodyMedium
-                                        )
-                                    }
-                                }
-                            }
-
-                            subtitleTracks.forEach { track ->
-                                com.duckflix.lite.ui.components.FocusableButton(
-                                    onClick = {
-                                        onSubtitleTrackSelected(track.id)
-                                        subtitleExpanded = false
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = track.label,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            maxLines = 1,
-                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        if (track.isSelected) {
-                                            Text(
-                                                text = "✓",
-                                                color = MaterialTheme.colorScheme.primary,
-                                                style = MaterialTheme.typography.bodyMedium
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if (displayQuality.isNotEmpty()) {
+                    Text(
+                        text = displayQuality,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.8f)
+                    )
                 }
             }
         }
 
-        // Center playback control (with top padding to avoid top bar)
+        // Center playback control
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
-                .padding(top = 80.dp)
+                .alpha(controlsAlpha)
         ) {
             // Play/Pause button - custom icon as the button itself
+            val playPauseInteractionSource = remember { MutableInteractionSource() }
+            val isPlayPauseFocused by playPauseInteractionSource.collectIsFocusedAsState()
+
             Image(
                 painter = painterResource(
                     id = if (isPlaying)
@@ -552,9 +479,71 @@ private fun PlayerControls(
                 modifier = Modifier
                     .size(96.dp)
                     .focusRequester(playPauseFocusRequester)
-                    .focusable()
-                    .clickable(enabled = !isLoading) { onPlayPauseClick() },
+                    .focusProperties {
+                        right = audioButtonFocusRequester
+                        down = sliderFocusRequester
+                    }
+                    .focusable(interactionSource = playPauseInteractionSource)
+                    .clickable(
+                        interactionSource = playPauseInteractionSource,
+                        indication = null,
+                        enabled = !isLoading
+                    ) { onPlayPauseClick() }
+                    .then(if (isPlayPauseFocused) Modifier.border(4.dp, Color.White, CircleShape) else Modifier),
                 alpha = if (isLoading) 0.5f else 1.0f
+            )
+        }
+
+        // Bottom-right control stack (Autoplay, Audio, CC, ?)
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(
+                    end = com.duckflix.lite.ui.components.TVSafeArea.HorizontalPadding,
+                    bottom = 200.dp
+                )
+                .alpha(controlsAlpha),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            PlayerIconButton(
+                iconRes = com.duckflix.lite.R.drawable.df_autoplay,
+                label = if (isAutoPlayEnabled) "Autoplay On" else "Autoplay Off",
+                onClick = onToggleAutoPlay,
+                isActive = isAutoPlayEnabled,
+                focusRequester = autoplayButtonFocusRequester,
+                focusUp = null,
+                focusDown = audioButtonFocusRequester,
+                focusLeft = playPauseFocusRequester,
+                onFocusChanged = { if (it) onUserActivity() }
+            )
+            PlayerIconButton(
+                iconRes = com.duckflix.lite.R.drawable.df_audio_track,
+                label = "Audio Track",
+                onClick = onToggleAudioPanel,
+                focusRequester = audioButtonFocusRequester,
+                focusUp = autoplayButtonFocusRequester,
+                focusDown = ccButtonFocusRequester,
+                focusLeft = playPauseFocusRequester,
+                onFocusChanged = { if (it) onUserActivity() }
+            )
+            PlayerIconButton(
+                iconRes = com.duckflix.lite.R.drawable.df_subs,
+                label = if (subtitleTracks.any { it.isSelected }) "Subtitles On" else "Subtitles Off",
+                onClick = onToggleSubtitlePanel,
+                isActive = subtitleTracks.any { it.isSelected },
+                focusRequester = ccButtonFocusRequester,
+                focusUp = audioButtonFocusRequester,
+                focusDown = issuesButtonFocusRequester,
+                onFocusChanged = { if (it) onUserActivity() }
+            )
+            PlayerIconButton(
+                iconRes = com.duckflix.lite.R.drawable.df_help,
+                label = "Video Issues",
+                onClick = onToggleVideoIssuesPanel,
+                focusRequester = issuesButtonFocusRequester,
+                focusUp = ccButtonFocusRequester,
+                onFocusChanged = { if (it) onUserActivity() }
             )
         }
 
@@ -566,32 +555,10 @@ private fun PlayerControls(
                     horizontal = com.duckflix.lite.ui.components.TVSafeArea.HorizontalPadding,
                     vertical = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding
                 )
-                .align(Alignment.BottomCenter),
+                .align(Alignment.BottomCenter)
+                .alpha(controlsAlpha),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Auto-play toggle
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = if (isAutoPlayEnabled) "Auto-play: ON" else "Auto-play: OFF",
-                    color = if (isAutoPlayEnabled) Color(0xFF00FF00) else Color.White.copy(0.7f),
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                com.duckflix.lite.ui.components.FocusableButton(
-                    onClick = onToggleAutoPlay,
-                    modifier = Modifier.padding(8.dp)
-                ) {
-                    Text(
-                        text = if (isAutoPlayEnabled) "⏯ Disable" else "⏯ Enable",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = Color.White
-                    )
-                }
-            }
-
             // Timeline with position and duration
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -618,6 +585,9 @@ private fun PlayerControls(
             val sliderInteractionSource = remember { MutableInteractionSource() }
             val isSliderFocused by sliderInteractionSource.collectIsFocusedAsState()
             var wasPlayingBeforeSeek by remember { mutableStateOf(false) }
+            // Track timing for rapid seek continuation (Bug 4 fix)
+            var lastSliderSeekTime by remember { mutableStateOf(0L) }
+            val sliderSeekTimeoutMs = 500L
 
             // Monitor drag interactions
             LaunchedEffect(sliderInteractionSource) {
@@ -648,8 +618,13 @@ private fun PlayerControls(
                 valueRange = 0f..duration.toFloat().coerceAtLeast(1f),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .focusRequester(sliderFocusRequester)
+                    .focusProperties {
+                        up = playPauseFocusRequester
+                    }
                     .onKeyEvent { keyEvent ->
                         val seekStep = 10000L // 10 seconds in milliseconds
+                        val currentTime = System.currentTimeMillis()
 
                         if (keyEvent.type == KeyEventType.KeyDown) {
                             when (keyEvent.key) {
@@ -659,8 +634,13 @@ private fun PlayerControls(
                                         isKeyboardSeeking = true
                                         wasPlayingBeforeSeek = isPlaying
                                         if (isPlaying) onPlayPauseClick() // Pause
-                                        previewPosition = currentPosition
+                                        // Only reset previewPosition if this is a fresh seek (not rapid continuation)
+                                        val timeSinceLastSeek = currentTime - lastSliderSeekTime
+                                        if (timeSinceLastSeek > sliderSeekTimeoutMs) {
+                                            previewPosition = currentPosition
+                                        }
                                     }
+                                    lastSliderSeekTime = currentTime
                                     // Seek forward
                                     previewPosition = (previewPosition + seekStep).coerceAtMost(duration)
                                     true
@@ -671,8 +651,13 @@ private fun PlayerControls(
                                         isKeyboardSeeking = true
                                         wasPlayingBeforeSeek = isPlaying
                                         if (isPlaying) onPlayPauseClick() // Pause
-                                        previewPosition = currentPosition
+                                        // Only reset previewPosition if this is a fresh seek (not rapid continuation)
+                                        val timeSinceLastSeek = currentTime - lastSliderSeekTime
+                                        if (timeSinceLastSeek > sliderSeekTimeoutMs) {
+                                            previewPosition = currentPosition
+                                        }
                                     }
+                                    lastSliderSeekTime = currentTime
                                     // Seek backward
                                     previewPosition = (previewPosition - seekStep).coerceAtLeast(0)
                                     true
@@ -682,13 +667,18 @@ private fun PlayerControls(
                         } else if (keyEvent.type == KeyEventType.KeyUp) {
                             when (keyEvent.key) {
                                 Key.DirectionRight, Key.DirectionLeft -> {
-                                    if (isKeyboardSeeking) {
-                                        // Apply the seek
-                                        onSeekTo(previewPosition)
-                                        isKeyboardSeeking = false
-                                        // Resume playback if it was playing before
-                                        if (wasPlayingBeforeSeek && !isPlaying) {
-                                            onPlayPauseClick()
+                                    // Use delayed application to handle rapid KeyDown+KeyUp pairs
+                                    coroutineScope.launch {
+                                        delay(200)
+                                        val timeSinceLastSeek = System.currentTimeMillis() - lastSliderSeekTime
+                                        if (isKeyboardSeeking && timeSinceLastSeek >= 200) {
+                                            // Apply the seek
+                                            onSeekTo(previewPosition)
+                                            isKeyboardSeeking = false
+                                            // Resume playback if it was playing before
+                                            if (wasPlayingBeforeSeek && !isPlaying) {
+                                                onPlayPauseClick()
+                                            }
                                         }
                                     }
                                     true
@@ -699,11 +689,11 @@ private fun PlayerControls(
                             false
                         }
                     }
-                    .focusable(),
+                    .focusable(interactionSource = sliderInteractionSource),
                 interactionSource = sliderInteractionSource,
                 colors = androidx.compose.material3.SliderDefaults.colors(
-                    thumbColor = if (isSliderFocused) Color.White else MaterialTheme.colorScheme.primary,
-                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                    thumbColor = if (isSliderFocused) Color.White else PlayerControlColors.PinkSolid,
+                    activeTrackColor = PlayerControlColors.PinkSolid,
                     inactiveTrackColor = Color.White.copy(alpha = 0.3f)
                 )
             )
@@ -714,6 +704,46 @@ private fun PlayerControls(
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.align(Alignment.CenterHorizontally)
+            )
+        }
+
+        // Side panels (slide in from right)
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showVideoIssuesPanel,
+            enter = androidx.compose.animation.slideInHorizontally(initialOffsetX = { it }) + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }) + androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
+            VideoIssuesPanel(
+                onRetryClick = onReportBadLink,
+                onDismiss = onDismissVideoIssuesPanel,
+                isLoading = isReportingBadLink
+            )
+        }
+
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showAudioPanel,
+            enter = androidx.compose.animation.slideInHorizontally(initialOffsetX = { it }) + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }) + androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
+            AudioPanel(
+                audioTracks = audioTracks,
+                onTrackSelected = onAudioTrackSelected,
+                onDismiss = onDismissAudioPanel
+            )
+        }
+
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showSubtitlePanel,
+            enter = androidx.compose.animation.slideInHorizontally(initialOffsetX = { it }) + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.slideOutHorizontally(targetOffsetX = { it }) + androidx.compose.animation.fadeOut(),
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
+            SubtitlePanel(
+                subtitleTracks = subtitleTracks,
+                onTrackSelected = onSubtitleTrackSelected,
+                onDismiss = onDismissSubtitlePanel
             )
         }
     }
@@ -727,6 +757,479 @@ private fun formatTime(millis: Long): String {
         String.format("%d:%02d:%02d", hours, minutes, seconds)
     } else {
         String.format("%d:%02d", minutes, seconds)
+    }
+}
+
+// Gradient colors for player controls
+object PlayerControlColors {
+    val TealGradient = listOf(Color(0xFF00BFA5), Color(0xFF00E676))
+    val PinkGradient = listOf(Color(0xFFE91E63), Color(0xFFAD1457))
+    val PinkSolid = Color(0xFFE91E63)
+}
+
+@Composable
+private fun GradientIconButton(
+    icon: String,
+    colors: List<Color>,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    onFocused: () -> Unit = {},
+    onUnfocused: () -> Unit = {}
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    LaunchedEffect(isFocused) {
+        if (isFocused) onFocused() else onUnfocused()
+    }
+
+    Box(
+        modifier = modifier
+            .size(48.dp)
+            .background(
+                brush = androidx.compose.ui.graphics.Brush.verticalGradient(colors),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
+            )
+            .then(
+                if (isFocused) {
+                    Modifier.border(
+                        width = 3.dp,
+                        color = Color.White,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp)
+                    )
+                } else {
+                    Modifier
+                }
+            )
+            .focusable(interactionSource = interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null
+            ) { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = icon,
+            style = MaterialTheme.typography.headlineSmall,
+            color = Color.White
+        )
+    }
+}
+
+/**
+ * Player icon button with PNG asset, tooltip on focus, and optional active/inactive state
+ */
+@Composable
+private fun PlayerIconButton(
+    iconRes: Int,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    isActive: Boolean = true,
+    focusRequester: FocusRequester? = null,
+    focusUp: FocusRequester? = null,
+    focusDown: FocusRequester? = null,
+    focusLeft: FocusRequester? = null,
+    focusRight: FocusRequester? = null,
+    onFocusChanged: (Boolean) -> Unit = {}
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    // Notify when focus changes
+    LaunchedEffect(isFocused) {
+        onFocusChanged(isFocused)
+    }
+
+    // Opacity: full when active or focused, reduced when inactive
+    val alpha = when {
+        isFocused -> 1f
+        isActive -> 0.9f
+        else -> 0.4f
+    }
+
+    // Fixed-size box that never changes - button is always in the same position
+    Box(
+        modifier = modifier.size(48.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        // The button image - fixed position
+        Image(
+            painter = painterResource(id = iconRes),
+            contentDescription = label,
+            modifier = Modifier
+                .fillMaxSize()
+                .alpha(alpha)
+                .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+                .focusProperties {
+                    if (focusUp != null) up = focusUp
+                    if (focusDown != null) down = focusDown
+                    if (focusLeft != null) left = focusLeft
+                    if (focusRight != null) right = focusRight
+                }
+                .focusable(interactionSource = interactionSource)
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null
+                ) { onClick() }
+                .then(
+                    if (isFocused) {
+                        Modifier.border(3.dp, Color.White, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                    } else {
+                        Modifier
+                    }
+                )
+        )
+
+        // Tooltip - positioned outside the box layout using wrapContentSize(unbounded = true)
+        // This allows it to overflow without affecting the parent's size
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .wrapContentSize(unbounded = true)
+                .offset(x = (-8).dp) // Small gap from button edge
+        ) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = isFocused,
+                enter = androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.fadeOut()
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .offset(x = (-100).dp) // Position text to the left
+                        .background(
+                            color = Color.Black.copy(alpha = 0.8f),
+                            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CircularBackButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    focusRequester: FocusRequester? = null
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Image(
+        painter = painterResource(id = com.duckflix.lite.R.drawable.df_back),
+        contentDescription = "Back",
+        modifier = modifier
+            .height(48.dp)
+            .then(
+                if (focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
+            )
+            .focusable(interactionSource = interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null
+            ) { onClick() }
+            .then(
+                if (isFocused) {
+                    Modifier.border(3.dp, Color.White, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
+                } else {
+                    Modifier
+                }
+            )
+    )
+}
+
+@Composable
+private fun VideoIssuesPanel(
+    onRetryClick: () -> Unit,
+    onDismiss: () -> Unit,
+    isLoading: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val retryFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(100)
+        retryFocusRequester.requestFocus()
+    }
+
+    androidx.compose.material3.Surface(
+        modifier = modifier
+            .width(400.dp)
+            .fillMaxHeight()
+            .padding(
+                start = 0.dp,
+                top = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding,
+                end = com.duckflix.lite.ui.components.TVSafeArea.HorizontalPadding,
+                bottom = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding
+            )
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type == KeyEventType.KeyUp &&
+                    (keyEvent.key == Key.Back || keyEvent.key == Key.Escape)) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            },
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                text = "Video Issues?",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Text(
+                text = "If you're experiencing buffering, playback errors, or quality issues, we can try finding an alternative source.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+            )
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            com.duckflix.lite.ui.components.FocusableButton(
+                onClick = onRetryClick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(retryFocusRequester),
+                enabled = !isLoading
+            ) {
+                Text(
+                    text = if (isLoading) "Searching..." else "Retry with Different Source",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+
+            com.duckflix.lite.ui.components.FocusableButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Cancel",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AudioPanel(
+    audioTracks: List<TrackInfo>,
+    onTrackSelected: (String) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val firstTrackFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(100)
+        firstTrackFocusRequester.requestFocus()
+    }
+
+    androidx.compose.material3.Surface(
+        modifier = modifier
+            .width(400.dp)
+            .fillMaxHeight()
+            .padding(
+                start = 0.dp,
+                top = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding,
+                end = com.duckflix.lite.ui.components.TVSafeArea.HorizontalPadding,
+                bottom = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding
+            )
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type == KeyEventType.KeyUp &&
+                    (keyEvent.key == Key.Back || keyEvent.key == Key.Escape)) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            },
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "Audio",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            audioTracks.forEachIndexed { index, track ->
+                com.duckflix.lite.ui.components.FocusableButton(
+                    onClick = {
+                        onTrackSelected(track.id)
+                        onDismiss()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (index == 0) Modifier.focusRequester(firstTrackFocusRequester) else Modifier)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = track.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (track.isSelected) {
+                            Text(
+                                text = "✓",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitlePanel(
+    subtitleTracks: List<TrackInfo>,
+    onTrackSelected: (String) -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val firstTrackFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        delay(100)
+        firstTrackFocusRequester.requestFocus()
+    }
+
+    androidx.compose.material3.Surface(
+        modifier = modifier
+            .width(400.dp)
+            .fillMaxHeight()
+            .padding(
+                start = 0.dp,
+                top = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding,
+                end = com.duckflix.lite.ui.components.TVSafeArea.HorizontalPadding,
+                bottom = com.duckflix.lite.ui.components.TVSafeArea.VerticalPadding
+            )
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type == KeyEventType.KeyUp &&
+                    (keyEvent.key == Key.Back || keyEvent.key == Key.Escape)) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            },
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "Subtitles",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            // "None" option
+            com.duckflix.lite.ui.components.FocusableButton(
+                onClick = {
+                    onTrackSelected("none")
+                    onDismiss()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(firstTrackFocusRequester)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "None",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (subtitleTracks.none { it.isSelected }) {
+                        Text(
+                            text = "✓",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
+            }
+
+            // Subtitle tracks
+            subtitleTracks.forEach { track ->
+                com.duckflix.lite.ui.components.FocusableButton(
+                    onClick = {
+                        onTrackSelected(track.id)
+                        onDismiss()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = track.label,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (track.isSelected) {
+                            Text(
+                                text = "✓",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

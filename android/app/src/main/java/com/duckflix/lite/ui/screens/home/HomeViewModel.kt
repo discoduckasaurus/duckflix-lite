@@ -153,6 +153,18 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    fun removeFromContinueWatching(item: ContinueWatchingItem) {
+        viewModelScope.launch {
+            try {
+                api.deleteWatchProgress(item.tmdbId, item.type)
+                // Refresh Continue Watching
+                loadContinueWatching()
+            } catch (e: Exception) {
+                println("[HomeViewModel] Failed to remove from continue watching: ${e.message}")
+            }
+        }
+    }
+
     private fun loadUserAdminStatus() {
         viewModelScope.launch {
             try {

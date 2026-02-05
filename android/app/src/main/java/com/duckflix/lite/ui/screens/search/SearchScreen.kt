@@ -24,6 +24,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,12 +44,14 @@ fun SearchScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val searchFocusRequester = remember { FocusRequester() }
     val backButtonFocusRequester = remember { FocusRequester() }
     val contentFocusRequester = remember { FocusRequester() }
 
     LaunchedEffect(Unit) {
         searchFocusRequester.requestFocus()
+        keyboardController?.hide()
     }
 
     BackHandler {
@@ -202,6 +205,9 @@ fun SearchScreen(
                     recentSearches = uiState.recentSearches,
                     recentlyWatched = uiState.recentlyWatched,
                     onContentSelected = onContentSelected,
+                    onRemoveRecentlyWatched = { item ->
+                        viewModel.removeFromRecentlyWatched(item)
+                    },
                     contentFocusRequester = contentFocusRequester
                 )
             }
@@ -400,6 +406,7 @@ private fun RecentContent(
     recentSearches: List<com.duckflix.lite.ui.screens.search.RecentItem>,
     recentlyWatched: List<com.duckflix.lite.ui.screens.search.RecentItem>,
     onContentSelected: (Int, String, String) -> Unit,
+    onRemoveRecentlyWatched: (RecentItem) -> Unit,
     contentFocusRequester: FocusRequester = remember { FocusRequester() }
 ) {
     // Track whether the focus requester has been assigned to the first card
@@ -432,6 +439,7 @@ private fun RecentContent(
                             RecentItemCard(
                                 item = item,
                                 onClick = { onContentSelected(item.tmdbId, item.title, item.type) },
+                                onRemove = { onRemoveRecentlyWatched(item) },
                                 modifier = Modifier.weight(1f),
                                 focusRequester = if (isFirstItem) contentFocusRequester else null
                             )
@@ -502,8 +510,11 @@ private fun RecentItemCard(
     item: com.duckflix.lite.ui.screens.search.RecentItem,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    onRemove: (() -> Unit)? = null
 ) {
+    var showRemoveDialog by remember { mutableStateOf(false) }
+
     MediaCard(
         onClick = onClick,
         modifier = modifier
@@ -541,5 +552,27 @@ private fun RecentItemCard(
                 }
             }
         }
+    }
+
+    // Remove confirmation dialog
+    if (showRemoveDialog && onRemove != null) {
+        AlertDialog(
+            onDismissRequest = { showRemoveDialog = false },
+            title = { Text("Remove from Recently Watched?") },
+            text = { Text(item.title) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showRemoveDialog = false
+                    onRemove()
+                }) {
+                    Text("Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
