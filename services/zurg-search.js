@@ -1,5 +1,32 @@
 const { findInZurgMount } = require('@duckflix/zurg-client');
 const logger = require('../utils/logger');
+const fs = require('fs').promises;
+
+/**
+ * Quick validation that a Zurg file is actually readable (not stale/expired from RD)
+ * Reads first 1KB to detect EIO errors before returning file as valid source
+ */
+async function isZurgFileReadable(filePath) {
+  if (!filePath) return false;
+
+  try {
+    const fd = await fs.open(filePath, 'r');
+    try {
+      const buffer = Buffer.alloc(1024);
+      const { bytesRead } = await fd.read(buffer, 0, 1024, 0);
+      await fd.close();
+      // Valid video files should have at least a few hundred bytes
+      return bytesRead >= 100;
+    } catch (readErr) {
+      await fd.close().catch(() => {});
+      logger.warn(`Zurg file read test failed: ${readErr.code || readErr.message}`);
+      return false;
+    }
+  } catch (openErr) {
+    logger.warn(`Zurg file open failed: ${openErr.code || openErr.message} - ${filePath.substring(0, 60)}`);
+    return false;
+  }
+}
 
 /**
  * Normalize title for comparison (remove special chars, lowercase)
@@ -64,14 +91,21 @@ async function searchZurg({ title, year, type, season, episode, duration }) {
   try {
     const mountPath = process.env.ZURG_MOUNT_PATH || '/mnt/zurg';
 
-    logger.info(`Searching Zurg: ${title} (${year}) - ${type}`, {
+    // Clean title: decode URL encoding (+) and remove problematic chars for search
+    const cleanTitle = title
+      .replace(/\+/g, ' ')  // URL-encoded spaces
+      .replace(/[!?]/g, '') // Punctuation that breaks search
+      .trim();
+
+    logger.info(`Searching Zurg: ${cleanTitle} (${year}) - ${type}`, {
+      originalTitle: title,
       season,
       episode,
       duration
     });
 
     const result = await findInZurgMount({
-      title,
+      title: cleanTitle,
       year,
       type,
       season,
@@ -79,13 +113,32 @@ async function searchZurg({ title, year, type, season, episode, duration }) {
       episodeRuntime: duration
     });
 
+    // Debug: Log what zurg-client returned
+    logger.debug(`Zurg-client returned: matches=${result.matches?.length || 0}, match=${!!result.match}, fallback=${!!result.fallback}`);
+    if (result.matches?.length > 0) {
+      logger.debug(`Zurg matches: ${result.matches.map(m => m.filePath?.substring(0, 60)).join(', ')}`);
+    }
+
     // CRITICAL: Verify title matches to prevent wrong content (e.g., American Dad vs The Office)
     // The zurg-client sometimes matches by year+episode pattern without verifying title
     if (result.matches && result.matches.length > 0) {
-      result.matches = filterByTitle(result.matches, title);
+      result.matches = filterByTitle(result.matches, cleanTitle);
+
+      // CRITICAL: Validate files are actually readable (not stale/expired from RD)
+      // This prevents blank screen issues when Zurg cache has stale entries
+      const validMatches = [];
+      for (const match of result.matches) {
+        const isReadable = await isZurgFileReadable(match.filePath);
+        if (isReadable) {
+          validMatches.push(match);
+        } else {
+          logger.warn(`Zurg: Filtered stale/unreadable file: ${match.filePath?.substring(0, 60)}`);
+        }
+      }
+      result.matches = validMatches;
 
       if (result.matches.length === 0) {
-        logger.warn(`Zurg: All ${result.matches?.length || 0} matches filtered out (wrong title)`);
+        logger.warn(`Zurg: All matches filtered out (wrong title or stale)`);
         result.match = null;
         result.fallback = null;
       } else {
@@ -95,15 +148,29 @@ async function searchZurg({ title, year, type, season, episode, duration }) {
       }
     }
 
-    // Also verify single match/fallback
-    if (result.match && !titleMatches(result.match.filePath || result.match.fileName, title)) {
-      logger.warn(`Zurg: Match filtered out (wrong title): ${result.match.filePath?.substring(0, 60)}`);
-      result.match = null;
+    // Also verify single match/fallback (title + readability)
+    if (result.match) {
+      const matchOk = titleMatches(result.match.filePath || result.match.fileName, cleanTitle);
+      const readable = matchOk && await isZurgFileReadable(result.match.filePath);
+      if (!matchOk) {
+        logger.warn(`Zurg: Match filtered out (wrong title): ${result.match.filePath?.substring(0, 60)}`);
+        result.match = null;
+      } else if (!readable) {
+        logger.warn(`Zurg: Match filtered out (stale/unreadable): ${result.match.filePath?.substring(0, 60)}`);
+        result.match = null;
+      }
     }
 
-    if (result.fallback && !titleMatches(result.fallback.filePath || result.fallback.fileName, title)) {
-      logger.warn(`Zurg: Fallback filtered out (wrong title): ${result.fallback.filePath?.substring(0, 60)}`);
-      result.fallback = null;
+    if (result.fallback) {
+      const fallbackOk = titleMatches(result.fallback.filePath || result.fallback.fileName, cleanTitle);
+      const readable = fallbackOk && await isZurgFileReadable(result.fallback.filePath);
+      if (!fallbackOk) {
+        logger.warn(`Zurg: Fallback filtered out (wrong title): ${result.fallback.filePath?.substring(0, 60)}`);
+        result.fallback = null;
+      } else if (!readable) {
+        logger.warn(`Zurg: Fallback filtered out (stale/unreadable): ${result.fallback.filePath?.substring(0, 60)}`);
+        result.fallback = null;
+      }
     }
 
     if (result.match) {

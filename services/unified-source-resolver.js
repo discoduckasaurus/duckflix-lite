@@ -253,6 +253,7 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
 
 /**
  * Unified ranking algorithm that treats cached sources equally
+ * Note: Codec compatibility is validated via ffprobe AFTER stream URL is resolved
  */
 function rankUnifiedSources(sources, type) {
   return sources

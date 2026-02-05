@@ -14,7 +14,7 @@ const { v4: uuidv4 } = require('uuid');
 const opensubtitlesService = require('../services/opensubtitles-service');
 const { detectEmbeddedSubtitles, getBestEmbeddedSubtitle } = require('../services/embedded-subtitle-service');
 const { standardizeLanguage } = require('../utils/language-standardizer');
-const { extractSubtitleStream } = require('../services/ffprobe-service');
+const { extractSubtitleStream, checkCodecCompatibility } = require('../services/ffprobe-service');
 const path = require('path');
 
 const router = express.Router();
@@ -40,19 +40,27 @@ router.get("/stream/:streamId", async (req, res) => {
 
   logger.info(`[Stream Proxy] Request for: ${filePath}`);
 
-  // Verify file exists
-  if (!require("fs").existsSync(filePath)) {
-    logger.error(`[Stream Proxy] File not found: ${filePath}`);
-    return res.status(404).json({ error: "File not found" });
+  const fs = require("fs");
+
+  // Verify file exists and get stats - wrap in try-catch for Zurg mount errors
+  let fileSize;
+  try {
+    if (!fs.existsSync(filePath)) {
+      logger.error(`[Stream Proxy] File not found: ${filePath}`);
+      return res.status(404).json({ error: "File not found" });
+    }
+    const stat = fs.statSync(filePath);
+    fileSize = stat.size;
+  } catch (err) {
+    logger.error(`[Stream Proxy] Filesystem error: ${err.code || err.message}`);
+    return res.status(503).json({ error: "Filesystem temporarily unavailable" });
   }
 
-  const stat = require("fs").statSync(filePath);
-  const fileSize = stat.size;
   const range = req.headers.range;
 
   // Detect MIME type
-  const path = require("path");
-  const ext = path.extname(filePath).toLowerCase();
+  const pathModule = require("path");
+  const ext = pathModule.extname(filePath).toLowerCase();
   const mimeTypes = {
     ".mp4": "video/mp4",
     ".mkv": "video/x-matroska",
@@ -62,6 +70,19 @@ router.get("/stream/:streamId", async (req, res) => {
   };
   const contentType = mimeTypes[ext] || "application/octet-stream";
 
+  // Helper to handle stream errors gracefully (prevents process crash on Zurg mount EIO)
+  const handleStreamError = (stream, streamType) => {
+    stream.on('error', (err) => {
+      logger.error(`[Stream Proxy] ${streamType} stream error: ${err.code || err.message}`);
+      if (!res.headersSent) {
+        res.status(503).json({ error: "Stream read error" });
+      } else {
+        res.destroy();
+      }
+    });
+    return stream;
+  };
+
   if (range) {
     const parts = range.replace(/bytes=/, "").split("-");
     const start = parseInt(parts[0], 10);
@@ -70,7 +91,7 @@ router.get("/stream/:streamId", async (req, res) => {
 
     logger.info(`[Stream Proxy] Range: ${start}-${end}/${fileSize}`);
 
-    const file = require("fs").createReadStream(filePath, { start, end });
+    const file = handleStreamError(fs.createReadStream(filePath, { start, end }), 'Range');
     const head = {
       "Content-Range": `bytes ${start}-${end}/${fileSize}`,
       "Accept-Ranges": "bytes",
@@ -86,7 +107,7 @@ router.get("/stream/:streamId", async (req, res) => {
       "Accept-Ranges": "bytes"
     };
     res.writeHead(200, head);
-    require("fs").createReadStream(filePath).pipe(res);
+    handleStreamError(fs.createReadStream(filePath), 'Full').pipe(res);
   }
 });
 
@@ -374,40 +395,76 @@ async function processRdDownload(jobId, contentInfo) {
         const isValid = await rdCacheService.verifyLink(cached.streamUrl);
 
         if (isValid) {
-          logger.info(`[RD Cache] ✅ Cached link verified, using it`);
-
-          // SUCCESS - use cached link directly
+          // Validate codec compatibility before using cached link
           downloadJobManager.updateJob(jobId, {
-            status: 'completed',
-            progress: 100,
-            message: 'Ready to play! (cached)',
-            streamUrl: cached.streamUrl,
-            fileName: cached.fileName,
-            quality: cached.resolution ? `${cached.resolution}p` : null,
-            subtitles: [] // Will be populated in background
+            status: 'searching',
+            message: 'Validating codec...'
           });
 
-          // Fetch subtitles in background (same as normal flow)
-          fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, cached.streamUrl, serverHost);
+          const codecCheck = await checkCodecCompatibility(cached.streamUrl);
 
-          // Track playback
-          try {
-            const job = downloadJobManager.getJob(jobId);
-            if (job && job.userInfo) {
-              downloadJobManager.trackPlayback(
-                contentInfo,
-                job.userInfo,
-                'rd-cached',
-                cached.streamUrl,
-                cached.fileName
-              );
+          if (!codecCheck.compatible) {
+            logger.warn({
+              msg: 'Codec rejected (cached link)',
+              rejected: true,
+              source: 'rd-cache',
+              codec: codecCheck.codec,
+              reason: codecCheck.reason,
+              probeTimeMs: codecCheck.probeTimeMs,
+              timedOut: codecCheck.timedOut
+            });
+            // Fall through to fresh search
+          } else {
+            // Compatible or timed out (assume compatible)
+            if (codecCheck.timedOut) {
+              logger.warn({
+                msg: 'Codec probe timeout on cached link (assuming compatible)',
+                source: 'rd-cache',
+                probeTimeMs: codecCheck.probeTimeMs,
+                timedOut: true
+              });
+            } else {
+              logger.info({
+                msg: 'Codec validated (cached link)',
+                source: 'rd-cache',
+                codec: codecCheck.codec,
+                probeTimeMs: codecCheck.probeTimeMs
+              });
             }
-          } catch (err) {
-            logger.warn('Failed to track cached playback:', err.message);
-          }
 
-          logger.info(`Download job ${jobId} completed from cache`);
-          return; // Exit early - no need to search
+            // SUCCESS - use cached link directly
+            downloadJobManager.updateJob(jobId, {
+              status: 'completed',
+              progress: 100,
+              message: 'Ready to play! (cached)',
+              streamUrl: cached.streamUrl,
+              fileName: cached.fileName,
+              quality: cached.resolution ? `${cached.resolution}p` : null,
+              subtitles: [] // Will be populated in background
+            });
+
+            // Fetch subtitles in background (same as normal flow)
+            fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, cached.streamUrl, serverHost);
+
+            // Track playback
+            try {
+              const job = downloadJobManager.getJob(jobId);
+              if (job && job.userInfo) {
+                downloadJobManager.trackPlayback(
+                  contentInfo,
+                  job.userInfo,
+                  'rd-cached',
+                  cached.streamUrl,
+                  cached.fileName
+                );
+              }
+            } catch (err) {
+              logger.warn('Failed to track cached playback:', err.message);
+            }
+
+            logger.info(`Download job ${jobId} completed from cache`);
+            return; // Exit early - no need to search
+          }
         } else {
           // Cached link is dead - invalidate and continue to fresh search
           logger.warn(`[RD Cache] ❌ Cached link dead, invalidating and searching fresh`);
@@ -491,12 +548,12 @@ async function processRdDownload(jobId, contentInfo) {
     ]);
 
     if (sourceQueue.length === 0 && !searchComplete) {
-      // No sources yet — recreate the promise so we wake up the instant sources arrive
+      // No sources yet — recreate the promise so we wake up the instant sources arrive via callback
+      // Do NOT include searchPromise here: getAllSources may return before Prowlarr callbacks fire
       sourcesAvailablePromise = new Promise(resolve => { sourcesAvailableResolve = resolve; });
       await Promise.race([
         sourcesAvailablePromise,
-        searchPromise,
-        new Promise(resolve => setTimeout(resolve, 15000)) // Extended wait for slow Prowlarr
+        new Promise(resolve => setTimeout(resolve, 20000)) // 20s for slow Prowlarr (total max: 30s)
       ]);
     }
 
@@ -557,30 +614,23 @@ async function processRdDownload(jobId, contentInfo) {
       });
 
       try {
+        let candidateUrl = null;
+        let candidateFilename = null;
+
         if (source.source === 'zurg') {
           // Try to resolve Zurg file to RD direct link
           const rdLink = await resolveZurgToRdLink(source.filePath, rdApiKey);
 
           if (rdLink) {
-            // Success - Zurg file resolved to RD link
-            result = {
-              download: rdLink,
-              filename: source.filePath.split('/').pop()
-            };
-            successfulSource = source;
+            candidateUrl = rdLink;
+            candidateFilename = source.filePath.split('/').pop();
             logger.info(`✅ Zurg source #${attemptNum} resolved to RD link`);
-            break;
           } else {
             // Zurg file couldn't be resolved to RD, try as proxy
             const streamId = Buffer.from(source.filePath, 'utf-8').toString('base64url');
-            const proxyUrl = `https://${serverHost}/api/vod/stream/${streamId}`;
-            result = {
-              download: proxyUrl,
-              filename: source.filePath.split('/').pop()
-            };
-            successfulSource = source;
+            candidateUrl = `https://${serverHost}/api/vod/stream/${streamId}`;
+            candidateFilename = source.filePath.split('/').pop();
             logger.info(`✅ Zurg source #${attemptNum} using proxy`);
-            break;
           }
         } else {
           // Prowlarr source - download from RD with timeout for slow downloads
@@ -632,12 +682,12 @@ async function processRdDownload(jobId, contentInfo) {
           });
 
           try {
-            result = await Promise.race([downloadPromise, timeoutPromise]);
+            const rdResult = await Promise.race([downloadPromise, timeoutPromise]);
 
-            if (result && result.download) {
-              successfulSource = source;
+            if (rdResult && rdResult.download) {
+              candidateUrl = rdResult.download;
+              candidateFilename = rdResult.filename;
               logger.info(`✅ Prowlarr source #${attemptNum} succeeded`);
-              break;
             }
           } catch (timeoutError) {
             if (timeoutError.message.includes('TIMEOUT')) {
@@ -649,6 +699,56 @@ async function processRdDownload(jobId, contentInfo) {
             }
             throw timeoutError; // Re-throw other errors
           }
+        }
+
+        // If we got a candidate URL, validate codec compatibility before accepting
+        if (candidateUrl) {
+          downloadJobManager.updateJob(jobId, {
+            status: 'searching',
+            message: `Validating codec...`
+          });
+
+          const codecCheck = await checkCodecCompatibility(candidateUrl);
+
+          // Log codec validation result
+          if (!codecCheck.compatible) {
+            logger.warn({
+              msg: 'Codec rejected',
+              rejected: true,
+              source: source.title?.substring(0, 50),
+              sourceType: source.source,
+              codec: codecCheck.codec,
+              reason: codecCheck.reason,
+              probeTimeMs: codecCheck.probeTimeMs,
+              timedOut: codecCheck.timedOut
+            });
+            lastError = new Error(`Incompatible codec: ${codecCheck.reason}`);
+            continue; // Try next source
+          } else if (codecCheck.timedOut) {
+            logger.warn({
+              msg: 'Codec probe timeout (assuming compatible)',
+              source: source.title?.substring(0, 50),
+              sourceType: source.source,
+              probeTimeMs: codecCheck.probeTimeMs,
+              timedOut: true
+            });
+          } else {
+            logger.info({
+              msg: 'Codec validated',
+              source: source.title?.substring(0, 50),
+              sourceType: source.source,
+              codec: codecCheck.codec,
+              probeTimeMs: codecCheck.probeTimeMs
+            });
+          }
+
+          // Codec is compatible - accept this source
+          result = {
+            download: candidateUrl,
+            filename: candidateFilename
+          };
+          successfulSource = source;
+          break;
         }
       } catch (error) {
         lastError = error;
@@ -879,27 +979,21 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
       });
 
       try {
+        let candidateUrl = null;
+        let candidateFilename = null;
+
         if (source.source === 'zurg') {
           const rdLink = await resolveZurgToRdLink(source.filePath, rdApiKey);
 
           if (rdLink) {
-            result = {
-              download: rdLink,
-              filename: source.filePath.split('/').pop()
-            };
-            successfulSource = source;
+            candidateUrl = rdLink;
+            candidateFilename = source.filePath.split('/').pop();
             logger.info(`✅ Alternative Zurg source ${attemptNum}/${allSources.length} resolved`);
-            break;
           } else {
             const streamId = Buffer.from(source.filePath, 'utf-8').toString('base64url');
-            const proxyUrl = `https://${serverHost}/api/vod/stream/${streamId}`;
-            result = {
-              download: proxyUrl,
-              filename: source.filePath.split('/').pop()
-            };
-            successfulSource = source;
+            candidateUrl = `https://${serverHost}/api/vod/stream/${streamId}`;
+            candidateFilename = source.filePath.split('/').pop();
             logger.info(`✅ Alternative Zurg source ${attemptNum}/${allSources.length} using proxy`);
-            break;
           }
         } else {
           // Prowlarr source with timeout for slow downloads
@@ -948,12 +1042,12 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
           });
 
           try {
-            result = await Promise.race([downloadPromise, timeoutPromise]);
+            const rdResult = await Promise.race([downloadPromise, timeoutPromise]);
 
-            if (result && result.download) {
-              successfulSource = source;
+            if (rdResult && rdResult.download) {
+              candidateUrl = rdResult.download;
+              candidateFilename = rdResult.filename;
               logger.info(`✅ Alternative Prowlarr source ${attemptNum}/${allSources.length} succeeded`);
-              break;
             }
           } catch (timeoutError) {
             if (timeoutError.message.includes('TIMEOUT')) {
@@ -965,6 +1059,55 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
             }
             throw timeoutError;
           }
+        }
+
+        // Validate codec compatibility before accepting
+        if (candidateUrl) {
+          downloadJobManager.updateJob(jobId, {
+            status: 'searching',
+            message: `Validating codec...`
+          });
+
+          const codecCheck = await checkCodecCompatibility(candidateUrl);
+
+          // Log codec validation result
+          if (!codecCheck.compatible) {
+            logger.warn({
+              msg: 'Codec rejected (re-search)',
+              rejected: true,
+              source: source.title?.substring(0, 50),
+              sourceType: source.source,
+              codec: codecCheck.codec,
+              reason: codecCheck.reason,
+              probeTimeMs: codecCheck.probeTimeMs,
+              timedOut: codecCheck.timedOut
+            });
+            lastError = new Error(`Incompatible codec: ${codecCheck.reason}`);
+            continue; // Try next source
+          } else if (codecCheck.timedOut) {
+            logger.warn({
+              msg: 'Codec probe timeout (assuming compatible)',
+              source: source.title?.substring(0, 50),
+              sourceType: source.source,
+              probeTimeMs: codecCheck.probeTimeMs,
+              timedOut: true
+            });
+          } else {
+            logger.info({
+              msg: 'Codec validated (re-search)',
+              source: source.title?.substring(0, 50),
+              sourceType: source.source,
+              codec: codecCheck.codec,
+              probeTimeMs: codecCheck.probeTimeMs
+            });
+          }
+
+          result = {
+            download: candidateUrl,
+            filename: candidateFilename
+          };
+          successfulSource = source;
+          break;
         }
       } catch (error) {
         lastError = error;

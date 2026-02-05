@@ -254,10 +254,161 @@ async function extractSubtitleStream(videoUrl, streamIndex, outputPath) {
   });
 }
 
+/**
+ * Incompatible codec patterns for low-end Android TV devices
+ * Based on actual decoder failure reports from Nvidia/Android TV
+ */
+const INCOMPATIBLE_CODECS = [
+  // H.264 profiles that fail on Android TV
+  /^avc1\.6E/i,      // High 10 Profile (10-bit) - all levels
+  /^avc1\.7A/i,      // High 4:2:2 Profile - all levels
+  /^avc1\.F4/i,      // High 4:4:4 Predictive - all levels
+  /^avc1\.64..33/i,  // High Profile Level 5.1
+  /^avc1\.64..34/i,  // High Profile Level 5.2
+
+  // HEVC/H.265 problematic profiles
+  /^hvc1\.2/i,       // Main 10 Profile (10-bit)
+  /^hev1\.2/i,       // Main 10 Profile alternate
+
+  // VP9 problematic profiles
+  /^vp09\.02/i,      // Profile 2 (10-bit)
+  /^vp09\.03/i,      // Profile 3 (10-bit + 4:2:2/4:4:4)
+];
+
+const CODEC_CHECK_TIMEOUT = 6000; // 6 seconds max per source
+
+/**
+ * Check if a video stream's codec is compatible with Android TV
+ * @param {string} videoUrl - URL to the video file
+ * @returns {Promise<{compatible: boolean, codec: string|null, reason: string|null, probeTimeMs: number, timedOut: boolean}>}
+ */
+async function checkCodecCompatibility(videoUrl) {
+  const startTime = Date.now();
+
+  if (!videoUrl) {
+    return { compatible: true, codec: null, reason: 'no_url', probeTimeMs: 0, timedOut: false };
+  }
+
+  return new Promise((resolve) => {
+    let stdout = '';
+    let timedOut = false;
+
+    // Only probe video stream, limit to first stream for speed
+    const args = [
+      '-v', 'quiet',
+      '-print_format', 'json',
+      '-show_streams',
+      '-select_streams', 'v:0', // First video stream only
+      videoUrl
+    ];
+
+    const proc = spawn('ffprobe', args, {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.on('error', (err) => {
+      const probeTimeMs = Date.now() - startTime;
+      logger.warn(`FFprobe codec check error: ${err.message}`);
+      resolve({ compatible: true, codec: null, reason: 'probe_error', probeTimeMs, timedOut: false });
+    });
+
+    proc.on('close', (code) => {
+      if (timedOut) return;
+
+      const probeTimeMs = Date.now() - startTime;
+
+      if (code !== 0) {
+        resolve({ compatible: true, codec: null, reason: 'probe_failed', probeTimeMs, timedOut: false });
+        return;
+      }
+
+      try {
+        const result = JSON.parse(stdout);
+        const videoStream = result.streams?.[0];
+
+        if (!videoStream) {
+          resolve({ compatible: true, codec: null, reason: 'no_video_stream', probeTimeMs, timedOut: false });
+          return;
+        }
+
+        // Get codec tag string (e.g., "avc1.6E0029", "hvc1.2.4.L120")
+        const codecTag = videoStream.codec_tag_string || '';
+        const codecName = videoStream.codec_name || '';
+        const profile = videoStream.profile || '';
+        const level = videoStream.level || 0;
+
+        // Build full codec identifier for logging
+        const fullCodec = codecTag || `${codecName} (${profile}, L${level})`;
+
+        // Check against incompatible patterns
+        for (const pattern of INCOMPATIBLE_CODECS) {
+          if (pattern.test(codecTag)) {
+            resolve({
+              compatible: false,
+              codec: fullCodec,
+              reason: 'exceeds_capabilities',
+              probeTimeMs,
+              timedOut: false
+            });
+            return;
+          }
+        }
+
+        // Additional check: H.264 High 10 might not have proper tag
+        if (codecName === 'h264' && profile?.toLowerCase().includes('high 10')) {
+          resolve({
+            compatible: false,
+            codec: fullCodec,
+            reason: 'exceeds_capabilities',
+            probeTimeMs,
+            timedOut: false
+          });
+          return;
+        }
+
+        // Additional check: HEVC Main 10
+        if ((codecName === 'hevc' || codecName === 'h265') && profile?.toLowerCase().includes('main 10')) {
+          resolve({
+            compatible: false,
+            codec: fullCodec,
+            reason: 'exceeds_capabilities',
+            probeTimeMs,
+            timedOut: false
+          });
+          return;
+        }
+
+        resolve({ compatible: true, codec: fullCodec, reason: null, probeTimeMs, timedOut: false });
+
+      } catch (parseErr) {
+        const probeTimeMs = Date.now() - startTime;
+        logger.warn(`FFprobe codec check parse error: ${parseErr.message}`);
+        resolve({ compatible: true, codec: null, reason: 'parse_error', probeTimeMs, timedOut: false });
+      }
+    });
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      proc.kill('SIGKILL');
+      const probeTimeMs = Date.now() - startTime;
+      // On timeout, assume compatible (don't block playback)
+      resolve({ compatible: true, codec: null, reason: 'timeout', probeTimeMs, timedOut: true });
+    }, CODEC_CHECK_TIMEOUT);
+
+    proc.on('close', () => clearTimeout(timeout));
+  });
+}
+
 module.exports = {
   isFFprobeAvailable,
   getSubtitleStreams,
   getAllStreams,
   extractSubtitleStream,
-  FFPROBE_TIMEOUT
+  checkCodecCompatibility,
+  FFPROBE_TIMEOUT,
+  CODEC_CHECK_TIMEOUT
 };
