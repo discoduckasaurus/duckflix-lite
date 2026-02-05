@@ -1,7 +1,9 @@
 const { db } = require('../db/init');
 const logger = require('../utils/logger');
+const axios = require('axios');
 
-const CACHE_TTL = 48 * 60 * 60 * 1000; // 48 hours in ms
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in ms
+const VERIFY_TIMEOUT = 5000; // 5 second timeout for link verification
 
 /**
  * Parse resolution from filename
@@ -130,6 +132,52 @@ class RdCacheService {
     }
 
     return result.changes;
+  }
+
+  /**
+   * Verify if an RD link is still valid/accessible
+   * Uses HEAD request to check without downloading content
+   * @param {string} streamUrl - The RD download URL to verify
+   * @returns {Promise<boolean>} - True if link is still valid
+   */
+  async verifyLink(streamUrl) {
+    if (!streamUrl) return false;
+
+    try {
+      const response = await axios.head(streamUrl, {
+        timeout: VERIFY_TIMEOUT,
+        maxRedirects: 5,
+        validateStatus: (status) => status < 400 // Accept any 2xx or 3xx
+      });
+
+      // RD links return 200 or redirect (302/307) if valid
+      const isValid = response.status >= 200 && response.status < 400;
+
+      if (isValid) {
+        logger.info(`[RD Cache] Link verified OK (${response.status})`);
+      } else {
+        logger.info(`[RD Cache] Link verification failed (${response.status})`);
+      }
+
+      return isValid;
+    } catch (error) {
+      // Link is dead, expired, or network error
+      logger.info(`[RD Cache] Link verification failed: ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Invalidate/delete a cached link (e.g., when verification fails)
+   * @param {number} cacheId - The cache entry ID
+   */
+  async invalidateLink(cacheId) {
+    try {
+      db.prepare('DELETE FROM rd_link_cache WHERE id = ?').run(cacheId);
+      logger.info(`[RD Cache] Invalidated cache entry ${cacheId}`);
+    } catch (error) {
+      logger.warn(`[RD Cache] Failed to invalidate cache entry: ${error.message}`);
+    }
   }
 }
 

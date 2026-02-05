@@ -19,6 +19,9 @@ const vodRoutes = require('./routes/vod');
 const apkRoutes = require('./routes/apk');
 const userRoutes = require('./routes/user');
 const contentRoutes = require('./routes/content');
+const liveTVRoutes = require('./routes/livetv');
+const bandwidthRoutes = require('./routes/bandwidth');
+const settingsRoutes = require('./routes/settings');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -65,6 +68,11 @@ app.use('/api/vod', vodRoutes);
 app.use('/api/apk', apkRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/content', contentRoutes);
+app.use('/api/bandwidth', bandwidthRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/livetv', liveTVRoutes);
+app.use('/api/dvr', liveTVRoutes); // DVR routes in same file
+app.use('/api', liveTVRoutes); // Logo proxy at /api/logo-proxy
 
 // Static files (APK hosting)
 app.use('/static', express.static(path.join(__dirname, 'static')));

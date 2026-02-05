@@ -1,0 +1,20 @@
+[
+  {
+    "tmdbId": 8592,
+    "type": "tv",
+    "title": "Parks and Recreation",
+    "posterPath": "/5IOj62y2Eb2ngyYmEn1IJ7bFhzH.jpg",
+    "releaseDate": "2009-04-09",
+    "voteAverage": 8.036,
+    "addedAt": "2026-02-04T21:04:22.695Z"
+  },
+  {
+    "tmdbId": 2316,
+    "type": "tv",
+    "title": "The Office",
+    "posterPath": "/dg9e5fPRRId8PoBE0F6jl5y85Eu.jpg",
+    "releaseDate": "2005-03-24",
+    "voteAverage": 8.593,
+    "addedAt": "2026-02-05T05:54:41.776Z"
+  }
+]

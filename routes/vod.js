@@ -3,7 +3,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { db } = require('../db/init');
 const logger = require('../utils/logger');
 const { searchZurg } = require('../services/zurg-search');
-const { completeDownloadFlow } = require('../services/rd-service');
+const { completeDownloadFlow, cleanupStuckTorrents } = require('../services/rd-service');
 const rdCacheService = require('../services/rd-cache-service');
 const downloadJobManager = require('../services/download-job-manager');
 const { getUserRdApiKey, getEffectiveUserId } = require('../services/user-service');
@@ -11,6 +11,11 @@ const { resolveZurgToRdLink } = require('../services/zurg-to-rd-resolver');
 const { logPlaybackFailure } = require('../services/failure-tracker');
 const { checkRdSession, startRdSession, updateRdHeartbeat, endRdSession } = require('../services/rd-session-tracker');
 const { v4: uuidv4 } = require('uuid');
+const opensubtitlesService = require('../services/opensubtitles-service');
+const { detectEmbeddedSubtitles, getBestEmbeddedSubtitle } = require('../services/embedded-subtitle-service');
+const { standardizeLanguage } = require('../utils/language-standardizer');
+const { extractSubtitleStream } = require('../services/ffprobe-service');
+const path = require('path');
 
 const router = express.Router();
 
@@ -98,79 +103,10 @@ router.post('/stream-url/start', async (req, res) => {
 
     logger.info(`Starting stream URL retrieval for: ${title} (${year})`);
 
-    // 1. Check Zurg first (preferred due to cache info)
-    const zurgResult = await searchZurg({
-      title,
-      year,
-      type, // Pass 'tv' or 'movie' directly - zurg-client expects 'tv' not 'episode'
-      season,
-      episode
-    });
+    // Skip blocking Zurg search here - processRdDownload handles Zurg + Prowlarr in parallel
+    // This returns the jobId immediately so client can start showing progress
 
-    // Try all Zurg matches in quality order, attempting RD resolution on each
-    if (zurgResult.matches && zurgResult.matches.length > 0) {
-      const rdApiKey = getUserRdApiKey(userId);
-
-      if (rdApiKey) {
-        // Filter for QUALITY matches only (meetsQualityThreshold = true)
-        const qualityMatches = zurgResult.matches.filter(m => m.meetsQualityThreshold);
-
-        if (qualityMatches.length === 0) {
-          logger.info(`Skipping ${zurgResult.matches.length} garbage Zurg matches (all < 7 MB/min), using Prowlarr`);
-        } else {
-          logger.info(`Trying ${qualityMatches.length} quality Zurg matches (skipping ${zurgResult.matches.length - qualityMatches.length} garbage)`);
-        }
-
-        // Loop through QUALITY Zurg matches only, trying RD resolution on each
-        for (let i = 0; i < qualityMatches.length; i++) {
-          const file = qualityMatches[i];
-          logger.info(`Trying quality match ${i + 1}/${qualityMatches.length}: ${file.fileName} (${file.mbPerMinute} MB/min)`);
-
-          const rdLink = await resolveZurgToRdLink(file.filePath, rdApiKey);
-
-          if (rdLink) {
-            // SUCCESS - this Zurg match resolved to RD direct link
-            logger.info(`✅ RD resolution succeeded on match ${i + 1}: ${rdLink.substring(0, 60)}...`);
-
-            // Track playback for monitoring (non-blocking)
-            try {
-              const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
-              const userInfo = {
-                username: user?.username || 'unknown',
-                userId,
-                ip: req.ip || req.connection.remoteAddress || 'unknown',
-                rdApiKey
-              };
-              downloadJobManager.trackPlayback({ tmdbId, title, year, type, season, episode }, userInfo, 'rd-via-zurg', rdLink, file.fileName);
-            } catch (err) {
-              logger.warn('Failed to track playback:', err.message);
-            }
-
-            return res.json({
-              immediate: true,
-              streamUrl: rdLink,
-              source: 'rd-via-zurg',
-              fileName: file.fileName
-            });
-          } else {
-            logger.warn(`❌ RD resolution failed for match ${i + 1}, trying next...`);
-            // Continue to next Zurg match
-          }
-        }
-
-        // ALL quality matches failed RD resolution, fall back to Prowlarr
-        if (qualityMatches.length > 0) {
-          logger.warn(`All ${qualityMatches.length} quality Zurg matches failed RD resolution, falling back to Prowlarr`);
-        }
-      } else {
-        logger.warn('No RD API key available, skipping Zurg matches');
-      }
-    }
-
-    // 2. Server-side link caching disabled - always do fresh search
-    //    (Expired links cause bad UX, fresh search will find RD-cached torrents anyway)
-
-    // 3. Create download job for fresh search
+    // Create download job immediately
     const jobId = uuidv4();
 
     // Get user info for monitoring
@@ -238,13 +174,25 @@ router.get('/stream-url/progress/:jobId', (req, res) => {
       return res.status(404).json({ error: 'Job not found' });
     }
 
+    // Ensure message is always present (fallback if missing)
+    let message = job.message;
+    if (!message) {
+      if (job.status === 'completed') message = 'Ready!';
+      else if (job.status === 'downloading') message = `Downloading: ${job.progress}%`;
+      else if (job.status === 'searching') message = 'Finding sources...';
+      else if (job.status === 'error') message = job.error || 'Error occurred';
+      else message = 'Processing...';
+    }
+
     res.json({
       status: job.status,
       progress: job.progress,
-      message: job.message,
+      message: message,
       streamUrl: job.streamUrl,
       fileName: job.fileName,
+      quality: job.quality,
       source: job.streamUrl ? 'rd' : null,
+      subtitles: job.subtitles || [],
       error: job.error
     });
   } catch (error) {
@@ -270,6 +218,114 @@ router.delete('/stream-url/cancel/:jobId', (req, res) => {
 });
 
 /**
+ * Background subtitle fetcher (shared by cached and fresh downloads)
+ * Priority: 1) Subtitle cache 2) Embedded 3) OpenSubtitles API
+ */
+function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, streamUrl, serverHost) {
+  (async () => {
+    try {
+      const preferredLang = 'en';
+
+      // Step 1: Check cache first (OpenSubtitles downloads are cached indefinitely)
+      const cached = opensubtitlesService.getCachedSubtitle(tmdbId, type, season, episode, preferredLang);
+      if (cached && require('fs').existsSync(cached.file_path)) {
+        const langResult = standardizeLanguage(cached.language);
+        downloadJobManager.updateJob(jobId, {
+          subtitles: [{
+            id: cached.id,
+            language: langResult.standardized || cached.language,
+            languageCode: cached.language_code,
+            format: cached.format,
+            url: `https://${serverHost}/api/vod/subtitles/file/${cached.id}`,
+            source: 'cache'
+          }]
+        });
+        logger.info(`Using cached subtitle for ${title} (${langResult.standardized || cached.language})`);
+        return;
+      }
+
+      // Step 2: Check embedded subtitles
+      const embeddedResult = await detectEmbeddedSubtitles(streamUrl, preferredLang);
+
+      if (embeddedResult.hasEmbedded && !embeddedResult.shouldFallbackToApi) {
+        const best = getBestEmbeddedSubtitle(embeddedResult.subtitles, preferredLang);
+        if (best) {
+          downloadJobManager.updateJob(jobId, {
+            subtitles: [{
+              language: best.language,
+              languageCode: best.languageCode,
+              streamIndex: best.index,
+              source: 'embedded',
+              format: best.codec
+            }]
+          });
+          logger.info(`Using embedded subtitle: ${best.language} (stream ${best.index})`);
+
+          // Extract and cache embedded subtitle in background
+          (async () => {
+            try {
+              const tempPath = path.join(opensubtitlesService.SUBTITLES_DIR, `temp_${tmdbId}_${Date.now()}.srt`);
+              const extracted = await extractSubtitleStream(streamUrl, best.index, tempPath);
+
+              if (extracted) {
+                const cachedSub = opensubtitlesService.cacheExtractedSubtitle({
+                  tmdbId,
+                  title,
+                  year,
+                  type,
+                  season,
+                  episode,
+                  language: best.language,
+                  languageCode: best.languageCode,
+                  extractedFilePath: tempPath
+                });
+
+                if (cachedSub) {
+                  logger.info(`Extracted and cached embedded subtitle for future use: ${cachedSub.fileName}`);
+                }
+              }
+            } catch (extractErr) {
+              logger.debug(`Failed to extract embedded subtitle (non-critical): ${extractErr.message}`);
+            }
+          })();
+
+          return;
+        }
+      }
+
+      // Step 3: Fall back to OpenSubtitles API
+      logger.info(`Fetching from OpenSubtitles: ${embeddedResult.fallbackReason || 'no cache or embedded match'}`);
+      const subtitle = await opensubtitlesService.getSubtitle({
+        tmdbId,
+        title,
+        year,
+        type,
+        season,
+        episode,
+        languageCode: preferredLang
+      });
+
+      if (subtitle) {
+        const langResult = standardizeLanguage(subtitle.language);
+        downloadJobManager.updateJob(jobId, {
+          subtitles: [{
+            id: subtitle.id,
+            language: langResult.standardized || subtitle.language,
+            languageCode: subtitle.languageCode,
+            format: subtitle.format,
+            url: `https://${serverHost}/api/vod/subtitles/file/${subtitle.id}`,
+            source: 'opensubtitles'
+          }]
+        });
+        logger.info(`Fetched subtitle from OpenSubtitles for ${title} (now cached)`);
+      }
+    } catch (err) {
+      logger.warn('Failed to auto-fetch subtitles (background):', err.message);
+    }
+  })();
+}
+
+/**
  * Background RD download processor with progressive updates
  */
 async function processRdDownload(jobId, contentInfo) {
@@ -285,7 +341,7 @@ async function processRdDownload(jobId, contentInfo) {
     downloadJobManager.updateJob(jobId, {
       status: 'searching',
       progress: 0,
-      message: 'Checking sources...'
+      message: 'Checking cache...'
     });
 
     // Get user bandwidth limit
@@ -297,52 +353,189 @@ async function processRdDownload(jobId, contentInfo) {
       logger.warn('Failed to get user bandwidth limit:', e.message);
     }
 
-    // Use unified source resolver - queries Zurg + Prowlarr in parallel
-    const { getAllSources } = require('../services/unified-source-resolver');
-
-    let allSources;
+    // Step 1: Check RD link cache first (24h TTL with live verification)
     try {
-      downloadJobManager.updateJob(jobId, {
-        status: 'searching',
-        progress: 0,
-        message: 'Searching all sources...'
-      });
-
-      allSources = await getAllSources({
-        title,
-        year,
+      const cached = await rdCacheService.getCachedLink({
+        tmdbId,
         type,
         season,
         episode,
-        tmdbId,
-        rdApiKey,
         maxBitrateMbps
       });
 
-      if (!allSources || allSources.length === 0) {
-        throw new Error('No sources found');
-      }
+      if (cached) {
+        logger.info(`[RD Cache] Found cached link for ${title}, verifying...`);
+        downloadJobManager.updateJob(jobId, {
+          status: 'searching',
+          progress: 0,
+          message: 'Verifying cached link...'
+        });
 
-      logger.info(`Found ${allSources.length} ranked sources (${allSources.filter(s => s.isCached).length} cached)`);
-    } catch (err) {
-      throw new Error(`No suitable sources found: ${err.message}`);
+        const isValid = await rdCacheService.verifyLink(cached.streamUrl);
+
+        if (isValid) {
+          logger.info(`[RD Cache] ✅ Cached link verified, using it`);
+
+          // SUCCESS - use cached link directly
+          downloadJobManager.updateJob(jobId, {
+            status: 'completed',
+            progress: 100,
+            message: 'Ready to play! (cached)',
+            streamUrl: cached.streamUrl,
+            fileName: cached.fileName,
+            quality: cached.resolution ? `${cached.resolution}p` : null,
+            subtitles: [] // Will be populated in background
+          });
+
+          // Fetch subtitles in background (same as normal flow)
+          fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, cached.streamUrl, serverHost);
+
+          // Track playback
+          try {
+            const job = downloadJobManager.getJob(jobId);
+            if (job && job.userInfo) {
+              downloadJobManager.trackPlayback(
+                contentInfo,
+                job.userInfo,
+                'rd-cached',
+                cached.streamUrl,
+                cached.fileName
+              );
+            }
+          } catch (err) {
+            logger.warn('Failed to track cached playback:', err.message);
+          }
+
+          logger.info(`Download job ${jobId} completed from cache`);
+          return; // Exit early - no need to search
+        } else {
+          // Cached link is dead - invalidate and continue to fresh search
+          logger.warn(`[RD Cache] ❌ Cached link dead, invalidating and searching fresh`);
+          // Note: We don't have cache ID here, but it will expire naturally
+        }
+      }
+    } catch (cacheErr) {
+      logger.warn(`[RD Cache] Cache check failed: ${cacheErr.message}`);
+      // Continue to normal source selection
     }
 
-    // Try each source in ranked order until one works
+    // Step 2: Use unified source resolver with streaming - start trying as sources arrive
+    downloadJobManager.updateJob(jobId, {
+      status: 'searching',
+      progress: 0,
+      message: 'Searching sources...'
+    });
+
+    const { getAllSources } = require('../services/unified-source-resolver');
     const { downloadFromRD } = require('@duckflix/rd-client');
     const { resolveZurgToRdLink } = require('../services/zurg-to-rd-resolver');
+
+    // Source queue and state for streaming
+    let sourceQueue = [];
+    let triedHashes = new Set();
+    let searchComplete = false;
     let result = null;
     let lastError = null;
     let successfulSource = null;
+    let attemptNum = 0;
 
-    for (let i = 0; i < allSources.length; i++) {
-      const source = allSources[i];
-      const attemptNum = i + 1;
+    // Promise that resolves when we have sources to try
+    let sourcesAvailableResolve = null;
+    let sourcesAvailablePromise = new Promise(resolve => { sourcesAvailableResolve = resolve; });
+
+    // Callback for streaming sources
+    const onSourcesReady = (sources, isComplete) => {
+      // Add new sources to queue (filter already tried)
+      for (const source of sources) {
+        const key = source.hash?.toLowerCase() || source.filePath || source.title;
+        if (!triedHashes.has(key)) {
+          sourceQueue.push(source);
+        }
+      }
+
+      // Re-sort queue by score (higher first)
+      sourceQueue.sort((a, b) => (b.score || 0) - (a.score || 0));
+
+      if (isComplete) {
+        searchComplete = true;
+        logger.info(`🔍 Search complete: ${sourceQueue.length} sources in queue`);
+      }
+
+      // Signal that sources are available
+      if (sourcesAvailableResolve) {
+        sourcesAvailableResolve();
+        sourcesAvailableResolve = null;
+      }
+    };
+
+    // Start search with streaming callback (non-blocking)
+    const searchPromise = getAllSources({
+      title,
+      year,
+      type,
+      season,
+      episode,
+      tmdbId,
+      rdApiKey,
+      maxBitrateMbps
+    }, onSourcesReady).catch(err => {
+      logger.warn('Source search error:', err.message);
+      searchComplete = true;
+      if (sourcesAvailableResolve) sourcesAvailableResolve();
+    });
+
+    // Wait for first batch of sources (or search completion)
+    await Promise.race([
+      sourcesAvailablePromise,
+      new Promise(resolve => setTimeout(resolve, 10000)) // Max 10s wait for first sources
+    ]);
+
+    if (sourceQueue.length === 0 && !searchComplete) {
+      // No sources yet — recreate the promise so we wake up the instant sources arrive
+      sourcesAvailablePromise = new Promise(resolve => { sourcesAvailableResolve = resolve; });
+      await Promise.race([
+        sourcesAvailablePromise,
+        searchPromise,
+        new Promise(resolve => setTimeout(resolve, 15000)) // Extended wait for slow Prowlarr
+      ]);
+    }
+
+    if (sourceQueue.length === 0) {
+      throw new Error('No sources found');
+    }
+
+    logger.info(`⚡ Starting with ${sourceQueue.length} sources (search ${searchComplete ? 'complete' : 'ongoing'})`);
+
+    // Try sources from queue until one works
+    while (sourceQueue.length > 0 || !searchComplete) {
+      // Wait for sources if queue is empty but search is ongoing
+      if (sourceQueue.length === 0 && !searchComplete) {
+        sourcesAvailablePromise = new Promise(resolve => { sourcesAvailableResolve = resolve; });
+        await Promise.race([
+          sourcesAvailablePromise,
+          new Promise(resolve => setTimeout(resolve, 3000))
+        ]);
+        if (sourceQueue.length === 0) {
+          if (searchComplete) break;
+          continue;
+        }
+      }
+
+      const source = sourceQueue.shift();
+      if (!source) continue;
+
+      // Mark as tried
+      const key = source.hash?.toLowerCase() || source.filePath || source.title;
+      if (triedHashes.has(key)) continue;
+      triedHashes.add(key);
+
+      attemptNum++;
       const qualityLabel = source.quality || `${source.resolution}p` || 'HD';
       const cached = source.isCached ? 'CACHED' : 'NOT CACHED';
       const sourceType = source.source === 'zurg' ? 'Zurg' : 'Prowlarr';
+      const queueInfo = searchComplete ? `${attemptNum}` : `${attemptNum}+`;
 
-      logger.info(`Attempt ${attemptNum}/${allSources.length}: [${sourceType}] ${source.title.substring(0, 60)} (${cached})`);
+      logger.info(`Attempt ${queueInfo}: [${sourceType}] ${source.title.substring(0, 60)} (${cached})`);
 
       // Track this attempt
       downloadJobManager.addAttemptedSource(jobId, {
@@ -359,7 +552,7 @@ async function processRdDownload(jobId, contentInfo) {
       downloadJobManager.updateJob(jobId, {
         status: 'searching',
         progress: 0,
-        message: `Trying Source #${attemptNum} ${qualityLabel} (${sourceType})`,
+        message: `Trying ${qualityLabel} (${sourceType})`,
         source: source.title.substring(0, 80)
       });
 
@@ -375,7 +568,7 @@ async function processRdDownload(jobId, contentInfo) {
               filename: source.filePath.split('/').pop()
             };
             successfulSource = source;
-            logger.info(`✅ Zurg source ${attemptNum}/${allSources.length} resolved to RD link`);
+            logger.info(`✅ Zurg source #${attemptNum} resolved to RD link`);
             break;
           } else {
             // Zurg file couldn't be resolved to RD, try as proxy
@@ -386,20 +579,35 @@ async function processRdDownload(jobId, contentInfo) {
               filename: source.filePath.split('/').pop()
             };
             successfulSource = source;
-            logger.info(`✅ Zurg source ${attemptNum}/${allSources.length} using proxy`);
+            logger.info(`✅ Zurg source #${attemptNum} using proxy`);
             break;
           }
         } else {
-          // Prowlarr source - download from RD
-          result = await downloadFromRD(
+          // Prowlarr source - download from RD with timeout for slow downloads
+          let lastProgress = 0;
+          let lastProgressTime = Date.now();
+          const SLOW_DOWNLOAD_TIMEOUT = 20000; // 20 seconds at <1%
+
+          const downloadPromise = downloadFromRD(
             source.magnet,
             rdApiKey,
             season,
             episode,
             (rdProgress, rdMessage) => {
+              // Don't update if job already completed (another source succeeded)
+              const currentJob = downloadJobManager.getJob(jobId);
+              if (currentJob?.status === 'completed') return;
+
               const rdMatch = rdMessage.match(/Downloading:\s*(\d+)%/);
               if (rdMatch) {
                 const actualRdProgress = parseInt(rdMatch[1]);
+
+                // Track progress changes
+                if (actualRdProgress > lastProgress) {
+                  lastProgress = actualRdProgress;
+                  lastProgressTime = Date.now();
+                }
+
                 downloadJobManager.updateJob(jobId, {
                   status: 'downloading',
                   progress: actualRdProgress,
@@ -409,26 +617,57 @@ async function processRdDownload(jobId, contentInfo) {
             }
           );
 
-          if (result && result.download) {
-            successfulSource = source;
-            logger.info(`✅ Prowlarr source ${attemptNum}/${allSources.length} succeeded`);
-            break;
+          // Timeout checker - abort if stuck at <1% for >60s
+          const timeoutPromise = new Promise((_, reject) => {
+            const checkInterval = setInterval(() => {
+              const stuckTime = Date.now() - lastProgressTime;
+              if (lastProgress < 1 && stuckTime > SLOW_DOWNLOAD_TIMEOUT) {
+                clearInterval(checkInterval);
+                reject(new Error(`TIMEOUT: Stuck at ${lastProgress}% for ${Math.round(stuckTime/1000)}s - trying next source`));
+              }
+            }, 5000); // Check every 5 seconds
+
+            // Clean up interval when download completes
+            downloadPromise.finally(() => clearInterval(checkInterval));
+          });
+
+          try {
+            result = await Promise.race([downloadPromise, timeoutPromise]);
+
+            if (result && result.download) {
+              successfulSource = source;
+              logger.info(`✅ Prowlarr source #${attemptNum} succeeded`);
+              break;
+            }
+          } catch (timeoutError) {
+            if (timeoutError.message.includes('TIMEOUT')) {
+              logger.warn(`⏱️  ${timeoutError.message}`);
+              // Clean up stuck torrents in background (don't await - just fire and forget)
+              cleanupStuckTorrents(rdApiKey, 2, 5).catch(() => {});
+              lastError = timeoutError;
+              continue; // Try next source
+            }
+            throw timeoutError; // Re-throw other errors
           }
         }
       } catch (error) {
         lastError = error;
-        logger.warn(`⚠️  Source ${attemptNum}/${allSources.length} failed: ${error.message} (${error.code || 'no code'})`);
+        logger.warn(`⚠️  Source #${attemptNum} failed: ${error.message} (${error.code || 'no code'})`);
 
         // If FILE_NOT_FOUND or source issues, try next
         if (error.code === 'FILE_NOT_FOUND' ||
             error.message?.includes('dead') ||
             error.message?.includes('virus') ||
-            error.message?.includes('error')) {
-          if (attemptNum < allSources.length) {
+            error.message?.includes('error') ||
+            error.message?.includes('Unsupported protocol') ||
+            error.message?.includes('magnet:') ||
+            error.message?.includes('Redirected request failed')) {
+          // Continue to next source (queue handled by while loop)
+          if (sourceQueue.length > 0 || !searchComplete) {
             logger.info(`   Trying next source...`);
             continue;
           } else {
-            logger.error(`❌ All ${allSources.length} sources exhausted`);
+            logger.error(`❌ All ${attemptNum} sources exhausted`);
           }
         } else {
           // Critical error (RD API issue, etc) - stop trying
@@ -436,13 +675,18 @@ async function processRdDownload(jobId, contentInfo) {
           break;
         }
       }
+
+      // Break out if we got a result
+      if (result && result.download) {
+        break;
+      }
     }
 
     // Verify we got a result
     if (!result || !result.download) {
       const errorMsg = lastError ?
         (lastError.code === 'FILE_NOT_FOUND' ?
-          `Episode not found in any of ${allSources.length} sources (${allSources.filter(s => s.isCached).length} cached, ${allSources.filter(s => s.source === 'zurg').length} Zurg, ${allSources.filter(s => s.source === 'prowlarr').length} Prowlarr)` :
+          `Episode not found in ${attemptNum} sources tried` :
           lastError.message) :
         'Failed to get stream URL';
       throw new Error(errorMsg);
@@ -450,10 +694,39 @@ async function processRdDownload(jobId, contentInfo) {
 
     logger.info(`[RD Download] Got unrestricted link (full): ${result.download}`);
 
-    // Server-side caching disabled (not needed - fresh searches find RD-cached torrents)
-    // await rdCacheService.cacheLink({ ... });
+    // Cache the successful RD link (24h TTL with live verification on retrieval)
+    // Only cache actual RD direct links, not proxy URLs (which are local Zurg proxies)
+    const isRdDirectLink = result.download &&
+      !result.download.includes('/api/vod/stream/') &&
+      (result.download.includes('real-debrid.com') || result.download.includes('rdb.so'));
 
-    // FINAL: Only NOW set status to 'completed' with the verified stream URL
+    if (isRdDirectLink) {
+      try {
+        // Parse resolution from filename or source
+        const resolution = successfulSource?.resolution ||
+          (result.filename?.match(/\b(2160|1080|720|480)p?\b/i)?.[1] ?
+            parseInt(result.filename.match(/\b(2160|1080|720|480)p?\b/i)[1]) : null);
+
+        await rdCacheService.cacheLink({
+          tmdbId,
+          title,
+          year,
+          type,
+          season,
+          episode,
+          streamUrl: result.download,
+          fileName: result.filename,
+          resolution,
+          fileSizeBytes: result.filesize || result.bytes || null
+        });
+      } catch (cacheErr) {
+        logger.warn(`Failed to cache RD link: ${cacheErr.message}`);
+      }
+    } else {
+      logger.debug(`Skipping cache for non-RD link: ${result.download?.substring(0, 50)}...`);
+    }
+
+    // FINAL: Set status to 'completed' IMMEDIATELY
     // The client will ONLY start playback when it sees status=completed AND streamUrl exists
     downloadJobManager.updateJob(jobId, {
       status: 'completed',
@@ -461,8 +734,13 @@ async function processRdDownload(jobId, contentInfo) {
       message: 'Ready to play!',
       streamUrl: result.download,
       fileName: result.filename,
-      fileSize: result.filesize || result.bytes || null
+      fileSize: result.filesize || result.bytes || null,
+      quality: successfulSource?.quality || null,
+      subtitles: [] // Will be populated in background
     });
+
+    // Auto-fetch subtitles in background (truly non-blocking)
+    fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, result.download, serverHost);
 
     // Also track as playback for monitoring dashboard (non-blocking)
     try {
@@ -571,6 +849,7 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
     const { resolveZurgToRdLink } = require('../services/zurg-to-rd-resolver');
     let result = null;
     let lastError = null;
+    let successfulSource = null;
 
     for (let i = 0; i < allSources.length; i++) {
       const source = allSources[i];
@@ -608,6 +887,7 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
               download: rdLink,
               filename: source.filePath.split('/').pop()
             };
+            successfulSource = source;
             logger.info(`✅ Alternative Zurg source ${attemptNum}/${allSources.length} resolved`);
             break;
           } else {
@@ -617,19 +897,35 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
               download: proxyUrl,
               filename: source.filePath.split('/').pop()
             };
+            successfulSource = source;
             logger.info(`✅ Alternative Zurg source ${attemptNum}/${allSources.length} using proxy`);
             break;
           }
         } else {
-          result = await downloadFromRD(
+          // Prowlarr source with timeout for slow downloads
+          let lastProgress = 0;
+          let lastProgressTime = Date.now();
+          const SLOW_DOWNLOAD_TIMEOUT = 60000; // 60 seconds at <1%
+
+          const downloadPromise = downloadFromRD(
             source.magnet,
             rdApiKey,
             season,
             episode,
             (rdProgress, rdMessage) => {
+              // Don't update if job already completed (another source succeeded)
+              const currentJob = downloadJobManager.getJob(jobId);
+              if (currentJob?.status === 'completed') return;
+
               const rdMatch = rdMessage.match(/Downloading:\s*(\d+)%/);
               if (rdMatch) {
                 const actualRdProgress = parseInt(rdMatch[1]);
+
+                if (actualRdProgress > lastProgress) {
+                  lastProgress = actualRdProgress;
+                  lastProgressTime = Date.now();
+                }
+
                 downloadJobManager.updateJob(jobId, {
                   status: 'downloading',
                   progress: actualRdProgress,
@@ -639,9 +935,35 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
             }
           );
 
-          if (result && result.download) {
-            logger.info(`✅ Alternative Prowlarr source ${attemptNum}/${allSources.length} succeeded`);
-            break;
+          const timeoutPromise = new Promise((_, reject) => {
+            const checkInterval = setInterval(() => {
+              const stuckTime = Date.now() - lastProgressTime;
+              if (lastProgress < 1 && stuckTime > SLOW_DOWNLOAD_TIMEOUT) {
+                clearInterval(checkInterval);
+                reject(new Error(`TIMEOUT: Stuck at ${lastProgress}% for ${Math.round(stuckTime/1000)}s - trying next source`));
+              }
+            }, 5000);
+
+            downloadPromise.finally(() => clearInterval(checkInterval));
+          });
+
+          try {
+            result = await Promise.race([downloadPromise, timeoutPromise]);
+
+            if (result && result.download) {
+              successfulSource = source;
+              logger.info(`✅ Alternative Prowlarr source ${attemptNum}/${allSources.length} succeeded`);
+              break;
+            }
+          } catch (timeoutError) {
+            if (timeoutError.message.includes('TIMEOUT')) {
+              logger.warn(`⏱️  ${timeoutError.message}`);
+              // Clean up stuck torrents in background
+              cleanupStuckTorrents(rdApiKey, 2, 5).catch(() => {});
+              lastError = timeoutError;
+              continue;
+            }
+            throw timeoutError;
           }
         }
       } catch (error) {
@@ -651,7 +973,10 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
         if (error.code === 'FILE_NOT_FOUND' ||
             error.message?.includes('dead') ||
             error.message?.includes('virus') ||
-            error.message?.includes('error')) {
+            error.message?.includes('error') ||
+            error.message?.includes('Unsupported protocol') ||
+            error.message?.includes('magnet:') ||
+            error.message?.includes('Redirected request failed')) {
           if (attemptNum < allSources.length) {
             continue;
           }
@@ -665,8 +990,34 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
       throw new Error(lastError?.message || 'No alternative sources succeeded');
     }
 
-    // Server-side caching disabled
-    // await rdCacheService.cacheLink({ ... });
+    // Cache the successful RD link (24h TTL with live verification on retrieval)
+    // Only cache actual RD direct links, not proxy URLs
+    const isRdDirectLink = result.download &&
+      !result.download.includes('/api/vod/stream/') &&
+      (result.download.includes('real-debrid.com') || result.download.includes('rdb.so'));
+
+    if (isRdDirectLink) {
+      try {
+        const resolution = successfulSource?.resolution ||
+          (result.filename?.match(/\b(2160|1080|720|480)p?\b/i)?.[1] ?
+            parseInt(result.filename.match(/\b(2160|1080|720|480)p?\b/i)[1]) : null);
+
+        await rdCacheService.cacheLink({
+          tmdbId,
+          title,
+          year,
+          type,
+          season,
+          episode,
+          streamUrl: result.download,
+          fileName: result.filename,
+          resolution,
+          fileSizeBytes: result.filesize || result.bytes || null
+        });
+      } catch (cacheErr) {
+        logger.warn(`Failed to cache RD link: ${cacheErr.message}`);
+      }
+    }
 
     downloadJobManager.updateJob(jobId, {
       status: 'completed',
@@ -674,7 +1025,8 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
       message: 'Alternative source ready!',
       streamUrl: result.download,
       fileName: result.filename,
-      fileSize: result.filesize || result.bytes || null
+      fileSize: result.filesize || result.bytes || null,
+      quality: successfulSource?.quality || null
     });
 
     logger.info(`✅ Re-search job ${jobId} completed with alternative source`);
@@ -999,7 +1351,11 @@ router.post('/report-bad', async (req, res) => {
       return res.status(400).json({ error: 'Job ID required' });
     }
 
-    const job = downloadJobManager.getJob(jobId);
+    // Check active jobs first, then completed job history (jobs get cleaned up after 5 min)
+    let job = downloadJobManager.getJob(jobId);
+    if (!job) {
+      job = downloadJobManager.getCompletedJobs().find(j => j.jobId === jobId);
+    }
 
     if (!job) {
       return res.status(404).json({ error: 'Job not found' });
@@ -1007,7 +1363,7 @@ router.post('/report-bad', async (req, res) => {
 
     // Report all attempted sources as bad
     const { reportBadLink } = require('../services/bad-link-tracker');
-    const attemptedSources = downloadJobManager.getAttemptedSources(jobId);
+    const attemptedSources = job.attemptedSources || [];
     const { contentInfo } = job;
 
     let reportedCount = 0;
@@ -1145,5 +1501,191 @@ router.get('/next-episode/:tmdbId/:season/:episode', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/vod/subtitles/search
+ * Search for subtitles (checks cache first, downloads if needed)
+ */
+router.get('/subtitles/search', async (req, res) => {
+  try {
+    const { tmdbId, title, year, type, season, episode, languageCode } = req.query;
+
+    if (!tmdbId || !type) {
+      return res.status(400).json({ error: 'tmdbId and type are required' });
+    }
+
+    logger.info(`Subtitle search: ${title} (${tmdbId}) ${type} S${season}E${episode} (${languageCode || 'en'})`);
+
+    const subtitle = await opensubtitlesService.getSubtitle({
+      tmdbId: parseInt(tmdbId),
+      title: title || 'Unknown',
+      year,
+      type,
+      season: season ? parseInt(season) : null,
+      episode: episode ? parseInt(episode) : null,
+      languageCode: languageCode || 'en'
+    });
+
+    res.json({
+      success: true,
+      subtitle: {
+        id: subtitle.id,
+        language: subtitle.language,
+        languageCode: subtitle.languageCode,
+        format: subtitle.format,
+        url: `${req.protocol}://${req.get('host')}/api/vod/subtitles/file/${subtitle.id}`,
+        cached: subtitle.cached,
+        fileSize: subtitle.fileSize
+      }
+    });
+  } catch (error) {
+    logger.error('Subtitle search error:', error);
+    res.status(500).json({
+      error: 'Failed to get subtitles',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/vod/subtitles/search
+ * Search for subtitles (same as GET but accepts body params for APK compatibility)
+ */
+router.post('/subtitles/search', async (req, res) => {
+  try {
+    const { tmdbId, title, year, type, season, episode, languageCode } = req.body;
+
+    if (!tmdbId || !type) {
+      return res.status(400).json({ error: 'tmdbId and type are required' });
+    }
+
+    logger.info(`Subtitle search: ${title} (${tmdbId}) ${type} S${season}E${episode} (${languageCode || 'en'})`);
+
+    const subtitle = await opensubtitlesService.getSubtitle({
+      tmdbId: parseInt(tmdbId),
+      title: title || 'Unknown',
+      year,
+      type,
+      season: season ? parseInt(season) : null,
+      episode: episode ? parseInt(episode) : null,
+      languageCode: languageCode || 'en'
+    });
+
+    res.json({
+      success: true,
+      subtitle: {
+        id: subtitle.id,
+        language: subtitle.language,
+        languageCode: subtitle.languageCode,
+        format: subtitle.format,
+        url: `${req.protocol}://${req.get('host')}/api/vod/subtitles/file/${subtitle.id}`,
+        cached: subtitle.cached,
+        fileSize: subtitle.fileSize
+      }
+    });
+  } catch (error) {
+    logger.error('Subtitle search error:', error);
+    res.status(500).json({
+      error: 'Failed to get subtitles',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/vod/subtitles/file/:id
+ * Serve subtitle file by ID
+ */
+router.get('/subtitles/file/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const filePath = opensubtitlesService.getSubtitleFilePath(parseInt(id));
+
+    if (!filePath || !require('fs').existsSync(filePath)) {
+      return res.status(404).json({ error: 'Subtitle file not found' });
+    }
+
+    logger.info(`Serving subtitle file: ${filePath}`);
+
+    // Set appropriate headers for SRT file
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Content-Disposition', `inline; filename="${require('path').basename(filePath)}"`);
+
+    // Stream the file
+    require('fs').createReadStream(filePath).pipe(res);
+  } catch (error) {
+    logger.error('Subtitle file serve error:', error);
+    res.status(500).json({
+      error: 'Failed to serve subtitle file',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/vod/subtitles/stats
+ * Get subtitle storage statistics (admin only)
+ */
+router.get('/subtitles/stats', async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    const stats = opensubtitlesService.getStorageStats();
+    const quota = opensubtitlesService.checkDailyQuota();
+
+    res.json({
+      storage: stats,
+      quota: {
+        used: quota.count,
+        limit: quota.limit,
+        remaining: quota.remaining,
+        exceeded: quota.exceeded
+      }
+    });
+  } catch (error) {
+    logger.error('Subtitle stats error:', error);
+    res.status(500).json({
+      error: 'Failed to get subtitle stats',
+      message: error.message
+    });
+  }
+});
+
+
+
+/**
+ * POST /api/vod/fallback
+ * Request a lower quality stream when playback is stuttering
+ * Used by the adaptive bitrate system to get a fallback stream
+ */
+router.post('/fallback', authenticateToken, async (req, res) => {
+  try {
+    const { tmdbId, type, year, season, episode, duration, currentBitrate } = req.body;
+    const userId = req.user.sub;
+
+    logger.info('[Fallback] Request for lower quality stream', {
+      tmdbId,
+      type,
+      year,
+      currentBitrate,
+      userId
+    });
+
+    // For now, return a 501 Not Implemented
+    // This endpoint would need integration with the content resolver
+    // to find an alternative lower-quality source
+    res.status(501).json({
+      error: 'Fallback not implemented',
+      message: 'Lower quality fallback sources are not currently available. Please try again later.'
+    });
+  } catch (error) {
+    logger.error('Fallback error:', error);
+    res.status(500).json({
+      error: 'Fallback failed',
+      message: error.message || 'Unable to get fallback stream'
+    });
+  }
+});
 
 module.exports = router;

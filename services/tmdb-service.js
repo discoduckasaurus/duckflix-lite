@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 
 const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+const TMDB_TIMEOUT = 10000;
 
 // Simple in-memory cache for runtime (lasts until server restart)
 const runtimeCache = new Map();
@@ -27,7 +28,8 @@ async function getRuntime(tmdbId, type, season, episode) {
 
     if (type === 'movie') {
       const response = await axios.get(`${TMDB_BASE_URL}/movie/${tmdbId}`, {
-        params: { api_key: TMDB_API_KEY }
+        params: { api_key: TMDB_API_KEY },
+        timeout: TMDB_TIMEOUT
       });
       runtime = response.data.runtime || 120; // Default 2 hours
     } else {
@@ -36,20 +38,22 @@ async function getRuntime(tmdbId, type, season, episode) {
         try {
           const response = await axios.get(
             `${TMDB_BASE_URL}/tv/${tmdbId}/season/${season}/episode/${episode}`,
-            { params: { api_key: TMDB_API_KEY } }
+            { params: { api_key: TMDB_API_KEY }, timeout: TMDB_TIMEOUT }
           );
           runtime = response.data.runtime || 45; // Default 45 min
         } catch (e) {
           // Fallback to show's average episode runtime
           const showResponse = await axios.get(`${TMDB_BASE_URL}/tv/${tmdbId}`, {
-            params: { api_key: TMDB_API_KEY }
+            params: { api_key: TMDB_API_KEY },
+            timeout: TMDB_TIMEOUT
           });
           runtime = showResponse.data.episode_run_time?.[0] || 45;
         }
       } else {
         // No episode specified, get show's average
         const response = await axios.get(`${TMDB_BASE_URL}/tv/${tmdbId}`, {
-          params: { api_key: TMDB_API_KEY }
+          params: { api_key: TMDB_API_KEY },
+          timeout: TMDB_TIMEOUT
         });
         runtime = response.data.episode_run_time?.[0] || 45;
       }
@@ -84,7 +88,7 @@ async function getNextEpisode(tmdbId, currentSeason, currentEpisode) {
     // Get current season info
     const seasonResponse = await axios.get(
       `${TMDB_BASE_URL}/tv/${tmdbId}/season/${currentSeason}`,
-      { params: { api_key: TMDB_API_KEY } }
+      { params: { api_key: TMDB_API_KEY }, timeout: TMDB_TIMEOUT }
     );
 
     const episodes = seasonResponse.data.episodes;
@@ -106,7 +110,7 @@ async function getNextEpisode(tmdbId, currentSeason, currentEpisode) {
       try {
         const nextSeasonResponse = await axios.get(
           `${TMDB_BASE_URL}/tv/${tmdbId}/season/${currentSeason + 1}`,
-          { params: { api_key: TMDB_API_KEY } }
+          { params: { api_key: TMDB_API_KEY }, timeout: TMDB_TIMEOUT }
         );
 
         const firstEp = nextSeasonResponse.data.episodes[0];
@@ -144,7 +148,8 @@ async function getMovieRecommendations(tmdbId) {
         params: {
           api_key: TMDB_API_KEY,
           page: 1
-        }
+        },
+        timeout: TMDB_TIMEOUT
       }
     );
 

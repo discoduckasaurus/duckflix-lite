@@ -1,11 +1,16 @@
 const axios = require('axios');
+const crypto = require('crypto');
 const logger = require('../utils/logger');
 
 const PROWLARR_BASE_URL = process.env.PROWLARR_BASE_URL || 'http://localhost:9696';
 const PROWLARR_API_KEY = process.env.PROWLARR_API_KEY;
 
+
 // Blocklist for problematic release groups
 const BLOCKLIST_GROUPS = ['YIFY', 'YTS', 'RARBG']; // Often blocked by RD
+
+// Minimum seeders to consider a torrent viable
+const MIN_SEEDERS = 5;
 
 /**
  * Search Prowlarr with multiple queries and return ranked results
@@ -29,7 +34,7 @@ async function searchTorrentsWithProwlarr(searchQuery) {
     });
 
     const results = response.data
-      .filter(r => r.seeders > 0)
+      .filter(r => r.seeders >= MIN_SEEDERS)
       .filter(r => {
         const sizeGB = r.size / (1024 * 1024 * 1024);
         return sizeGB > 0.05 && sizeGB < 100;
@@ -61,17 +66,20 @@ async function searchTorrentsWithProwlarr(searchQuery) {
           hash = r.infoHash;
           magnet = `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(r.title)}`;
         }
-        // Priority 3: Use downloadUrl (torrent file) - needs special handling
+        // Priority 3: Use downloadUrl (torrent file) - RD can handle these directly
         else if (r.downloadUrl) {
-          // Extract hash from GUID if available
+          // Try to extract hash from GUID first
           const guidMatch = (r.guid || '').match(/([a-fA-F0-9]{40})/);
           hash = guidMatch ? guidMatch[1] : null;
 
-          // If we have a hash, create magnet. Otherwise skip this torrent.
           if (hash) {
+            // We have a hash, create magnet
             magnet = `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(r.title)}`;
           } else {
-            logger.warn(`Skipping ${r.title} - downloadUrl but no hash in GUID`);
+            // No hash available - skip this source entirely
+            // downloadUrl-only sources often redirect to magnet: which rd-client can't handle
+            // These caused "Unsupported protocol magnet:" errors
+            logger.debug(`Skipping downloadUrl-only source (no hash): ${r.title.substring(0, 50)}...`);
             return null;
           }
         }
@@ -109,8 +117,13 @@ async function searchTorrentsWithProwlarr(searchQuery) {
 
 /**
  * Search Prowlarr for content with multiple search strategies
+ * Returns results progressively via onResults callback for faster time-to-first-source
+ *
+ * @param {Object} params - Search parameters
+ * @param {Function} onResults - Callback called with new results as they arrive: (torrents, isComplete) => void
+ * @returns {Promise<Array>} - All torrents found (for backwards compatibility)
  */
-async function searchContent({ title, year, type, season, episode }) {
+async function searchContent({ title, year, type, season, episode }, onResults = null) {
   try {
     if (!PROWLARR_API_KEY) {
       throw new Error('Prowlarr API key not configured');
@@ -130,37 +143,73 @@ async function searchContent({ title, year, type, season, episode }) {
       // Then try season pack
       searchQueries.push(`${title} S${s}`);
       if (year) searchQueries.push(`${title} ${year} S${s}`);
+
+      // "Season X" naming variant
+      searchQueries.push(`${title} Season ${season}`);
     } else {
       // Movie searches
       if (year) searchQueries.push(`${title} ${year}`);
       searchQueries.push(title);
     }
 
+    const seenHashes = new Set();
     let allTorrents = [];
+    let completedQueries = 0;
 
-    // Try each search query
-    for (const query of searchQueries) {
-      logger.info(`Searching: ${query}`);
-      const results = await searchTorrentsWithProwlarr(query);
-      if (results.length > 0) {
-        allTorrents = [...allTorrents, ...results];
-        logger.info(`✓ Found ${results.length} torrents for: ${query}`);
+    // Helper to dedupe and add torrents
+    const addTorrents = (torrents) => {
+      const newTorrents = [];
+      for (const t of torrents) {
+        if (!t.hash) {
+          newTorrents.push(t);
+        } else if (!seenHashes.has(t.hash.toLowerCase())) {
+          seenHashes.add(t.hash.toLowerCase());
+          newTorrents.push(t);
+        }
       }
-    }
+      allTorrents = allTorrents.concat(newTorrents);
+      return newTorrents;
+    };
+
+    // Run all searches in parallel, but emit results as they arrive
+    const searchPromises = searchQueries.map(query => {
+      logger.info(`Searching: ${query}`);
+      return searchTorrentsWithProwlarr(query)
+        .then(results => {
+          completedQueries++;
+          const isComplete = completedQueries === searchQueries.length;
+          if (results.length > 0) {
+            logger.info(`✓ Found ${results.length} torrents for: ${query}`);
+            const newTorrents = addTorrents(results);
+            // Emit new results if callback provided
+            if (onResults && newTorrents.length > 0) {
+              onResults(newTorrents, isComplete);
+            } else if (onResults && isComplete) {
+              // Results existed but all were duplicates — still signal completion
+              onResults([], true);
+            }
+          } else if (onResults && isComplete) {
+            // Last query completed with no results - signal completion
+            onResults([], true);
+          }
+          return results;
+        })
+        .catch(err => {
+          completedQueries++;
+          logger.warn(`Search failed for ${query}: ${err.message}`);
+          if (onResults && completedQueries === searchQueries.length) {
+            onResults([], true);
+          }
+          return [];
+        });
+    });
+
+    await Promise.all(searchPromises);
 
     if (allTorrents.length === 0) {
       logger.info('No results found in Prowlarr');
       return [];
     }
-
-    // Deduplicate by hash
-    const seenHashes = new Set();
-    allTorrents = allTorrents.filter(t => {
-      if (!t.hash) return true;
-      if (seenHashes.has(t.hash.toLowerCase())) return false;
-      seenHashes.add(t.hash.toLowerCase());
-      return true;
-    });
 
     logger.info(`Total: ${allTorrents.length} unique torrents found`);
 

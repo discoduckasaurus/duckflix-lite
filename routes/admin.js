@@ -4,6 +4,9 @@ const { db } = require('../db/init');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const { validateRDKey, checkUserRDExpiry } = require('../services/rd-expiry-checker');
+const opensubtitlesService = require('../services/opensubtitles-service');
+const fs = require('fs');
+const path = require('path');
 
 const router = express.Router();
 
@@ -380,6 +383,177 @@ router.get('/rd-expiry-alerts', (req, res) => {
   } catch (error) {
     logger.error('Get RD expiry alerts error:', error);
     res.status(500).json({ error: 'Failed to get alerts' });
+  }
+});
+
+/**
+ * GET /api/admin/opensubtitles/status
+ * Get OpenSubtitles account status and credentials
+ */
+router.get('/opensubtitles/status', async (req, res) => {
+  try {
+    // Get current credentials from env
+    const username = process.env.OPENSUBTITLES_USERNAME;
+    const hasPassword = !!process.env.OPENSUBTITLES_PASSWORD;
+    const hasApiKey = !!process.env.OPENSUBTITLES_API_KEY;
+
+    // Get user info from OpenSubtitles
+    let userInfo = null;
+    let error = null;
+
+    try {
+      userInfo = await opensubtitlesService.getUserInfo();
+    } catch (err) {
+      error = err.message;
+      logger.warn('Failed to get OpenSubtitles user info:', err.message);
+    }
+
+    // Get quota and storage stats
+    const quota = opensubtitlesService.checkDailyQuota();
+    const storage = opensubtitlesService.getStorageStats();
+
+    res.json({
+      credentials: {
+        username: username || null,
+        hasPassword,
+        hasApiKey,
+        configured: !!(username && hasPassword && hasApiKey)
+      },
+      account: userInfo ? {
+        userId: userInfo.user_id,
+        username: userInfo.username || username,
+        level: userInfo.level,
+        vip: userInfo.vip || false,
+        allowedDownloads: userInfo.allowed_downloads,
+        allowedTranslations: userInfo.allowed_translations,
+        extInstalled: userInfo.ext_installed || false
+      } : null,
+      quota: {
+        used: quota.count,
+        limit: quota.limit,
+        remaining: quota.remaining,
+        exceeded: quota.exceeded
+      },
+      storage: {
+        used: storage.totalMB + ' MB',
+        usedGB: storage.totalGB + ' GB',
+        maxGB: storage.maxGB + ' GB',
+        usedPercent: storage.usedPercent + '%',
+        subtitleCount: storage.subtitleCount
+      },
+      error
+    });
+  } catch (error) {
+    logger.error('Get OpenSubtitles status error:', error);
+    res.status(500).json({ error: 'Failed to get OpenSubtitles status' });
+  }
+});
+
+/**
+ * POST /api/admin/opensubtitles/credentials
+ * Update OpenSubtitles credentials
+ */
+router.post('/opensubtitles/credentials', async (req, res) => {
+  try {
+    const { username, password, apiKey } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    // Update .env file
+    const envPath = path.join(__dirname, '..', '.env');
+    let envContent = fs.readFileSync(envPath, 'utf8');
+
+    // Update or add credentials
+    const updates = {
+      OPENSUBTITLES_USERNAME: username,
+      OPENSUBTITLES_PASSWORD: password
+    };
+
+    if (apiKey) {
+      updates.OPENSUBTITLES_API_KEY = apiKey;
+    }
+
+    for (const [key, value] of Object.entries(updates)) {
+      const regex = new RegExp(`^${key}=.*$`, 'm');
+      if (regex.test(envContent)) {
+        envContent = envContent.replace(regex, `${key}=${value}`);
+      } else {
+        envContent += `\n${key}=${value}`;
+      }
+    }
+
+    fs.writeFileSync(envPath, envContent);
+
+    // Update process.env
+    process.env.OPENSUBTITLES_USERNAME = username;
+    process.env.OPENSUBTITLES_PASSWORD = password;
+    if (apiKey) {
+      process.env.OPENSUBTITLES_API_KEY = apiKey;
+    }
+
+    // Test login with new credentials
+    try {
+      const result = await opensubtitlesService.login(username, password);
+      logger.info('OpenSubtitles credentials updated and verified');
+
+      res.json({
+        success: true,
+        message: 'Credentials updated successfully',
+        account: result.user
+      });
+    } catch (loginError) {
+      logger.error('Login failed with new credentials:', loginError.message);
+      res.status(401).json({
+        error: 'Credentials updated but login failed',
+        message: loginError.message
+      });
+    }
+  } catch (error) {
+    logger.error('Update OpenSubtitles credentials error:', error);
+    res.status(500).json({ error: 'Failed to update credentials' });
+  }
+});
+
+/**
+ * POST /api/admin/opensubtitles/test-login
+ * Test OpenSubtitles login
+ */
+router.post('/opensubtitles/test-login', async (req, res) => {
+  try {
+    const result = await opensubtitlesService.login();
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      account: result.user,
+      tokenExpiry: result.expiresIn
+    });
+  } catch (error) {
+    logger.error('Test login error:', error);
+    res.status(401).json({
+      error: 'Login failed',
+      message: error.response?.data?.message || error.message
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/opensubtitles/logout
+ * Logout from OpenSubtitles (clear session)
+ */
+router.delete('/opensubtitles/logout', async (req, res) => {
+  try {
+    await opensubtitlesService.logout();
+
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+  } catch (error) {
+    logger.error('Logout error:', error);
+    res.status(500).json({ error: 'Logout failed' });
   }
 });
 

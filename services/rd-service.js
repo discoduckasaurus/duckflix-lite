@@ -5,7 +5,10 @@ const {
   unrestrictLink,
   downloadFromRD
 } = require('@duckflix/rd-client');
+const axios = require('axios');
 const logger = require('../utils/logger');
+
+const RD_API_BASE = 'https://api.real-debrid.com/rest/1.0';
 
 /**
  * Add magnet to Real-Debrid
@@ -90,10 +93,81 @@ async function completeDownloadFlow(apiKey, magnetUrl, season = null, episode = 
   }
 }
 
+/**
+ * Delete a torrent from Real-Debrid
+ * Used to clean up failed/timed-out downloads
+ */
+async function deleteTorrent(apiKey, torrentId) {
+  try {
+    await axios.delete(`${RD_API_BASE}/torrents/delete/${torrentId}`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` }
+    });
+    logger.info(`🗑️  Deleted torrent ${torrentId} from RD`);
+    return { success: true };
+  } catch (error) {
+    // Don't throw - deletion is best-effort cleanup
+    logger.debug(`Failed to delete torrent ${torrentId}: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * List all torrents on Real-Debrid account
+ */
+async function listTorrents(apiKey) {
+  try {
+    const response = await axios.get(`${RD_API_BASE}/torrents`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` }
+    });
+    return response.data || [];
+  } catch (error) {
+    logger.error(`Failed to list RD torrents: ${error.message}`);
+    return [];
+  }
+}
+
+/**
+ * Clean up stuck/downloading torrents from RD
+ * Deletes torrents that have been downloading for too long with low progress
+ */
+async function cleanupStuckTorrents(apiKey, maxAgeMinutes = 5, maxProgress = 10) {
+  try {
+    const torrents = await listTorrents(apiKey);
+    const now = Date.now();
+    let deleted = 0;
+
+    for (const torrent of torrents) {
+      // Only clean up torrents that are downloading/waiting
+      if (torrent.status === 'downloading' || torrent.status === 'waiting_files_selection') {
+        const addedTime = new Date(torrent.added).getTime();
+        const ageMinutes = (now - addedTime) / 1000 / 60;
+        const progress = torrent.progress || 0;
+
+        // Delete if old enough and low progress
+        if (ageMinutes > maxAgeMinutes && progress < maxProgress) {
+          await deleteTorrent(apiKey, torrent.id);
+          deleted++;
+        }
+      }
+    }
+
+    if (deleted > 0) {
+      logger.info(`🧹 Cleaned up ${deleted} stuck torrents from RD`);
+    }
+    return { deleted };
+  } catch (error) {
+    logger.error(`RD cleanup error: ${error.message}`);
+    return { deleted: 0, error: error.message };
+  }
+}
+
 module.exports = {
   addMagnet,
   getTorrentInfo,
   selectFiles,
   getUnrestrictedLink,
-  completeDownloadFlow
+  completeDownloadFlow,
+  deleteTorrent,
+  listTorrents,
+  cleanupStuckTorrents
 };

@@ -3,21 +3,27 @@
  *
  * Queries Zurg AND Prowlarr in parallel, combines results,
  * ranks everything together, tries in order until success.
+ *
+ * Supports streaming mode: returns sources progressively as they arrive
+ * to reduce time-to-first-playback.
  */
 
 const { searchZurg } = require('./zurg-search');
 const { searchContent: searchProwlarr } = require('./prowlarr-service');
-const { checkInstantAvailability } = require('@duckflix/rd-client');
 const logger = require('../utils/logger');
 const { estimateBitrateMbps, isValidSource, parseResolution } = require('../utils/bitrate');
 const { getRuntime } = require('./tmdb-service');
+
+// Minimum resolution to start trying before all searches complete
+const MIN_EARLY_RESOLUTION = 720;
 
 /**
  * Search all sources in parallel and return unified ranked list
  * @param {string[]} excludedHashes - Hashes/identifiers to exclude (already tried)
  * @param {string[]} excludedFilePaths - Zurg file paths to exclude
+ * @param {Function} onSourcesReady - Optional callback for streaming mode: (sources, isComplete) => void
  */
-async function getAllSources({ title, year, type, season, episode, tmdbId, rdApiKey, maxBitrateMbps, excludedHashes = [], excludedFilePaths = [] }) {
+async function getAllSources({ title, year, type, season, episode, tmdbId, rdApiKey, maxBitrateMbps, excludedHashes = [], excludedFilePaths = [] }, onSourcesReady = null) {
   logger.info(`🔍 Searching ALL sources in parallel: ${title} (${year})`);
 
   if (excludedHashes.length > 0 || excludedFilePaths.length > 0) {
@@ -32,24 +38,145 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
     runtimeMinutes = type === 'movie' ? 120 : 45;
   }
 
-  // Query Zurg and Prowlarr in parallel
-  const [zurgResult, prowlarrTorrents] = await Promise.all([
-    searchZurg({ title, year, type, season, episode, duration: runtimeMinutes }).catch(err => {
-      logger.warn('Zurg search failed:', err.message);
-      return { matches: [] };
-    }),
-    searchProwlarr({ title, year, type, season, episode }).catch(err => {
-      logger.warn('Prowlarr search failed:', err.message);
-      return [];
-    })
-  ]);
-
   const allSources = [];
+  let prowlarrComplete = false;
+
+  // Helper to process and filter Prowlarr torrents
+  const processProwlarrTorrents = (torrents) => {
+    const { isBadLink } = require('./bad-link-tracker');
+    const sources = [];
+
+    for (const torrent of torrents) {
+      // Skip excluded hashes
+      if (torrent.hash && excludedHashes.includes(torrent.hash.toLowerCase())) {
+        continue;
+      }
+
+      // Check if flagged as bad
+      const badInfo = isBadLink({ hash: torrent.hash, magnetUrl: torrent.magnet });
+
+      const resolution = parseResolution(torrent.title);
+      const sizeBytes = torrent.size || 0;
+
+      // Filter by bandwidth if specified
+      if (maxBitrateMbps && sizeBytes > 0 && runtimeMinutes) {
+        const estimatedBitrate = estimateBitrateMbps(sizeBytes, runtimeMinutes);
+        if (estimatedBitrate > maxBitrateMbps) {
+          continue;
+        }
+      }
+
+      // Filter garbage files
+      if (!isValidSource(sizeBytes, resolution, runtimeMinutes)) {
+        continue;
+      }
+
+      // Filter by year for movies
+      if (year && type === 'movie') {
+        const titleYear = torrent.title.match(/\b(19|20)\d{2}\b/)?.[0];
+        if (titleYear && titleYear !== String(year)) {
+          continue;
+        }
+      }
+
+      // Filter by episode for TV
+      if (type === 'tv' && season && episode) {
+        const s = String(season).padStart(2, '0');
+        const e = String(episode).padStart(2, '0');
+        const titleLower = torrent.title.toLowerCase();
+
+        const episodePatterns = [
+          new RegExp(`s${s}[\\._\\s]?e${e}(?:[^0-9]|$)`, 'i'),
+          new RegExp(`\\b${season}x${e}\\b`, 'i'),
+        ];
+        const seasonPackPatterns = [
+          new RegExp(`s${s}(?:[^e0-9]|$)`, 'i'),
+          new RegExp(`season[\\._\\s]?${season}(?:[^0-9]|$)`, 'i')
+        ];
+
+        const matchesEpisode = episodePatterns.some(p => p.test(titleLower));
+        const isSeasonPack = seasonPackPatterns.some(p => p.test(titleLower)) && !episodePatterns.some(p => p.test(titleLower));
+
+        // Check if it's a wrong specific episode
+        const wrongEpisodePattern = /s(\d{2})[\._\s]?e(\d{2})/i;
+        const match = titleLower.match(wrongEpisodePattern);
+        if (match) {
+          const torrentSeason = parseInt(match[1], 10);
+          const torrentEpisode = parseInt(match[2], 10);
+          if (torrentSeason !== parseInt(season, 10) || torrentEpisode !== parseInt(episode, 10)) {
+            continue;
+          }
+        }
+
+        if (!matchesEpisode && !isSeasonPack) {
+          continue;
+        }
+      }
+
+      sources.push({
+        source: 'prowlarr',
+        title: torrent.title,
+        magnet: torrent.magnet,
+        hash: torrent.hash,
+        quality: torrent.quality,
+        resolution,
+        sizeMB: sizeBytes / (1024 * 1024),
+        seeders: torrent.seeders,
+        isCached: false,
+        isFlaggedBad: badInfo
+      });
+    }
+
+    return sources;
+  };
+
+  // Helper to emit sources (for streaming mode)
+  const emitSources = (isComplete) => {
+    if (!onSourcesReady) return;
+
+    const ranked = rankUnifiedSources(allSources, type);
+    logger.info(`📤 Emitting ${ranked.length} sources (complete: ${isComplete})`);
+    onSourcesReady(ranked, isComplete);
+  };
+
+  // Start Zurg search (must complete - it's fast and gives cached results)
+  const zurgPromise = searchZurg({ title, year, type, season, episode, duration: runtimeMinutes }).catch(err => {
+    logger.warn('Zurg search failed:', err.message);
+    return { matches: [] };
+  });
+
+  // Start Prowlarr search with streaming callback
+  const prowlarrPromise = new Promise((resolve) => {
+    searchProwlarr({ title, year, type, season, episode }, (newTorrents, isComplete) => {
+      // Process new torrents
+      const newSources = processProwlarrTorrents(newTorrents);
+      if (newSources.length > 0) {
+        allSources.push(...newSources);
+        logger.info(`   +${newSources.length} Prowlarr sources (total: ${allSources.length})`);
+      }
+
+      if (isComplete) {
+        prowlarrComplete = true;
+        emitSources(true);
+        resolve();
+      } else if (onSourcesReady && newSources.length > 0) {
+        // Emit immediately as sources arrive — vod.js re-sorts the queue on each batch
+        emitSources(false);
+      }
+    }).catch(err => {
+      logger.warn('Prowlarr search failed:', err.message);
+      prowlarrComplete = true;
+      resolve();
+    });
+  });
+
+  // Wait for Zurg first (fast, ~1s)
+  const zurgResult = await zurgPromise;
 
   // Bad link tracker
   const { isBadLink } = require('./bad-link-tracker');
 
-  // Add Zurg matches to unified list
+  // Add Zurg matches to unified list (these go first - they're cached)
   if (zurgResult.matches && zurgResult.matches.length > 0) {
     for (const zurgFile of zurgResult.matches) {
       // Skip excluded file paths
@@ -87,118 +214,34 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
         mbPerMinute: zurgFile.mbPerMinute,
         isCached: true, // Zurg files are always cached (they're in Zurg mount)
         meetsQualityThreshold: zurgFile.meetsQualityThreshold,
-        isFlaggedBad: badInfo // Mark if flagged as bad
+        isFlaggedBad: badInfo
       });
     }
-    logger.info(`✅ Zurg: ${allSources.length} sources added`);
+    logger.info(`✅ Zurg: ${allSources.filter(s => s.source === 'zurg').length} sources added`);
   }
 
-  // Check RD instant availability for Prowlarr torrents
-  let cachedHashes = new Set();
-  if (prowlarrTorrents.length > 0 && rdApiKey) {
-    const hashes = prowlarrTorrents.map(t => t.hash).filter(h => h);
-    if (hashes.length > 0) {
-      try {
-        cachedHashes = await checkInstantAvailability(hashes, rdApiKey);
-        logger.info(`RD Cache: ${cachedHashes.size}/${hashes.length} Prowlarr torrents cached`);
-      } catch (err) {
-        logger.warn('RD availability check failed:', err.message);
-      }
-    }
+  // In streaming mode with Zurg results, emit them immediately (they're instant)
+  if (onSourcesReady && allSources.length > 0) {
+    logger.info(`⚡ Immediate emit: ${allSources.length} Zurg sources`);
+    emitSources(false);
   }
 
-  // Add Prowlarr torrents to unified list
-  for (const torrent of prowlarrTorrents) {
-    // Skip excluded hashes
-    if (torrent.hash && excludedHashes.includes(torrent.hash.toLowerCase())) {
-      logger.debug(`Excluded Prowlarr (already tried): ${torrent.title}`);
-      continue;
-    }
-
-    // Check if flagged as bad
-    const badInfo = isBadLink({ hash: torrent.hash, magnetUrl: torrent.magnet });
-
-    const isCached = torrent.hash && cachedHashes.has(torrent.hash.toLowerCase());
-    const resolution = parseResolution(torrent.title);
-    const sizeBytes = torrent.size || 0;
-
-    // Filter by bandwidth if specified
-    if (maxBitrateMbps && sizeBytes > 0 && runtimeMinutes) {
-      const estimatedBitrate = estimateBitrateMbps(sizeBytes, runtimeMinutes);
-      if (estimatedBitrate > maxBitrateMbps) {
-        logger.debug(`Filtered Prowlarr ${torrent.title}: ${estimatedBitrate.toFixed(1)} > ${maxBitrateMbps.toFixed(1)} Mbps`);
-        continue;
-      }
-    }
-
-    // Filter garbage files
-    if (!isValidSource(sizeBytes, resolution, runtimeMinutes)) {
-      logger.debug(`Filtered garbage Prowlarr: ${torrent.title}`);
-      continue;
-    }
-
-    // Filter by year for movies
-    if (year && type === 'movie') {
-      const titleYear = torrent.title.match(/\b(19|20)\d{2}\b/)?.[0];
-      if (titleYear && titleYear !== String(year)) {
-        logger.debug(`Filtered wrong year: ${torrent.title} (${titleYear} != ${year})`);
-        continue;
-      }
-    }
-
-    // Filter by episode for TV
-    if (type === 'tv' && season && episode) {
-      const s = String(season).padStart(2, '0');
-      const e = String(episode).padStart(2, '0');
-      const title = torrent.title.toLowerCase();
-
-      // Check if this is the right episode or a valid season pack
-      const episodePatterns = [
-        new RegExp(`s${s}[\\._\\s]?e${e}(?:[^0-9]|$)`, 'i'),
-        new RegExp(`\\b${season}x${e}\\b`, 'i'),
-      ];
-      const seasonPackPatterns = [
-        new RegExp(`s${s}(?:[^e0-9]|$)`, 'i'),
-        new RegExp(`season[\\._\\s]?${season}(?:[^0-9]|$)`, 'i')
-      ];
-
-      const matchesEpisode = episodePatterns.some(p => p.test(title));
-      const isSeasonPack = seasonPackPatterns.some(p => p.test(title)) && !episodePatterns.some(p => p.test(title));
-
-      // Check if it's a wrong specific episode
-      const wrongEpisodePattern = /s(\d{2})[\._\s]?e(\d{2})/i;
-      const match = title.match(wrongEpisodePattern);
-      if (match) {
-        const torrentSeason = parseInt(match[1], 10);
-        const torrentEpisode = parseInt(match[2], 10);
-        if (torrentSeason !== parseInt(season, 10) || torrentEpisode !== parseInt(episode, 10)) {
-          logger.debug(`Filtered wrong episode: ${torrent.title}`);
-          continue;
-        }
-      }
-
-      if (!matchesEpisode && !isSeasonPack) {
-        logger.debug(`Filtered non-matching: ${torrent.title}`);
-        continue;
-      }
-    }
-
-    allSources.push({
-      source: 'prowlarr',
-      title: torrent.title,
-      magnet: torrent.magnet,
-      hash: torrent.hash,
-      quality: torrent.quality,
-      resolution,
-      sizeMB: sizeBytes / (1024 * 1024),
-      seeders: torrent.seeders,
-      isCached,
-      isFlaggedBad: badInfo // Mark if flagged as bad
-    });
+  // Wait for Prowlarr to complete (or timeout if in streaming mode)
+  if (!onSourcesReady) {
+    // Non-streaming mode: wait for everything
+    await prowlarrPromise;
+  } else {
+    // Streaming mode: don't block - prowlarrPromise will emit via callback
+    // Just wait a bit to give it a chance to get some results
+    await Promise.race([
+      prowlarrPromise,
+      new Promise(resolve => setTimeout(resolve, 15000)) // Max 15s wait for all results
+    ]);
   }
 
-  logger.info(`✅ Prowlarr: ${prowlarrTorrents.length} torrents → ${allSources.filter(s => s.source === 'prowlarr').length} sources added after filtering`);
-  logger.info(`📊 Total sources before ranking: ${allSources.length} (${allSources.filter(s => s.isCached).length} cached)`);
+  const zurgCount = allSources.filter(s => s.source === 'zurg').length;
+  const prowlarrCount = allSources.filter(s => s.source === 'prowlarr').length;
+  logger.info(`📊 Total sources: ${allSources.length} (${zurgCount} Zurg cached, ${prowlarrCount} Prowlarr uncached)`);
 
   // Rank all sources together
   const rankedSources = rankUnifiedSources(allSources, type);
@@ -237,9 +280,16 @@ function rankUnifiedSources(sources, type) {
       // Resolution scoring
       score += source.resolution || 0;
 
-      // Seeders (only for Prowlarr)
+      // Seeders (only for Prowlarr) - CRITICAL for uncached sources
       if (source.seeders) {
-        score += Math.min(source.seeders, 500);
+        // Strong seeder bonus for uncached sources (up to +2000)
+        // This ensures high-seeder torrents are strongly preferred over low-seeder ones
+        if (!source.isCached) {
+          score += Math.min(source.seeders * 10, 2000);
+        } else {
+          // Cached sources still get a small seeder bonus for ranking among cached
+          score += Math.min(source.seeders, 500);
+        }
       }
 
       // Quality threshold for Zurg (7+ MB/min gets boost)

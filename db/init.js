@@ -250,6 +250,133 @@ function initDatabase() {
     insertSetting.run(key, value);
   }
 
+  // Live TV: User channel settings (per-user preferences)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_channel_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      channel_id TEXT NOT NULL,
+      is_enabled BOOLEAN DEFAULT 1,
+      is_favorite BOOLEAN DEFAULT 0,
+      sort_order INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, channel_id)
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_user_channel_settings
+    ON user_channel_settings(user_id, channel_id)
+  `);
+
+  // Live TV: Special channels (admin-defined additional channels not in M3U)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS special_channels (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      group_name TEXT DEFAULT 'Live',
+      stream_url TEXT NOT NULL,
+      logo_url TEXT,
+      sort_order INTEGER DEFAULT 999,
+      channel_number INTEGER,
+      is_active BOOLEAN DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Live TV: Channel metadata (additional info like custom logos, EPG overrides)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS channel_metadata (
+      channel_id TEXT PRIMARY KEY,
+      custom_logo_url TEXT,
+      custom_display_name TEXT,
+      epg_override_id TEXT,
+      notes TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Live TV: DVR recordings (FUTURE - Phase 5)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dvr_recordings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      channel_id TEXT NOT NULL,
+      channel_name TEXT NOT NULL,
+      program_title TEXT NOT NULL,
+      program_description TEXT,
+      start_time INTEGER NOT NULL,
+      end_time INTEGER NOT NULL,
+      status TEXT DEFAULT 'scheduled',
+      recording_path TEXT,
+      file_size_bytes INTEGER,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_dvr_user_time
+    ON dvr_recordings(user_id, start_time)
+  `);
+
+  // Subtitles cache (permanent storage with 100GB limit)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS subtitles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tmdb_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      year TEXT,
+      type TEXT NOT NULL,
+      season INTEGER,
+      episode INTEGER,
+      language TEXT NOT NULL,
+      language_code TEXT NOT NULL,
+      format TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      file_size_bytes INTEGER NOT NULL,
+      opensubtitles_file_id TEXT,
+      downloaded_at TEXT DEFAULT (datetime('now')),
+      last_accessed_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_subtitles_lookup
+    ON subtitles(tmdb_id, type, season, episode, language_code)
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_subtitles_downloaded
+    ON subtitles(downloaded_at)
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_subtitles_accessed
+    ON subtitles(last_accessed_at)
+  `);
+
+  // Subtitle quota tracking (daily OpenSubtitles API usage)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS subtitle_quota_tracking (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      download_date TEXT NOT NULL,
+      download_count INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
+      UNIQUE(download_date)
+    )
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_quota_date
+    ON subtitle_quota_tracking(download_date)
+  `);
+
   logger.info('Database tables created successfully');
 }
 

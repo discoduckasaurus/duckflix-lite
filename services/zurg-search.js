@@ -2,6 +2,53 @@ const { findInZurgMount } = require('@duckflix/zurg-client');
 const logger = require('../utils/logger');
 
 /**
+ * Normalize title for comparison (remove special chars, lowercase)
+ */
+function normalizeTitle(title) {
+  if (!title) return '';
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '') // Remove special chars
+    .replace(/\s+/g, ' ')        // Normalize spaces
+    .trim();
+}
+
+/**
+ * Check if a file path/name contains the expected title
+ */
+function titleMatches(filePath, expectedTitle) {
+  const normalizedExpected = normalizeTitle(expectedTitle);
+  const normalizedPath = normalizeTitle(filePath);
+
+  // Check if the expected title words appear in the path
+  const expectedWords = normalizedExpected.split(' ').filter(w => w.length > 2);
+
+  // At least 70% of significant words should match
+  const matchingWords = expectedWords.filter(word => normalizedPath.includes(word));
+  const matchRatio = matchingWords.length / expectedWords.length;
+
+  return matchRatio >= 0.7;
+}
+
+/**
+ * Filter matches to only include those that match the expected title
+ */
+function filterByTitle(matches, expectedTitle) {
+  if (!matches || !Array.isArray(matches)) return [];
+
+  return matches.filter(match => {
+    const pathOrName = match.filePath || match.fileName || '';
+    const isMatch = titleMatches(pathOrName, expectedTitle);
+
+    if (!isMatch) {
+      logger.debug(`Filtered out wrong title: ${pathOrName.substring(0, 80)} (expected: ${expectedTitle})`);
+    }
+
+    return isMatch;
+  });
+}
+
+/**
  * Search Zurg mount for content
  *
  * @param {Object} params - Search parameters
@@ -31,6 +78,33 @@ async function searchZurg({ title, year, type, season, episode, duration }) {
       episode,
       episodeRuntime: duration
     });
+
+    // CRITICAL: Verify title matches to prevent wrong content (e.g., American Dad vs The Office)
+    // The zurg-client sometimes matches by year+episode pattern without verifying title
+    if (result.matches && result.matches.length > 0) {
+      result.matches = filterByTitle(result.matches, title);
+
+      if (result.matches.length === 0) {
+        logger.warn(`Zurg: All ${result.matches?.length || 0} matches filtered out (wrong title)`);
+        result.match = null;
+        result.fallback = null;
+      } else {
+        // Update match/fallback based on filtered results
+        result.match = result.matches.find(m => m.meetsQualityThreshold) || null;
+        result.fallback = result.matches.find(m => !m.meetsQualityThreshold) || null;
+      }
+    }
+
+    // Also verify single match/fallback
+    if (result.match && !titleMatches(result.match.filePath || result.match.fileName, title)) {
+      logger.warn(`Zurg: Match filtered out (wrong title): ${result.match.filePath?.substring(0, 60)}`);
+      result.match = null;
+    }
+
+    if (result.fallback && !titleMatches(result.fallback.filePath || result.fallback.fileName, title)) {
+      logger.warn(`Zurg: Fallback filtered out (wrong title): ${result.fallback.filePath?.substring(0, 60)}`);
+      result.fallback = null;
+    }
 
     if (result.match) {
       logger.info(`Zurg match found: ${result.match.filePath}`);

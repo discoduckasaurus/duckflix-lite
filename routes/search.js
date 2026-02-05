@@ -11,6 +11,9 @@ const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 const TRENDING_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
+// Timeout for all TMDB API calls — fail fast instead of hanging 90s on stalled connections
+const TMDB_TIMEOUT = 10000;
+
 
 router.get('/tmdb/trending', async (req, res) => {
   try {
@@ -51,7 +54,8 @@ router.get('/tmdb/trending', async (req, res) => {
     const response = await axios.get(url, {
       params: {
         api_key: tmdbApiKey
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     // Format results consistently with search endpoint
@@ -143,7 +147,8 @@ router.get('/collections/popular', async (req, res) => {
       params: {
         api_key: tmdbApiKey,
         page
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const results = formatResults(response.data.results);
@@ -186,7 +191,8 @@ router.get('/collections/top-rated', async (req, res) => {
       params: {
         api_key: tmdbApiKey,
         page
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const results = formatResults(response.data.results);
@@ -228,7 +234,8 @@ router.get('/collections/now-playing', async (req, res) => {
       params: {
         api_key: tmdbApiKey,
         page
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const results = formatResults(response.data.results);
@@ -270,7 +277,8 @@ router.get('/collections/upcoming', async (req, res) => {
       params: {
         api_key: tmdbApiKey,
         page
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const results = formatResults(response.data.results);
@@ -312,7 +320,8 @@ router.get('/collections/airing-today', async (req, res) => {
       params: {
         api_key: tmdbApiKey,
         page
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const results = formatResults(response.data.results);
@@ -354,7 +363,8 @@ router.get('/collections/on-the-air', async (req, res) => {
       params: {
         api_key: tmdbApiKey,
         page
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const results = formatResults(response.data.results);
@@ -429,7 +439,8 @@ router.get('/collections/discover', async (req, res) => {
     if (language) params.with_original_language = language;
 
     const response = await axios.get(`https://api.themoviedb.org/3/discover/${contentType}`, {
-      params
+      params,
+      timeout: TMDB_TIMEOUT
     });
 
     const results = formatResults(response.data.results);
@@ -479,7 +490,8 @@ router.get('/collections/genres', async (req, res) => {
     const response = await axios.get(`https://api.themoviedb.org/3/genre/${contentType}/list`, {
       params: {
         api_key: tmdbApiKey
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     cache.set(cacheKey, { data: response.data, timestamp: Date.now() });
@@ -587,7 +599,8 @@ router.get('/tmdb', async (req, res) => {
         api_key: tmdbApiKey,
         query,
         include_adult: false
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const results = response.data.results
@@ -685,9 +698,6 @@ router.get('/tmdb/:id', async (req, res) => {
       return res.json(cached.data);
     }
 
-    // Add small delay to avoid rate limits
-    await new Promise(resolve => setTimeout(resolve, 250));
-
     const url = `https://api.themoviedb.org/3/${contentType}/${id}`;
 
     const response = await axios.get(url, {
@@ -695,7 +705,8 @@ router.get('/tmdb/:id', async (req, res) => {
         api_key: tmdbApiKey,
         append_to_response: type === 'tv' ? 'credits,videos,external_ids,seasons,images' : 'credits,videos,external_ids,images',
         include_image_language: 'en,null' // Only English and language-neutral images
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const data = response.data;
@@ -781,7 +792,8 @@ router.get('/person/:personId', async (req, res) => {
     const response = await axios.get(url, {
       params: {
         api_key: tmdbApiKey
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const data = response.data;
@@ -834,7 +846,8 @@ router.get('/person/:personId/credits', async (req, res) => {
     const response = await axios.get(url, {
       params: {
         api_key: tmdbApiKey
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     const now = new Date();
@@ -927,15 +940,13 @@ router.get('/tmdb/season/:showId/:seasonNumber', async (req, res) => {
       return res.json(cached.data);
     }
 
-    // Add small delay to avoid rate limits
-    await new Promise(resolve => setTimeout(resolve, 250));
-
     const url = `https://api.themoviedb.org/3/tv/${showId}/season/${seasonNumber}`;
 
     const response = await axios.get(url, {
       params: {
         api_key: tmdbApiKey
-      }
+      },
+      timeout: TMDB_TIMEOUT
     });
 
     // Cache the result
@@ -1021,7 +1032,7 @@ router.get('/prowlarr', async (req, res) => {
 
     // Format results
     const results = response.data
-      .filter(r => r.seeders > 0) // Only return torrents with seeders
+      .filter(r => r.seeders >= 5) // Only return torrents with at least 5 seeders
       .map(r => ({
         title: r.title,
         size: r.size,

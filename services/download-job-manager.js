@@ -31,6 +31,7 @@ class DownloadJobManager {
       streamUrl: null,
       fileName: null,
       fileSize: null,
+      quality: null, // Quality extracted from resolved stream (e.g., "2160p", "1080p")
       source: null,
       error: null,
       attemptedSources: [], // Track all sources tried
@@ -146,10 +147,10 @@ class DownloadJobManager {
       const isCompleted = job.status === 'completed';
       const isError = job.status === 'error';
 
-      if (isCompleted && job.createdAt < fiveMinutesAgo) {
+      if (isCompleted && job.completedAt && job.completedAt < fiveMinutesAgo) {
         this.jobs.delete(jobId);
         cleaned++;
-      } else if (isError && job.createdAt < twelveHoursAgo) {
+      } else if (isError && job.completedAt && job.completedAt < twelveHoursAgo) {
         this.jobs.delete(jobId);
         cleaned++;
       }

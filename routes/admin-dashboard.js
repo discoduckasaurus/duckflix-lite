@@ -351,6 +351,11 @@ router.get('/health', async (req, res) => {
  */
 router.get('/loading-phrases', (req, res) => {
   try {
+    // Prevent caching so we always see latest phrases
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+
     // Check if phrases are in database
     const phrasesRecord = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('loading_phrases');
 
