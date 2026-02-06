@@ -405,6 +405,457 @@ async function saveLoadingPhrases() {
     }
 }
 
+// =========================================
+// Live TV Channel Management
+// =========================================
+let allAdminChannels = [];
+let channelChanges = new Map(); // channelId -> { displayName, isEnabled, sortOrder }
+let logoUploadTarget = null; // channelId for pending logo upload
+let draggedChannelId = null; // for drag-and-drop reordering
+
+async function loadLiveTVChannels() {
+    try {
+        const data = await apiRequest('/api/admin/channels');
+        allAdminChannels = data.channels || [];
+        channelChanges.clear();
+        renderChannelList();
+        updateChannelStats();
+    } catch (error) {
+        console.error('Failed to load channels:', error);
+        document.getElementById('channels-table-container').innerHTML =
+            `<p class="error">Failed to load channels: ${error.message}</p>`;
+    }
+}
+
+function getFilteredChannels() {
+    const search = (document.getElementById('channel-search')?.value || '').toLowerCase();
+    const sourceFilter = document.getElementById('channel-source-filter')?.value || 'all';
+    const statusFilter = document.getElementById('channel-status-filter')?.value || 'all';
+
+    return allAdminChannels.filter(ch => {
+        // Search filter
+        if (search) {
+            const haystack = `${ch.displayName} ${ch.name} ${ch.id} ${ch.group}`.toLowerCase();
+            if (!haystack.includes(search)) return false;
+        }
+
+        // Source filter
+        if (sourceFilter === 'has-daddylive') {
+            if (!ch.hasDaddyLive) return false;
+        } else if (sourceFilter === 'failover') {
+            if (!ch.hasDaddyLive || ch.activeSource === 'daddylive' || !ch.activeSource) return false;
+        } else if (sourceFilter !== 'all' && ch.source !== sourceFilter) {
+            return false;
+        }
+
+        // Status filter
+        const change = channelChanges.get(ch.id);
+        const isEnabled = change?.isEnabled !== undefined ? change.isEnabled : ch.isEnabled;
+        if (statusFilter === 'enabled' && !isEnabled) return false;
+        if (statusFilter === 'disabled' && isEnabled) return false;
+        if (statusFilter === 'new' && ch.hasMetadata) return false;
+
+        return true;
+    }).sort((a, b) => {
+        // Disabled channels go to the bottom
+        const aChange = channelChanges.get(a.id);
+        const bChange = channelChanges.get(b.id);
+        const aEnabled = aChange?.isEnabled !== undefined ? aChange.isEnabled : a.isEnabled;
+        const bEnabled = bChange?.isEnabled !== undefined ? bChange.isEnabled : b.isEnabled;
+        if (aEnabled && !bEnabled) return -1;
+        if (!aEnabled && bEnabled) return 1;
+        // Then by sort order
+        const aOrder = a.sortOrder;
+        const bOrder = b.sortOrder;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.displayName || '').localeCompare(b.displayName || '');
+    });
+}
+
+function renderChannelList() {
+    const filtered = getFilteredChannels();
+    const container = document.getElementById('channels-table-container');
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<p style="padding:2rem;color:var(--text-secondary);">No channels match your filters.</p>';
+        return;
+    }
+
+    // Build overall position map from ALL enabled channels (not just filtered)
+    const allEnabled = allAdminChannels.filter(ch => {
+        const change = channelChanges.get(ch.id);
+        return change?.isEnabled !== undefined ? change.isEnabled : ch.isEnabled;
+    }).sort((a, b) => {
+        const aOrder = channelChanges.get(a.id)?.sortOrder ?? a.sortOrder;
+        const bOrder = channelChanges.get(b.id)?.sortOrder ?? b.sortOrder;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.displayName || '').localeCompare(b.displayName || '');
+    });
+    const overallPositionMap = new Map();
+    allEnabled.forEach((ch, i) => overallPositionMap.set(ch.id, i + 1));
+
+    const headerHtml = `
+        <div class="channel-header-row">
+            <span></span>
+            <span>On</span>
+            <span>Logo</span>
+            <span>Channel</span>
+            <span>Source</span>
+            <span>#</span>
+        </div>
+    `;
+
+    const rowsHtml = filtered.map((ch, index) => {
+        const change = channelChanges.get(ch.id);
+        const isEnabled = change?.isEnabled !== undefined ? change.isEnabled : ch.isEnabled;
+        const position = isEnabled ? overallPositionMap.get(ch.id) : null;
+        const displayName = change?.displayName !== undefined ? change.displayName : ch.displayName;
+
+        const disabledClass = !isEnabled ? 'disabled-row' : '';
+        const newClass = !ch.hasMetadata ? 'new-row' : '';
+
+        // Active source (what's actually streaming right now)
+        const activeSource = ch.activeSource;
+        const activeLabel = activeSource === 'daddylive' ? 'DL'
+            : activeSource === 'tvpass' ? 'TVP'
+            : activeSource === 'backup' ? 'BKP'
+            : null;
+        const isFailover = ch.hasDaddyLive && activeSource && activeSource !== 'daddylive';
+
+        // Primary source config: DaddyLive if matched, otherwise original source
+        const primarySource = ch.hasDaddyLive ? 'daddylive' : ch.source;
+        const primaryClass = `source-${primarySource}`;
+        const primaryLabel = primarySource === 'daddylive' ? 'DaddyLive'
+            : primarySource === 'cabernet' ? 'DaddyLive'
+            : primarySource;
+
+        // Source badges
+        const badges = [];
+        if (activeLabel) {
+            const activeClass = isFailover ? 'stream-badge-failover' : 'stream-badge-active';
+            badges.push(`<span class="stream-badge ${activeClass}" title="Currently streaming via ${activeSource}">${activeLabel}</span>`);
+        }
+        if (ch.hasDaddyLive && ch.source === 'tvpass') {
+            badges.push('<span class="stream-badge stream-badge-tvpass" title="TVPass fallback">TVPass</span>');
+        }
+        if (ch.hasBackupStreams) badges.push('<span class="stream-badge stream-badge-backup" title="Has backup streams">Backup</span>');
+        const badgesHtml = badges.length > 0 ? badges.join(' ') : '';
+
+        const logoHtml = ch.logo
+            ? `<img class="channel-logo" src="${ch.logo}" alt="" title="Click to change logo" onclick="triggerLogoUpload('${ch.id}')" onerror="this.outerHTML='<div class=\\'channel-logo-placeholder\\' onclick=\\'triggerLogoUpload(&quot;${ch.id}&quot;)\\'>+</div>'">`
+            : `<div class="channel-logo-placeholder" onclick="triggerLogoUpload('${ch.id}')" title="Click to upload logo">+</div>`;
+
+        const positionHtml = isEnabled
+            ? `<input type="number" class="channel-order-input" value="${position}" min="1" onchange="onChannelReorder('${ch.id}', parseInt(this.value))">`
+            : `<span class="channel-order-disabled">-</span>`;
+
+        return `
+            <div class="channel-row ${disabledClass} ${newClass}" draggable="true"
+                data-channel-id="${ch.id}"
+                ondragstart="onRowDragStart(event, '${ch.id}')"
+                ondragover="onRowDragOver(event)"
+                ondrop="onRowDrop(event, '${ch.id}')"
+                ondragend="onRowDragEnd(event)">
+                <div class="drag-handle" title="Drag to reorder">&#x2630;</div>
+                <input type="checkbox" class="channel-enable-toggle"
+                    ${isEnabled ? 'checked' : ''}
+                    onchange="onChannelToggle('${ch.id}', this.checked)">
+                <div class="channel-logo-cell">${logoHtml}</div>
+                <div class="channel-info">
+                    <input type="text" class="channel-display-name"
+                        value="${escapeHtml(displayName)}"
+                        data-original="${escapeHtml(ch.displayName)}"
+                        onchange="onChannelRename('${ch.id}', this.value)">
+                    <div class="channel-meta">
+                        <span class="channel-source-badge ${primaryClass}">${primaryLabel}</span>
+                        ${badgesHtml}
+                        <span class="channel-group-text">${escapeHtml(ch.group)}</span>
+                        <span style="color:#94a3b8">${ch.id}</span>
+                    </div>
+                </div>
+                <span class="channel-source-badge ${primaryClass}" style="justify-self:center">${primaryLabel}</span>
+                ${positionHtml}
+            </div>
+        `;
+    }).join('');
+
+    // Preserve scroll position across re-renders
+    const scrollEl = container.querySelector('.channel-list-container');
+    const scrollTop = scrollEl ? scrollEl.scrollTop : 0;
+    container.innerHTML = `<div class="channel-list-container">${headerHtml}${rowsHtml}</div>`;
+    const newScrollEl = container.querySelector('.channel-list-container');
+    if (newScrollEl) newScrollEl.scrollTop = scrollTop;
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML.replace(/"/g, '&quot;');
+}
+
+function updateChannelStats() {
+    const total = allAdminChannels.length;
+    const enabled = allAdminChannels.filter(ch => {
+        const change = channelChanges.get(ch.id);
+        return change?.isEnabled !== undefined ? change.isEnabled : ch.isEnabled;
+    }).length;
+    const tvpass = allAdminChannels.filter(ch => ch.source === 'tvpass').length;
+    const daddyliveOnly = allAdminChannels.filter(ch => ch.source === 'cabernet').length;
+    const withDL = allAdminChannels.filter(ch => ch.hasDaddyLive).length;
+    const newCount = allAdminChannels.filter(ch => !ch.hasMetadata).length;
+
+    const statsEl = document.getElementById('channel-stats');
+    if (statsEl) {
+        statsEl.innerHTML = `${enabled}/${total} enabled | ${tvpass} TVPass | ${daddyliveOnly} DaddyLive-only | ${withDL} with DL primary` +
+            (newCount > 0 ? ` | <strong style="color:var(--warning-color)">${newCount} new</strong>` : '') +
+            (channelChanges.size > 0 ? ` | <strong style="color:var(--primary-color)">${channelChanges.size} unsaved</strong>` : '');
+    }
+}
+
+function onChannelToggle(channelId, enabled) {
+    const existing = channelChanges.get(channelId) || {};
+    channelChanges.set(channelId, { ...existing, isEnabled: enabled });
+    renderChannelList();
+    updateChannelStats();
+}
+
+function onChannelRename(channelId, newName) {
+    const existing = channelChanges.get(channelId) || {};
+    channelChanges.set(channelId, { ...existing, displayName: newName });
+    updateChannelStats();
+}
+
+/**
+ * Get all enabled channels sorted by current sort order (including pending changes).
+ */
+function getAllEnabledSorted() {
+    return allAdminChannels.filter(ch => {
+        const change = channelChanges.get(ch.id);
+        return change?.isEnabled !== undefined ? change.isEnabled : ch.isEnabled;
+    }).sort((a, b) => {
+        const aOrder = channelChanges.get(a.id)?.sortOrder ?? a.sortOrder;
+        const bOrder = channelChanges.get(b.id)?.sortOrder ?? b.sortOrder;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.displayName || '').localeCompare(b.displayName || '');
+    });
+}
+
+/**
+ * Move a channel to a 1-based position in the OVERALL enabled list.
+ * Works correctly even when searching — positions are always global.
+ */
+function moveChannelToPosition(channelId, targetPos) {
+    const allEnabled = getAllEnabledSorted();
+    const fromIdx = allEnabled.findIndex(ch => ch.id === channelId);
+    if (fromIdx === -1) return;
+
+    const toIdx = Math.max(0, Math.min(allEnabled.length - 1, targetPos - 1));
+    if (fromIdx === toIdx) return;
+
+    // Move channel in the full sorted array
+    const [moved] = allEnabled.splice(fromIdx, 1);
+    allEnabled.splice(toIdx, 0, moved);
+
+    // Reassign sequential sort_order (1-based) to ALL enabled channels
+    allEnabled.forEach((ch, i) => {
+        const newOrder = i + 1;
+        const orig = allAdminChannels.find(c => c.id === ch.id);
+        if (orig && orig.sortOrder !== newOrder) {
+            const existing = channelChanges.get(ch.id) || {};
+            channelChanges.set(ch.id, { ...existing, sortOrder: newOrder });
+            orig.sortOrder = newOrder;
+        }
+    });
+
+    renderChannelList();
+    updateChannelStats();
+}
+
+function onChannelReorder(channelId, newPosition) {
+    moveChannelToPosition(channelId, newPosition);
+}
+
+// ---- Drag and Drop ----
+
+function onRowDragStart(e, channelId) {
+    draggedChannelId = channelId;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', channelId);
+    setTimeout(() => {
+        const row = e.target.closest('.channel-row');
+        if (row) row.classList.add('dragging');
+    }, 0);
+}
+
+function onRowDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    // Auto-scroll when dragging near top/bottom edges of the scrollable list
+    const scrollEl = document.querySelector('.channel-list-container');
+    if (scrollEl) {
+        const rect = scrollEl.getBoundingClientRect();
+        const edgeZone = 60; // px from edge to trigger scroll
+        const scrollSpeed = 12;
+        if (e.clientY < rect.top + edgeZone) {
+            scrollEl.scrollTop -= scrollSpeed;
+        } else if (e.clientY > rect.bottom - edgeZone) {
+            scrollEl.scrollTop += scrollSpeed;
+        }
+    }
+
+    const row = e.target.closest('.channel-row');
+    if (!row || row.dataset.channelId === draggedChannelId) return;
+
+    // Clear old indicators
+    document.querySelectorAll('.drag-over-above, .drag-over-below')
+        .forEach(el => el.classList.remove('drag-over-above', 'drag-over-below'));
+
+    // Show indicator above or below based on mouse position
+    const rect = row.getBoundingClientRect();
+    if (e.clientY < rect.top + rect.height / 2) {
+        row.classList.add('drag-over-above');
+    } else {
+        row.classList.add('drag-over-below');
+    }
+}
+
+function onRowDrop(e, targetChannelId) {
+    e.preventDefault();
+    if (!draggedChannelId || draggedChannelId === targetChannelId) {
+        onRowDragEnd(e);
+        return;
+    }
+
+    // Use overall positions so drag works correctly even when searching
+    const allEnabled = getAllEnabledSorted();
+    const fromIdx = allEnabled.findIndex(ch => ch.id === draggedChannelId);
+    const toIdx = allEnabled.findIndex(ch => ch.id === targetChannelId);
+
+    if (fromIdx === -1 || toIdx === -1) {
+        onRowDragEnd(e);
+        return;
+    }
+
+    // Insert above or below target based on mouse position
+    const row = e.target.closest('.channel-row');
+    const rect = row.getBoundingClientRect();
+    const insertBelow = e.clientY > rect.top + rect.height / 2;
+    let targetPosition = insertBelow ? toIdx + 2 : toIdx + 1; // 1-based
+    // Adjust if dragging downward (removing from above shifts indices)
+    if (fromIdx < toIdx) targetPosition--;
+
+    moveChannelToPosition(draggedChannelId, targetPosition);
+    onRowDragEnd(e);
+}
+
+function onRowDragEnd(e) {
+    draggedChannelId = null;
+    document.querySelectorAll('.dragging, .drag-over-above, .drag-over-below')
+        .forEach(el => el.classList.remove('dragging', 'drag-over-above', 'drag-over-below'));
+}
+
+function triggerLogoUpload(channelId) {
+    logoUploadTarget = channelId;
+    document.getElementById('logo-upload-input').click();
+}
+
+async function handleLogoUpload(file) {
+    if (!logoUploadTarget || !file) return;
+
+    const channelId = logoUploadTarget;
+    logoUploadTarget = null;
+
+    try {
+        const formData = new FormData();
+        formData.append('logo', file);
+
+        const token = localStorage.getItem(TOKEN_KEY);
+        const response = await fetch(`${API_BASE}/api/admin/channels/${encodeURIComponent(channelId)}/logo`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: 'Upload failed' }));
+            throw new Error(err.error);
+        }
+
+        const data = await response.json();
+
+        // Update the channel in memory and re-render the row
+        const ch = allAdminChannels.find(c => c.id === channelId);
+        if (ch) ch.logo = data.logoUrl + '?t=' + Date.now();
+        renderChannelList();
+        showToast('Logo uploaded!', 'success');
+    } catch (error) {
+        showToast('Logo upload failed: ' + error.message, 'error');
+    }
+}
+
+async function saveAllChannelChanges() {
+    if (channelChanges.size === 0) {
+        showToast('No changes to save', 'success');
+        return;
+    }
+
+    try {
+        const channels = [];
+        for (const [id, changes] of channelChanges) {
+            const original = allAdminChannels.find(ch => ch.id === id) || {};
+            channels.push({
+                id,
+                displayName: changes.displayName !== undefined ? changes.displayName : original.displayName,
+                isEnabled: changes.isEnabled !== undefined ? changes.isEnabled : original.isEnabled,
+                sortOrder: changes.sortOrder !== undefined ? changes.sortOrder : original.sortOrder
+            });
+        }
+
+        await apiRequest('/api/admin/channels/batch', {
+            method: 'PUT',
+            body: JSON.stringify({ channels })
+        });
+
+        showToast(`Saved ${channels.length} channel changes!`, 'success');
+
+        // Reload fresh data
+        await loadLiveTVChannels();
+    } catch (error) {
+        showToast('Save failed: ' + error.message, 'error');
+    }
+}
+
+async function seedCabernetLogos() {
+    try {
+        const data = await apiRequest('/api/admin/channels/seed-cabernet-logos', {
+            method: 'POST'
+        });
+        showToast(`Auto-matched ${data.matched}/${data.total} DaddyLive channel logos`, 'success');
+        await loadLiveTVChannels();
+    } catch (error) {
+        showToast('Auto-match failed: ' + error.message, 'error');
+    }
+}
+
+async function resetAllSources() {
+    try {
+        const data = await apiRequest('/api/admin/channels/reset-sources', { method: 'POST' });
+        showToast(`Reset ${data.resetCount} channel sources back to primary`);
+        loadLiveTVChannels();
+    } catch (error) {
+        showToast('Failed to reset sources: ' + error.message, 'error');
+    }
+}
+
+function showToast(message, type = 'success') {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+}
+
 // Event Handlers
 document.addEventListener('DOMContentLoaded', () => {
     // Check auth state
@@ -459,6 +910,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
                 case 'loading-phrases':
                     loadLoadingPhrases();
+                    break;
+                case 'livetv':
+                    loadLiveTVChannels();
                     break;
             }
         });
@@ -548,6 +1002,39 @@ document.addEventListener('DOMContentLoaded', () => {
     // Save loading phrases
     document.getElementById('save-phrases-btn').addEventListener('click', saveLoadingPhrases);
 
+    // Live TV handlers
+    document.getElementById('save-channels-btn').addEventListener('click', saveAllChannelChanges);
+    document.getElementById('seed-logos-btn').addEventListener('click', seedCabernetLogos);
+    document.getElementById('reset-sources-btn').addEventListener('click', resetAllSources);
+
+    // Channel search with debounce
+    let searchTimeout;
+    document.getElementById('channel-search').addEventListener('input', () => {
+        clearTimeout(searchTimeout);
+        searchTimeout = setTimeout(() => {
+            renderChannelList();
+            updateChannelStats();
+        }, 200);
+    });
+
+    // Channel filters
+    document.getElementById('channel-source-filter').addEventListener('change', () => {
+        renderChannelList();
+        updateChannelStats();
+    });
+    document.getElementById('channel-status-filter').addEventListener('change', () => {
+        renderChannelList();
+        updateChannelStats();
+    });
+
+    // Logo upload handler
+    document.getElementById('logo-upload-input').addEventListener('change', (e) => {
+        if (e.target.files[0]) {
+            handleLogoUpload(e.target.files[0]);
+            e.target.value = ''; // Reset so same file can be re-selected
+        }
+    });
+
     // Close modal on outside click
     window.addEventListener('click', (e) => {
         if (e.target.classList.contains('modal')) {
@@ -559,3 +1046,11 @@ document.addEventListener('DOMContentLoaded', () => {
 // Make functions available globally
 window.editUser = editUser;
 window.deleteUser = deleteUser;
+window.onChannelToggle = onChannelToggle;
+window.onChannelRename = onChannelRename;
+window.onChannelReorder = onChannelReorder;
+window.triggerLogoUpload = triggerLogoUpload;
+window.onRowDragStart = onRowDragStart;
+window.onRowDragOver = onRowDragOver;
+window.onRowDrop = onRowDrop;
+window.onRowDragEnd = onRowDragEnd;

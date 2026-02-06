@@ -300,6 +300,41 @@ function initDatabase() {
     )
   `);
 
+  // Migration: Add admin-level is_enabled and sort_order to channel_metadata
+  try {
+    db.exec(`ALTER TABLE channel_metadata ADD COLUMN is_enabled BOOLEAN DEFAULT 1`);
+    logger.info('Added is_enabled column to channel_metadata');
+  } catch (e) {}
+
+  try {
+    db.exec(`ALTER TABLE channel_metadata ADD COLUMN sort_order INTEGER DEFAULT 999`);
+    logger.info('Added sort_order column to channel_metadata');
+  } catch (e) {}
+
+  // Pre-seed channel_metadata from channel-config.json (one-time migration)
+  try {
+    const channelConfigPath = path.join(__dirname, 'channel-config.json');
+    if (fs.existsSync(channelConfigPath)) {
+      const existingCount = db.prepare('SELECT COUNT(*) as count FROM channel_metadata').get();
+      if (existingCount.count === 0) {
+        const channelConfig = JSON.parse(fs.readFileSync(channelConfigPath, 'utf-8'));
+        const stmt = db.prepare(`
+          INSERT OR IGNORE INTO channel_metadata (channel_id, custom_display_name, custom_logo_url, is_enabled, sort_order, updated_at)
+          VALUES (?, ?, ?, ?, ?, datetime('now'))
+        `);
+        let order = 0;
+        for (const [id, cfg] of Object.entries(channelConfig)) {
+          const logoUrl = cfg.logoFile ? `/static/logos/${cfg.logoFile}` : null;
+          const enabled = cfg.enabled !== false ? 1 : 0;
+          stmt.run(id, cfg.displayName || null, logoUrl, enabled, order++);
+        }
+        logger.info(`Pre-seeded channel_metadata with ${Object.keys(channelConfig).length} channels from channel-config.json`);
+      }
+    }
+  } catch (e) {
+    logger.warn('Failed to pre-seed channel_metadata:', e.message);
+  }
+
   // Live TV: DVR recordings (FUTURE - Phase 5)
   db.exec(`
     CREATE TABLE IF NOT EXISTS dvr_recordings (

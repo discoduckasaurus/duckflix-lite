@@ -23,7 +23,7 @@ router.get('/random/episode/:tmdbId', authenticateToken, async (req, res) => {
 
     // Fetch TV series details from TMDB
     const seriesUrl = `https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${tmdbApiKey}`;
-    const seriesResponse = await axios.get(seriesUrl);
+    const seriesResponse = await axios.get(seriesUrl, { timeout: 10000 });
     const seriesData = seriesResponse.data;
 
     // Filter out Season 0 (specials) and get all valid seasons
@@ -61,7 +61,7 @@ router.get('/random/episode/:tmdbId', authenticateToken, async (req, res) => {
 
     // Fetch episode details to get the title
     const episodeUrl = `https://api.themoviedb.org/3/tv/${tmdbId}/season/${selectedSeason}/episode/${selectedEpisodeNumber}?api_key=${tmdbApiKey}`;
-    const episodeResponse = await axios.get(episodeUrl);
+    const episodeResponse = await axios.get(episodeUrl, { timeout: 10000 });
     const episodeData = episodeResponse.data;
 
     const result = {

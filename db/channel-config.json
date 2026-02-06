@@ -1,0 +1,968 @@
+{
+  "american-heroes-channel": {
+    "dvrEnabled": false,
+    "displayName": "American Heroes Channel",
+    "logoFile": "american-heroes-channel.png"
+  },
+  "altitude-sports-denver": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "Altitude Sports",
+    "logoFile": "altitude-sports-denver.png"
+  },
+  "acc-network": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "ACC Network",
+    "logoFile": "acc-network.png"
+  },
+  "abc-wabc-new-york-ny": {
+    "dvrEnabled": true,
+    "enabled": true,
+    "displayName": "ABC",
+    "logoFile": "abc-wabc-new-york-ny.png"
+  },
+  "bet-her": {
+    "dvrEnabled": false,
+    "displayName": "BET Her",
+    "logoFile": "bet-her.png"
+  },
+  "bloomberg-tv-usa": {
+    "dvrEnabled": false,
+    "displayName": "Bloomberg",
+    "logoFile": "bloomberg-tv-usa.png"
+  },
+  "cspan": {
+    "dvrEnabled": false,
+    "displayName": "C-SPAN",
+    "logoFile": "cspan.png"
+  },
+  "cspan-2": {
+    "dvrEnabled": false,
+    "displayName": "C-SPAN2",
+    "logoFile": "cspan-2.png"
+  },
+  "cbs-wcbs-new-york-ny": {
+    "dvrEnabled": false,
+    "displayName": "CBS",
+    "logoFile": "cbs-wcbs-new-york-ny.png"
+  },
+  "cmt-us-eastern-feed": {
+    "dvrEnabled": false,
+    "displayName": "CMT",
+    "logoFile": "cmt-us-eastern-feed.png"
+  },
+  "cnbc-usa": {
+    "dvrEnabled": false,
+    "displayName": "CNBC",
+    "logoFile": "cnbc-usa.png"
+  },
+  "disney-junior-usa-east": {
+    "dvrEnabled": false,
+    "displayName": "Disney Junior",
+    "logoFile": "disney-junior-usa-east.png"
+  },
+  "disney-xd-usa-eastern-feed": {
+    "dvrEnabled": false,
+    "displayName": "Disney XD",
+    "logoFile": "disney-xd-usa-eastern-feed.png"
+  },
+  "espn-deportes": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "ESPN Deportes",
+    "logoFile": "espn-deportes.png"
+  },
+  "fanduel-sports-indiana": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Indiana",
+    "logoFile": "fanduel-sports-indiana.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-detroit-hd": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Detroit",
+    "logoFile": "fanduel-sports-network-detroit-hd.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-florida": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Florida",
+    "logoFile": "fanduel-sports-network-florida.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-great-lakes": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Great Lakes",
+    "logoFile": "fanduel-sports-network-great-lakes.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-ohio-cleveland": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Ohio",
+    "logoFile": "fanduel-sports-network-ohio-cleveland.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-north": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports North",
+    "logoFile": "fanduel-sports-network-north.png",
+    "enabled": false
+  },
+  "comedy-central-us-eastern-feed": {
+    "dvrEnabled": true,
+    "dvrBufferHours": 2,
+    "displayName": "Comedy Central",
+    "logoFile": "comedy-central-us-eastern-feed.png"
+  },
+  "comedy-central-pluto-tv": {
+    "enabled": true,
+    "dvrEnabled": true,
+    "dvrBufferHours": 2,
+    "displayName": "Comedy Central Pluto",
+    "logoFile": "comedy-central-us-eastern-feed.png"
+  },
+  "ae-us-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "A&E",
+    "logoFile": "ae-us-eastern-feed.png"
+  },
+  "cartoon-network-usa-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Cartoon Network",
+    "logoFile": "cartoon-network-usa-eastern-feed.png"
+  },
+  "espn": {
+    "dvrEnabled": false,
+    "displayName": "ESPN",
+    "logoFile": "espn.png"
+  },
+  "espn-news": {
+    "dvrEnabled": false,
+    "displayName": "ESPNews",
+    "logoFile": "espn-news.png"
+  },
+  "espn-u": {
+    "dvrEnabled": false,
+    "displayName": "ESPNU",
+    "logoFile": "espn-u.png"
+  },
+  "espn2": {
+    "dvrEnabled": false,
+    "displayName": "ESPN2",
+    "logoFile": "espn2.png"
+  },
+  "fanduel-sports-network-oklahoma": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Oklahoma",
+    "logoFile": "fanduel-sports-network-oklahoma.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-san-diego": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports San Diego",
+    "logoFile": "fanduel-sports-network-san-diego.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-socal": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports SoCal",
+    "logoFile": "fanduel-sports-network-socal.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-south-carolinas": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports South",
+    "logoFile": "fanduel-sports-network-south-carolinas.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-south-tennessee-usa": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports South",
+    "logoFile": "fanduel-sports-network-south-tennessee-usa.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-west": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports West",
+    "logoFile": "fanduel-sports-network-west.png",
+    "enabled": false
+  },
+  "fanduel-sports-network-wisconsin": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Wisconsin",
+    "logoFile": "fanduel-sports-network-wisconsin.png",
+    "enabled": false
+  },
+  "fanduel-sports-southeast-georgia": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Southeast",
+    "logoFile": "fanduel-sports-southeast-georgia.png",
+    "enabled": false
+  },
+  "fanduel-sports-southeast-north-carolina": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Southeast",
+    "logoFile": "fanduel-sports-southeast-north-carolina.png",
+    "enabled": false
+  },
+  "fanduel-sports-southeast-south-carolina": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Southeast",
+    "logoFile": "fanduel-sports-southeast-south-carolina.png",
+    "enabled": false
+  },
+  "fanduel-sports-southeast-tennessee-nashville": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Southeast",
+    "logoFile": "fanduel-sports-southeast-tennessee-nashville.png",
+    "enabled": false
+  },
+  "bally-sports-sun": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports Sun",
+    "logoFile": "bally-sports-sun.png",
+    "enabled": false
+  },
+  "fanduel-sports-tennessee-east": {
+    "dvrEnabled": false,
+    "displayName": "Bally Sports",
+    "logoFile": "fanduel-sports-tennessee-east.png",
+    "enabled": false
+  },
+  "food-network-usa-eastern-feed": {
+    "dvrEnabled": false,
+    "displayName": "Food Network",
+    "logoFile": "food-network-usa-eastern-feed.png"
+  },
+  "fox-kttv-los-angeles-ca": {
+    "dvrEnabled": false,
+    "displayName": "Fox",
+    "logoFile": "fox-kttv-los-angeles-ca.png"
+  },
+  "fox-wnyw-new-york-ny": {
+    "dvrEnabled": false,
+    "displayName": "Fox",
+    "logoFile": "fox-wnyw-new-york-ny.png"
+  },
+  "fox-business": {
+    "dvrEnabled": false,
+    "displayName": "Fox Business",
+    "logoFile": "fox-business.png"
+  },
+  "fox-news": {
+    "dvrEnabled": false,
+    "displayName": "Fox News",
+    "logoFile": "fox-news.png"
+  },
+  "fox-sports-1": {
+    "dvrEnabled": false,
+    "displayName": "FS1",
+    "logoFile": "fox-sports-1.png"
+  },
+  "fox-sports-2": {
+    "dvrEnabled": false,
+    "displayName": "FS2",
+    "logoFile": "fox-sports-2.png"
+  },
+  "fyi-usa-eastern": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "FYI",
+    "logoFile": "fyi-usa-eastern.png"
+  },
+  "golf-channel-usa": {
+    "dvrEnabled": false,
+    "displayName": "Golf Channel",
+    "logoFile": "golf-channel-usa.png"
+  },
+  "hallmark-family-hd": {
+    "dvrEnabled": false,
+    "displayName": "Hallmark Family",
+    "logoFile": "hallmark-family-hd.png"
+  },
+  "hallmark-eastern-feed": {
+    "dvrEnabled": false,
+    "displayName": "Hallmark Channel",
+    "logoFile": "hallmark-eastern-feed.png"
+  },
+  "hallmark-mystery-eastern-hd": {
+    "dvrEnabled": false,
+    "displayName": "Hallmark Mystery",
+    "logoFile": "hallmark-mystery-eastern-hd.png"
+  },
+  "hbo-eastern-feed": {
+    "dvrBufferHours": 3.5,
+    "dvrEnabled": true,
+    "displayName": "HBO",
+    "logoFile": "hbo-eastern-feed.png"
+  },
+  "hbo-2-eastern-feed": {
+    "dvrBufferHours": 3.5,
+    "dvrEnabled": true,
+    "displayName": "HBO 2",
+    "logoFile": "hbo-2-eastern-feed.png"
+  },
+  "hbo-comedy-hd-east": {
+    "dvrBufferHours": 3.5,
+    "dvrEnabled": true,
+    "displayName": "HBO Comedy",
+    "logoFile": "hbo-comedy-hd-east.png"
+  },
+  "hbo-family-eastern-feed": {
+    "dvrBufferHours": 3.5,
+    "dvrEnabled": true,
+    "displayName": "HBO Family",
+    "logoFile": "hbo-family-eastern-feed.png"
+  },
+  "hbo-signature-hbo-3-eastern": {
+    "dvrBufferHours": 3.5,
+    "dvrEnabled": true,
+    "displayName": "HBO Signature",
+    "logoFile": "hbo-signature-hbo-3-eastern.png"
+  },
+  "hbo-zone-hd-east": {
+    "dvrBufferHours": 3.5,
+    "dvrEnabled": true,
+    "displayName": "HBO Zone",
+    "logoFile": "hbo-zone-hd-east.png"
+  },
+  "hln": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "HLN",
+    "logoFile": "hln.png"
+  },
+  "marquee-sports-network": {
+    "dvrEnabled": false,
+    "displayName": "Marquee Sports Network",
+    "logoFile": "marquee-sports-network.png"
+  },
+  "metv-toons-wjlp2-new-jersey": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "MeTV Toons",
+    "logoFile": "metv-toons-wjlp2-new-jersey.png"
+  },
+  "metv-wjlp-new-jerseynew-york": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "MeTV",
+    "logoFile": "metv-wjlp-new-jerseynew-york.png"
+  },
+  "midatlantic-sports-network": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "MASN",
+    "logoFile": "midatlantic-sports-network.png"
+  },
+  "mlb-network": {
+    "dvrEnabled": false,
+    "displayName": "MLB Network",
+    "logoFile": "mlb-network.png"
+  },
+  "monumental-sports-network": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "Monumental Sports",
+    "logoFile": "monumental-sports-network.png"
+  },
+  "moremax-eastern": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "MoreMax",
+    "logoFile": "moremax-eastern.png"
+  },
+  "motor-trend-hd": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "MotorTrend",
+    "logoFile": "motor-trend-hd.png"
+  },
+  "msg-madison-square-gardens": {
+    "dvrEnabled": false,
+    "enabled": true,
+    "displayName": "MSG",
+    "logoFile": "msg-madison-square-gardens.png"
+  },
+  "msg-plus": {
+    "enabled": true,
+    "dvrEnabled": false,
+    "displayName": "MSG+",
+    "logoFile": "msg-plus.png"
+  },
+  "nbc-wnbc-new-york-ny": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "NBC",
+    "logoFile": "nbc-wnbc-new-york-ny.png"
+  },
+  "nbc-sports-bay-area": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "NBC Sports Bay Area",
+    "logoFile": "nbc-sports-bay-area.png"
+  },
+  "nbc-sports-boston": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "NBC Sports Boston",
+    "logoFile": "nbc-sports-boston.png"
+  },
+  "nbc-sports-california": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "NBC Sports California",
+    "logoFile": "nbc-sports-california.png"
+  },
+  "nbc-sports-philadelphia": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "NBC Sports Philadelphia",
+    "logoFile": "nbc-sports-philadelphia.png"
+  },
+  "new-england-sports-network": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "NESN",
+    "logoFile": "new-england-sports-network.png"
+  },
+  "newsmax-tv": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "Newsmax",
+    "logoFile": "newsmax-tv.png"
+  },
+  "nfl-network": {
+    "dvrEnabled": false,
+    "displayName": "NFL Network",
+    "logoFile": "nfl-network.png"
+  },
+  "nfl-redzone": {
+    "dvrEnabled": false,
+    "displayName": "NFL RedZone",
+    "logoFile": "nfl-redzone.png"
+  },
+  "nhl-network-usa": {
+    "dvrEnabled": false,
+    "displayName": "NHL Network",
+    "logoFile": "nhl-network-usa.png"
+  },
+  "nick-jr-east": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "Nick Jr.",
+    "logoFile": "nick-jr-east.png"
+  },
+  "oprah-winfrey-network-usa-eastern": {
+    "dvrEnabled": false,
+    "displayName": "OWN",
+    "logoFile": "oprah-winfrey-network-usa-eastern.png"
+  },
+  "outdoor-channel-us": {
+    "dvrEnabled": false,
+    "displayName": "Outdoor Channel",
+    "logoFile": "outdoor-channel-us.png"
+  },
+  "oxygen-eastern-feed": {
+    "dvrEnabled": false,
+    "displayName": "Oxygen",
+    "logoFile": "oxygen-eastern-feed.png"
+  },
+  "pbs-wnet-new-york-ny": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "PBS",
+    "logoFile": "pbs-wnet-new-york-ny.png"
+  },
+  "sec-network": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "SEC Network",
+    "logoFile": "sec-network.png"
+  },
+  "sny-sportsnet-new-york-comcast": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "SNY",
+    "logoFile": "sny-sportsnet-new-york-comcast.png"
+  },
+  "space-city-home-network": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Space City Home Network",
+    "logoFile": "space-city-home-network.png"
+  },
+  "spectrum-sportsnet-la": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "Spectrum SportsNet LA",
+    "logoFile": "spectrum-sportsnet-la.png"
+  },
+  "spectrum-sportsnet": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "Spectrum SportsNet",
+    "logoFile": "spectrum-sportsnet.png"
+  },
+  "sportsnet-360": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Sportsnet 360",
+    "logoFile": "sportsnet-360.png"
+  },
+  "sportsnet-one": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Sportsnet One",
+    "logoFile": "sportsnet-one.png"
+  },
+  "sportsnet-east": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Sportsnet East",
+    "logoFile": "sportsnet-east.png"
+  },
+  "sportsnet-ontario": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Sportsnet Ontario",
+    "logoFile": "sportsnet-ontario.png"
+  },
+  "sportsnet-pacific": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Sportsnet Pacific",
+    "logoFile": "sportsnet-pacific.png"
+  },
+  "sportsnet-pittsburgh": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "SportsNet Pittsburgh",
+    "logoFile": "sportsnet-pittsburgh.png"
+  },
+  "sportsnet-west": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Sportsnet West",
+    "logoFile": "sportsnet-west.png"
+  },
+  "telemundo-eastern-feed": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Telemundo",
+    "logoFile": "telemundo-eastern-feed.png"
+  },
+  "the-tennis-channel": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Tennis Channel",
+    "logoFile": "the-tennis-channel.png"
+  },
+  "tsn1": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "TSN",
+    "logoFile": "tsn1.png"
+  },
+  "tsn2": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "TSN2",
+    "logoFile": "tsn2.png"
+  },
+  "tsn3": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "TSN3",
+    "logoFile": "tsn3.png"
+  },
+  "tsn4": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "TSN4",
+    "logoFile": "tsn4.png"
+  },
+  "tsn5": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "TSN5",
+    "logoFile": "tsn5.png"
+  },
+  "tv-one": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "TV One",
+    "logoFile": "tv-one.png"
+  },
+  "universal-kids": {
+    "dvrEnabled": false,
+    "enabled": false,
+    "displayName": "Universal Kids",
+    "logoFile": "universal-kids.png"
+  },
+  "univision-eastern-feed": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "Univision",
+    "logoFile": "univision-eastern-feed.png"
+  },
+  "wpix-new-york-superstation": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "PIX11",
+    "logoFile": "wpix-new-york-superstation.png"
+  },
+  "yes-network": {
+    "enabled": false,
+    "dvrEnabled": false,
+    "displayName": "YES Network",
+    "logoFile": "yes-network.png"
+  },
+  "abc-kabc-los-angeles-ca": {
+    "dvrEnabled": false,
+    "displayName": "ABC",
+    "logoFile": "abc-kabc-los-angeles-ca.png",
+    "enabled": false
+  },
+  "amc-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "AMC",
+    "logoFile": "amc-eastern-feed.png"
+  },
+  "animal-planet-us-east": {
+    "dvrEnabled": true,
+    "displayName": "Animal Planet",
+    "logoFile": "animal-planet-us-east.png"
+  },
+  "bbc-america-east": {
+    "dvrEnabled": true,
+    "displayName": "BBC America",
+    "logoFile": "bbc-america-east.png"
+  },
+  "bbc-news-north-america-hd": {
+    "dvrEnabled": true,
+    "displayName": "BBC News",
+    "logoFile": "bbc-news-north-america-hd.png"
+  },
+  "bet-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "BET",
+    "logoFile": "bet-eastern-feed.png"
+  },
+  "big-ten-network": {
+    "dvrEnabled": true,
+    "displayName": "Big Ten Network",
+    "logoFile": "big-ten-network.png"
+  },
+  "boomerang": {
+    "dvrEnabled": true,
+    "displayName": "Boomerang",
+    "logoFile": "boomerang.png"
+  },
+  "bravo-usa-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Bravo",
+    "logoFile": "bravo-usa-eastern-feed.png"
+  },
+  "cbs-kcbs-los-angeles-ca": {
+    "dvrEnabled": true,
+    "displayName": "CBS",
+    "logoFile": "cbs-kcbs-los-angeles-ca.png"
+  },
+  "cbs-sports-network-usa": {
+    "dvrEnabled": true,
+    "displayName": "CBS Sports Network",
+    "logoFile": "cbs-sports-network-usa.png"
+  },
+  "chicago-sports-network": {
+    "dvrEnabled": true,
+    "displayName": "NBC Sports Chicago",
+    "logoFile": "chicago-sports-network.png"
+  },
+  "cinemax-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Cinemax",
+    "logoFile": "cinemax-eastern-feed.png"
+  },
+  "cnn": {
+    "dvrEnabled": true,
+    "displayName": "CNN",
+    "logoFile": "cnn.png"
+  },
+  "crime-investigation-network-usa-hd": {
+    "dvrEnabled": true,
+    "displayName": "Crime + Investigation",
+    "logoFile": "crime-investigation-network-usa-hd.png"
+  },
+  "cw-kfmbtv2-san-diego-ca": {
+    "dvrEnabled": true,
+    "displayName": "The CW",
+    "logoFile": "cw-kfmbtv2-san-diego-ca.png"
+  },
+  "cw-wdcw-district-of-columbia": {
+    "dvrEnabled": true,
+    "displayName": "The CW",
+    "logoFile": "cw-wdcw-district-of-columbia.png"
+  },
+  "destination-america": {
+    "dvrEnabled": true,
+    "displayName": "Destination America",
+    "logoFile": "destination-america.png"
+  },
+  "discovery-channel-us-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Discovery",
+    "logoFile": "discovery-channel-us-eastern-feed.png"
+  },
+  "discovery-family-channel": {
+    "dvrEnabled": true,
+    "displayName": "Discovery Family",
+    "logoFile": "discovery-family-channel.png"
+  },
+  "discovery-life-channel": {
+    "dvrEnabled": true,
+    "displayName": "Discovery Life",
+    "logoFile": "discovery-life-channel.png"
+  },
+  "disney-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Disney Channel",
+    "logoFile": "disney-eastern-feed.png"
+  },
+  "e-entertainment-usa-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "E!",
+    "logoFile": "e-entertainment-usa-eastern-feed.png"
+  },
+  "freeform-east-feed": {
+    "dvrEnabled": true,
+    "displayName": "Freeform",
+    "logoFile": "freeform-east-feed.png"
+  },
+  "fuse-tv-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Fuse",
+    "logoFile": "fuse-tv-eastern-feed.png"
+  },
+  "fx-movie-channel": {
+    "dvrEnabled": true,
+    "displayName": "FXM",
+    "logoFile": "fx-movie-channel.png"
+  },
+  "fx-networks-east-coast": {
+    "dvrEnabled": true,
+    "displayName": "FX",
+    "logoFile": "fx-networks-east-coast.png"
+  },
+  "fxx-usa-eastern": {
+    "dvrEnabled": true,
+    "displayName": "FXX",
+    "logoFile": "fxx-usa-eastern.png"
+  },
+  "game-show-network-east": {
+    "dvrEnabled": true,
+    "displayName": "Game Show Network",
+    "logoFile": "game-show-network-east.png"
+  },
+  "hgtv-usa-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "HGTV",
+    "logoFile": "hgtv-usa-eastern-feed.png"
+  },
+  "history-channel-us-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "History",
+    "logoFile": "history-channel-us-eastern-feed.png"
+  },
+  "independent-film-channel-us": {
+    "dvrEnabled": true,
+    "displayName": "IFC",
+    "logoFile": "independent-film-channel-us.png"
+  },
+  "investigation-discovery-usa-eastern": {
+    "dvrEnabled": true,
+    "displayName": "ID",
+    "logoFile": "investigation-discovery-usa-eastern.png"
+  },
+  "ion-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Ion",
+    "logoFile": "ion-eastern-feed.png"
+  },
+  "lifetime-movies-east": {
+    "dvrEnabled": true,
+    "displayName": "LMN",
+    "logoFile": "lifetime-movies-east.png"
+  },
+  "lifetime-network-us-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Lifetime",
+    "logoFile": "lifetime-network-us-eastern-feed.png"
+  },
+  "logo-east": {
+    "dvrEnabled": true,
+    "displayName": "Logo TV",
+    "logoFile": "logo-east.png"
+  },
+  "moviemax-max-6-east": {
+    "dvrEnabled": true,
+    "displayName": "MovieMax",
+    "logoFile": "moviemax-max-6-east.png"
+  },
+  "msnbc-usa": {
+    "dvrEnabled": true,
+    "displayName": "MSNBC",
+    "logoFile": "msnbc-usa.png"
+  },
+  "mtv-2-east": {
+    "dvrEnabled": true,
+    "displayName": "MTV2",
+    "logoFile": "mtv-2-east.png"
+  },
+  "mtv-usa-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "MTV",
+    "logoFile": "mtv-usa-eastern-feed.png"
+  },
+  "national-geographic-us-eastern": {
+    "dvrEnabled": true,
+    "displayName": "National Geographic",
+    "logoFile": "national-geographic-us-eastern.png"
+  },
+  "national-geographic-wild": {
+    "dvrEnabled": true,
+    "displayName": "Nat Geo Wild",
+    "logoFile": "national-geographic-wild.png"
+  },
+  "nba-tv-usa": {
+    "dvrEnabled": true,
+    "displayName": "NBA TV",
+    "logoFile": "nba-tv-usa.png"
+  },
+  "nbc-knbc-los-angeles-ca": {
+    "dvrEnabled": true,
+    "displayName": "NBC",
+    "logoFile": "nbc-knbc-los-angeles-ca.png"
+  },
+  "nickelodeon-usa-east-feed": {
+    "dvrEnabled": true,
+    "displayName": "Nickelodeon",
+    "logoFile": "nickelodeon-usa-east-feed.png"
+  },
+  "nicktoons-east": {
+    "dvrEnabled": true,
+    "displayName": "Nicktoons",
+    "logoFile": "nicktoons-east.png"
+  },
+  "reelzchannel": {
+    "dvrEnabled": true,
+    "displayName": "Reelz",
+    "logoFile": "reelzchannel.png"
+  },
+  "science": {
+    "dvrEnabled": true,
+    "displayName": "Science Channel",
+    "logoFile": "science.png"
+  },
+  "paramount-with-showtime-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Paramount+ with Showtime",
+    "logoFile": "paramount-with-showtime-eastern-feed.png"
+  },
+  "showtime-2-eastern": {
+    "dvrEnabled": true,
+    "displayName": "Showtime 2",
+    "logoFile": "showtime-2-eastern.png"
+  },
+  "starz-eastern": {
+    "dvrEnabled": true,
+    "displayName": "Starz",
+    "logoFile": "starz-eastern.png"
+  },
+  "sundancetv-usa-east": {
+    "dvrEnabled": true,
+    "displayName": "SundanceTV",
+    "logoFile": "sundancetv-usa-east.png"
+  },
+  "syfy-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "Syfy",
+    "logoFile": "syfy-eastern-feed.png"
+  },
+  "tbs-east": {
+    "dvrEnabled": true,
+    "displayName": "TBS",
+    "logoFile": "tbs-east.png"
+  },
+  "teennick-eastern": {
+    "dvrEnabled": true,
+    "displayName": "TeenNick",
+    "logoFile": "teennick-eastern.png"
+  },
+  "the-cooking-channel": {
+    "dvrEnabled": true,
+    "displayName": "Cooking Channel",
+    "logoFile": "the-cooking-channel.png"
+  },
+  "the-weather-channel": {
+    "dvrEnabled": true,
+    "displayName": "The Weather Channel",
+    "logoFile": "the-weather-channel.png"
+  },
+  "tlc-usa-eastern": {
+    "dvrEnabled": true,
+    "displayName": "TLC",
+    "logoFile": "tlc-usa-eastern.png"
+  },
+  "tmc-us-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "The Movie Channel",
+    "logoFile": "tmc-us-eastern-feed.png"
+  },
+  "tnt-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "TNT",
+    "logoFile": "tnt-eastern-feed.png"
+  },
+  "travel-us-east": {
+    "dvrEnabled": true,
+    "displayName": "Travel Channel",
+    "logoFile": "travel-us-east.png"
+  },
+  "trutv-usa-eastern": {
+    "dvrEnabled": true,
+    "displayName": "truTV",
+    "logoFile": "trutv-usa-eastern.png"
+  },
+  "turner-classic-movies-usa": {
+    "dvrEnabled": true,
+    "displayName": "TCM",
+    "logoFile": "turner-classic-movies-usa.png"
+  },
+  "tv-land-eastern": {
+    "dvrEnabled": true,
+    "displayName": "TV Land",
+    "logoFile": "tv-land-eastern.png"
+  },
+  "usa-network-east-feed": {
+    "dvrEnabled": true,
+    "displayName": "USA Network",
+    "logoFile": "usa-network-east-feed.png"
+  },
+  "vh1-eastern-feed": {
+    "dvrEnabled": true,
+    "displayName": "VH1",
+    "logoFile": "vh1-eastern-feed.png"
+  },
+  "vice": {
+    "dvrEnabled": true,
+    "displayName": "Vice",
+    "logoFile": "vice.png"
+  },
+  "we-womens-entertainment-eastern": {
+    "dvrEnabled": true,
+    "displayName": "WE tv",
+    "logoFile": "we-womens-entertainment-eastern.png"
+  }
+}

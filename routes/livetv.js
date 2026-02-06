@@ -68,6 +68,7 @@ router.get('/channels', async (req, res) => {
       name: ch.name,
       display_name: ch.displayName || ch.name,
       channel_number: ch.channelNumber,
+      sort_order: ch.sortOrder,
       logo: ch.logo,
       group: ch.group,
       is_favorite: ch.isFavorite,
@@ -111,8 +112,9 @@ router.get('/channels', async (req, res) => {
  * For TS segments and other content, it passes through as-is.
  */
 // Track which stream source is currently working per channel (auto-failover state)
-const channelActiveSource = new Map(); // channelId -> { urlIndex, baseUrl, failCount }
+const channelActiveSource = new Map(); // channelId -> { urlIndex, failCount, failedAt }
 const SOURCE_FAIL_THRESHOLD = 3; // consecutive segment failures before switching
+const FAILOVER_RETRY_MS = 60 * 1000; // retry primary source after 60 seconds
 
 /**
  * Rewrite an HLS manifest: make relative URLs absolute and route through our proxy
@@ -121,8 +123,24 @@ function rewriteManifest(manifest, baseUrl, channelId) {
   return manifest.split('\n').map(line => {
     const trimmed = line.trim();
 
-    // Skip comments and empty lines
-    if (trimmed.startsWith('#') || trimmed === '') {
+    // Empty lines pass through
+    if (trimmed === '') {
+      return line;
+    }
+
+    // Handle #EXT-X-KEY lines — rewrite the URI value to go through our proxy
+    if (trimmed.startsWith('#EXT-X-KEY') && trimmed.includes('URI="')) {
+      return line.replace(/URI="([^"]+)"/, (match, uri) => {
+        let keyUrl = uri;
+        if (!keyUrl.startsWith('http://') && !keyUrl.startsWith('https://')) {
+          keyUrl = baseUrl + keyUrl;
+        }
+        return `URI="/api/livetv/stream/${channelId}?url=${encodeURIComponent(keyUrl)}"`;
+      });
+    }
+
+    // Skip other comment lines
+    if (trimmed.startsWith('#')) {
       return line;
     }
 
@@ -226,13 +244,19 @@ router.get('/stream/:channelId', async (req, res) => {
             const streamUrls = liveTVService.getStreamUrls(channelId);
             const nextIndex = (active.urlIndex + 1) % streamUrls.length;
             if (nextIndex !== active.urlIndex) {
-              logger.warn(`[LiveTV] ${SOURCE_FAIL_THRESHOLD} consecutive segment failures on ${channelId}, switching from source ${active.urlIndex} to ${nextIndex}`);
-              channelActiveSource.set(channelId, { urlIndex: nextIndex, failCount: 0 });
+              const curUrl = streamUrls[active.urlIndex] || '';
+              const nextUrl = streamUrls[nextIndex] || '';
+              const curLabel = curUrl.includes('localhost:9191') || curUrl.includes('dlhd') ? 'DaddyLive'
+                : curUrl.includes('tvpass.org') ? 'TVPass' : `source[${active.urlIndex}]`;
+              const nextLabel = nextUrl.includes('localhost:9191') || nextUrl.includes('dlhd') ? 'DaddyLive'
+                : nextUrl.includes('tvpass.org') ? 'TVPass' : `source[${nextIndex}]`;
+              logger.warn(`[LiveTV] ${channelId} segment failover: ${curLabel} → ${nextLabel} (${SOURCE_FAIL_THRESHOLD} consecutive failures)`);
+              channelActiveSource.set(channelId, { urlIndex: nextIndex, failCount: 0, failedAt: Date.now() });
             }
           }
         }
 
-        logger.error(`[LiveTV] Failed to fetch ${isSubManifest ? 'sub-manifest' : 'segment'}: ${error.message}`);
+        logger.debug(`[LiveTV] Segment fetch failed for ${channelId}: ${error.message}`);
         res.status(502).json({ error: 'Failed to fetch stream segment' });
       }
       return;
@@ -242,8 +266,15 @@ router.get('/stream/:channelId', async (req, res) => {
     const streamUrls = liveTVService.getStreamUrls(channelId);
 
     // Start from the active source if we have one (auto-failover state)
-    const active = channelActiveSource.get(channelId);
+    // Auto-recover: if failover is older than FAILOVER_RETRY_MS, retry from primary
+    let active = channelActiveSource.get(channelId);
+    if (active && active.urlIndex > 0 && active.failedAt && (Date.now() - active.failedAt > FAILOVER_RETRY_MS)) {
+      logger.info(`[LiveTV] Auto-retrying primary source for ${channelId} (failover was ${Math.round((Date.now() - active.failedAt) / 1000)}s ago)`);
+      channelActiveSource.delete(channelId);
+      active = null;
+    }
     const startIndex = active?.urlIndex || 0;
+    const previousIndex = active?.urlIndex ?? -1;
 
     for (let attempt = 0; attempt < streamUrls.length; attempt++) {
       const i = (startIndex + attempt) % streamUrls.length;
@@ -251,6 +282,20 @@ router.get('/stream/:channelId', async (req, res) => {
 
       try {
         const rewritten = await fetchAndRewriteManifest(streamUrl, channelId);
+
+        // Log source switches (different source than last time, or first time)
+        if (previousIndex !== i) {
+          const sourceLabel = streamUrl.includes('localhost:9191') || streamUrl.includes('dlhd') ? 'DaddyLive'
+            : streamUrl.includes('tvpass.org') ? 'TVPass' : `source[${i}]`;
+          if (previousIndex === -1) {
+            logger.info(`[LiveTV] ${channelId} → ${sourceLabel} (initial)`);
+          } else {
+            const prevUrl = streamUrls[previousIndex] || '';
+            const prevLabel = prevUrl.includes('localhost:9191') || prevUrl.includes('dlhd') ? 'DaddyLive'
+              : prevUrl.includes('tvpass.org') ? 'TVPass' : `source[${previousIndex}]`;
+            logger.warn(`[LiveTV] ${channelId} source switch: ${prevLabel} → ${sourceLabel}`);
+          }
+        }
 
         // Remember which source worked
         channelActiveSource.set(channelId, { urlIndex: i, failCount: 0 });
@@ -367,3 +412,4 @@ router.post('/dvr/recordings/schedule', (req, res) => {
 });
 
 module.exports = router;
+module.exports.channelActiveSource = channelActiveSource;

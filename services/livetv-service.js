@@ -1,5 +1,61 @@
+const path = require('path');
+const fs = require('fs');
 const { db } = require('../db/init');
 const logger = require('../utils/logger');
+
+// Load config files at module level
+const CHANNEL_CONFIG_PATH = path.join(__dirname, '..', 'db', 'channel-config.json');
+const BACKUP_STREAMS_PATH = path.join(__dirname, '..', 'db', 'backup-streams.json');
+
+let channelConfig = {};
+let backupStreams = {};
+
+try {
+  channelConfig = JSON.parse(fs.readFileSync(CHANNEL_CONFIG_PATH, 'utf-8'));
+  logger.info(`Loaded channel config: ${Object.keys(channelConfig).length} channels`);
+} catch (err) {
+  logger.warn('Failed to load channel-config.json:', err.message);
+}
+
+try {
+  backupStreams = JSON.parse(fs.readFileSync(BACKUP_STREAMS_PATH, 'utf-8'));
+  logger.info(`Loaded backup streams: ${Object.keys(backupStreams).length} channels`);
+} catch (err) {
+  logger.warn('Failed to load backup-streams.json:', err.message);
+}
+
+/**
+ * Initialize default channel settings for a user based on channel-config.json.
+ * Channels with `enabled: false` in config get a user_channel_settings row with is_enabled=0.
+ * Only runs if the user has zero existing channel settings.
+ */
+function initializeUserDefaults(userId) {
+  const existing = db.prepare(`
+    SELECT COUNT(*) as count FROM user_channel_settings WHERE user_id = ?
+  `).get(userId);
+
+  if (existing.count > 0) return;
+
+  const disabledChannels = Object.entries(channelConfig)
+    .filter(([, cfg]) => cfg.enabled === false)
+    .map(([id]) => id);
+
+  if (disabledChannels.length === 0) return;
+
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO user_channel_settings (user_id, channel_id, is_enabled, updated_at)
+    VALUES (?, ?, 0, datetime('now'))
+  `);
+
+  const transaction = db.transaction((channels) => {
+    for (const channelId of channels) {
+      stmt.run(userId, channelId);
+    }
+  });
+
+  transaction(disabledChannels);
+  logger.info(`Initialized ${disabledChannels.length} default-disabled channels for user ${userId}`);
+}
 
 /**
  * Get all enabled channels for a user with merged EPG data
@@ -8,6 +64,9 @@ const logger = require('../utils/logger');
  */
 async function getChannelsForUser(userId) {
   try {
+    // Initialize defaults for new users
+    initializeUserDefaults(userId);
+
     // 1. Get M3U channels from cache
     const m3uData = db.prepare(`
       SELECT epg_data, updated_at
@@ -32,17 +91,20 @@ async function getChannelsForUser(userId) {
 
     // Combine M3U and special channels
     const allChannels = [
-      ...m3uChannels.map(ch => ({
-        id: ch.id,
-        name: ch.name,
-        displayName: ch.name,
-        group: ch.group || 'Live',
-        url: ch.url,
-        logo: ch.logoUrl,
-        sortOrder: 999,
-        channelNumber: null,
-        isSpecial: false
-      })),
+      ...m3uChannels.map(ch => {
+        const config = channelConfig[ch.id];
+        return {
+          id: ch.id,
+          name: ch.name,
+          displayName: config?.displayName || ch.displayName || ch.name,
+          group: ch.group || 'Live',
+          url: ch.url,
+          logo: config?.logoFile ? `/static/logos/${config.logoFile}` : null,
+          sortOrder: 999,
+          channelNumber: null,
+          isSpecial: false
+        };
+      }),
       ...specialChannels.map(ch => ({
         id: ch.id,
         name: ch.name,
@@ -67,9 +129,9 @@ async function getChannelsForUser(userId) {
       userSettings.map(s => [s.channel_id, s])
     );
 
-    // 4. Get channel metadata (custom logos, display names)
+    // 4. Get channel metadata (custom logos, display names, admin enable/disable)
     const metadata = db.prepare(`
-      SELECT channel_id, custom_logo_url, custom_display_name
+      SELECT channel_id, custom_logo_url, custom_display_name, is_enabled, sort_order
       FROM channel_metadata
     `).all();
 
@@ -77,15 +139,23 @@ async function getChannelsForUser(userId) {
       metadata.map(m => [m.channel_id, m])
     );
 
-    // 5. Get EPG data for each channel
+    // 5. Filter out admin-disabled channels before building full objects
+    const adminEnabledChannels = allChannels.filter(channel => {
+      const meta = metadataMap.get(channel.id);
+      // If admin explicitly disabled this channel, skip it entirely
+      if (meta && meta.is_enabled === 0) return false;
+      return true;
+    });
+
+    // 6. Get EPG data for each channel
     const now = Date.now();
     const sixHoursFromNow = now + (6 * 60 * 60 * 1000);
 
-    const channels = allChannels.map((channel, index) => {
+    const channels = adminEnabledChannels.map((channel, index) => {
       const settings = settingsMap.get(channel.id) || {
         is_enabled: true,
         is_favorite: false,
-        sort_order: channel.sortOrder
+        sort_order: null
       };
 
       const meta = metadataMap.get(channel.id);
@@ -123,7 +193,7 @@ async function getChannelsForUser(userId) {
         group: channel.group,
         url: channel.url,
         logo: meta?.custom_logo_url || channel.logo,
-        sortOrder: settings.sort_order || channel.sortOrder,
+        sortOrder: meta?.sort_order ?? channel.sortOrder,
         channelNumber: channel.channelNumber || (index + 1),
         isFavorite: !!settings.is_favorite,
         isEnabled: !!settings.is_enabled,
@@ -161,6 +231,11 @@ async function getChannelsForUser(userId) {
         return a.channelNumber - b.channelNumber;
       });
 
+    // Assign channel numbers AFTER sorting so they reflect final order
+    enabledChannels.forEach((ch, i) => {
+      ch.channelNumber = i + 1;
+    });
+
     logger.info(`Loaded ${enabledChannels.length} channels for user ${userId}`);
     return enabledChannels;
   } catch (error) {
@@ -169,16 +244,65 @@ async function getChannelsForUser(userId) {
   }
 }
 
+// Cached DaddyLive stream map (tvpassId -> daddylive URL)
+let daddyliveStreamMap = null;
+let daddyliveStreamMapLoadedAt = 0;
+const DL_MAP_CACHE_TTL = 60000; // 1 minute
+
 /**
- * Get stream URL for a channel (proxied through server)
- * @param {string} channelId - Channel ID
- * @returns {string} Stream URL
+ * Load the DaddyLive stream map from epg_cache (lazy-load + TTL cache).
+ * Returns {tvpassChannelId: daddyliveStreamUrl} or empty object.
  */
-function getStreamUrl(channelId) {
-  // The stream endpoint will handle the actual proxying
-  // This just returns the channel's URL from the database
+function getDaddyLiveStreamMap() {
+  const now = Date.now();
+  if (daddyliveStreamMap && (now - daddyliveStreamMapLoadedAt) < DL_MAP_CACHE_TTL) {
+    return daddyliveStreamMap;
+  }
+
   try {
-    // Check M3U channels first
+    const row = db.prepare(`
+      SELECT epg_data FROM epg_cache WHERE channel_id = 'daddylive_stream_map'
+    `).get();
+
+    daddyliveStreamMap = row ? JSON.parse(row.epg_data) : {};
+  } catch (err) {
+    logger.debug(`Error loading daddylive_stream_map: ${err.message}`);
+    daddyliveStreamMap = {};
+  }
+
+  daddyliveStreamMapLoadedAt = now;
+  return daddyliveStreamMap;
+}
+
+/**
+ * Get stream URLs for a channel, ordered by priority:
+ * 1. DaddyLive URL (if matched via daddylive_stream_map)
+ * 2. backup-streams.json primary (if exists)
+ * 3. M3U/special channel original URL
+ * 4. backup-streams.json backups[]
+ *
+ * @param {string} channelId - Channel ID
+ * @returns {string[]} Array of stream URLs to try in order
+ */
+function getStreamUrls(channelId) {
+  const urls = [];
+  const backup = backupStreams[channelId];
+  const dlMap = getDaddyLiveStreamMap();
+
+  // 1. DaddyLive primary URL (for matched TVPass channels)
+  if (dlMap[channelId]) {
+    urls.push(dlMap[channelId]);
+  }
+
+  // 2. Primary override from backup-streams.json
+  if (backup?.primary) {
+    if (!urls.includes(backup.primary)) {
+      urls.push(backup.primary);
+    }
+  }
+
+  // 3. Original M3U / special channel URL
+  try {
     const m3uData = db.prepare(`
       SELECT epg_data
       FROM epg_cache
@@ -188,27 +312,54 @@ function getStreamUrl(channelId) {
     if (m3uData) {
       const channels = JSON.parse(m3uData.epg_data);
       const channel = channels.find(ch => ch.id === channelId);
-      if (channel) {
-        return channel.url;
+      if (channel?.url) {
+        if (!urls.includes(channel.url)) {
+          urls.push(channel.url);
+        }
       }
     }
+  } catch (err) {
+    logger.debug(`Error looking up M3U URL for ${channelId}: ${err.message}`);
+  }
 
-    // Check special channels
+  // Check special channels
+  try {
     const specialChannel = db.prepare(`
       SELECT stream_url
       FROM special_channels
       WHERE id = ? AND is_active = 1
     `).get(channelId);
 
-    if (specialChannel) {
-      return specialChannel.stream_url;
+    if (specialChannel?.stream_url && !urls.includes(specialChannel.stream_url)) {
+      urls.push(specialChannel.stream_url);
     }
-
-    throw new Error(`Channel ${channelId} not found`);
-  } catch (error) {
-    logger.error(`getStreamUrl error for ${channelId}:`, error);
-    throw error;
+  } catch (err) {
+    logger.debug(`Error looking up special channel URL for ${channelId}: ${err.message}`);
   }
+
+  // 4. Backup streams
+  if (backup?.backups?.length) {
+    for (const backupUrl of backup.backups) {
+      if (!urls.includes(backupUrl)) {
+        urls.push(backupUrl);
+      }
+    }
+  }
+
+  if (urls.length === 0) {
+    throw new Error(`Channel ${channelId} not found`);
+  }
+
+  return urls;
+}
+
+/**
+ * Get single stream URL for a channel (backwards compat)
+ * @param {string} channelId - Channel ID
+ * @returns {string} First/best stream URL
+ */
+function getStreamUrl(channelId) {
+  return getStreamUrls(channelId)[0];
 }
 
 /**
@@ -312,6 +463,7 @@ function reorderChannels(userId, channelIds) {
 module.exports = {
   getChannelsForUser,
   getStreamUrl,
+  getStreamUrls,
   toggleChannel,
   toggleFavorite,
   reorderChannels

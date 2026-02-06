@@ -80,7 +80,8 @@ async function getNextEpisode(tmdbId, currentSeason, currentEpisode) {
   try {
     // Get TV show info to know total seasons
     const showResponse = await axios.get(`${TMDB_BASE_URL}/tv/${tmdbId}`, {
-      params: { api_key: TMDB_API_KEY }
+      params: { api_key: TMDB_API_KEY },
+      timeout: TMDB_TIMEOUT
     });
 
     const totalSeasons = showResponse.data.number_of_seasons;

@@ -73,7 +73,8 @@ class RecommendationsService {
           api_key: TMDB_API_KEY,
           language: 'en-US',
           page: 1
-        }
+        },
+        timeout: 10000
       });
 
       const results = response.data.results || [];
@@ -219,7 +220,8 @@ class RecommendationsService {
           api_key: TMDB_API_KEY,
           language: 'en-US',
           page
-        }
+        },
+        timeout: 10000
       });
 
       // Filter and format results

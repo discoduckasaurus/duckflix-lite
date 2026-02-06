@@ -11,6 +11,21 @@ const cache = new Map();
 const CACHE_TTL = 5 * 60 * 1000;
 const TRENDING_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
+// Evict expired cache entries every 10 minutes to prevent unbounded growth
+setInterval(() => {
+  const now = Date.now();
+  let evicted = 0;
+  for (const [key, entry] of cache.entries()) {
+    const ttl = key.startsWith('search_') || key.startsWith('discover_') || key.startsWith('now_playing') || key.startsWith('upcoming') || key.startsWith('airing_today') || key.startsWith('season_') || key.startsWith('details_')
+      ? CACHE_TTL : TRENDING_CACHE_TTL;
+    if (now - entry.timestamp > ttl) {
+      cache.delete(key);
+      evicted++;
+    }
+  }
+  if (evicted > 0) logger.info(`[Cache] Evicted ${evicted} expired entries, ${cache.size} remaining`);
+}, 10 * 60 * 1000);
+
 // Timeout for all TMDB API calls — fail fast instead of hanging 90s on stalled connections
 const TMDB_TIMEOUT = 10000;
 
@@ -386,7 +401,7 @@ router.get('/collections/on-the-air', async (req, res) => {
 /**
  * GET /api/search/collections/discover
  * Advanced discover with filters
- * Supports: genre, year, rating, runtime, language, etc.
+ * Supports: genre, year, rating, runtime, language, streaming provider, network, etc.
  */
 router.get('/collections/discover', async (req, res) => {
   try {
@@ -400,7 +415,10 @@ router.get('/collections/discover', async (req, res) => {
       minRuntime,
       maxRuntime,
       language,
-      sortBy = 'popularity.desc'
+      sortBy = 'popularity.desc',
+      watchProvider,
+      network,
+      watchRegion = 'US'
     } = req.query;
 
     const contentType = type === 'tv' ? 'tv' : 'movie';
@@ -438,6 +456,17 @@ router.get('/collections/discover', async (req, res) => {
     if (maxRuntime) params['with_runtime.lte'] = maxRuntime;
     if (language) params.with_original_language = language;
 
+    // Streaming provider filter (Netflix, HBO Max, Disney+, etc.)
+    if (watchProvider) {
+      params.with_watch_providers = watchProvider;
+      params.watch_region = watchRegion;
+    }
+
+    // Network filter (for TV shows - HBO, AMC, Netflix Originals, etc.)
+    if (network && contentType === 'tv') {
+      params.with_networks = network;
+    }
+
     const response = await axios.get(`https://api.themoviedb.org/3/discover/${contentType}`, {
       params,
       timeout: TMDB_TIMEOUT
@@ -455,7 +484,10 @@ router.get('/collections/discover', async (req, res) => {
         minRating,
         maxRating,
         language,
-        sortBy
+        sortBy,
+        watchProvider,
+        network,
+        watchRegion
       }
     };
 
@@ -464,6 +496,99 @@ router.get('/collections/discover', async (req, res) => {
   } catch (error) {
     logger.error('Discover collection error:', error);
     res.status(500).json({ error: 'Failed to discover content' });
+  }
+});
+
+/**
+ * GET /api/search/collections/providers
+ * Get list of streaming providers (Netflix, HBO Max, Disney+, etc.)
+ */
+router.get('/collections/providers', async (req, res) => {
+  try {
+    const { type = 'movie', region = 'US' } = req.query;
+    const contentType = type === 'tv' ? 'tv' : 'movie';
+
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    const cacheKey = `providers_${contentType}_${region}`;
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
+      return res.json(cached.data);
+    }
+
+    const response = await axios.get(`https://api.themoviedb.org/3/watch/providers/${contentType}`, {
+      params: {
+        api_key: tmdbApiKey,
+        watch_region: region
+      },
+      timeout: TMDB_TIMEOUT
+    });
+
+    // Format and sort by priority (popularity)
+    const providers = response.data.results
+      .map(p => ({
+        id: p.provider_id,
+        name: p.provider_name,
+        logo: p.logo_path ? `https://image.tmdb.org/t/p/w92${p.logo_path}` : null,
+        priority: p.display_priority
+      }))
+      .sort((a, b) => a.priority - b.priority);
+
+    const responseData = { providers, region };
+    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
+    res.json(responseData);
+  } catch (error) {
+    logger.error('Providers list error:', error);
+    res.status(500).json({ error: 'Failed to fetch providers' });
+  }
+});
+
+/**
+ * GET /api/search/collections/networks
+ * Get list of TV networks (HBO, AMC, Netflix, etc.)
+ */
+router.get('/collections/networks', async (req, res) => {
+  try {
+    const tmdbApiKey = process.env.TMDB_API_KEY;
+    if (!tmdbApiKey) {
+      return res.status(500).json({ error: 'TMDB API key not configured' });
+    }
+
+    // TMDB doesn't have a networks list endpoint, so we provide common ones
+    // These are the most popular TV networks/streaming originals
+    const networks = [
+      { id: 213, name: 'Netflix', logo: 'https://image.tmdb.org/t/p/w92/wwemzKWzjKYJFfCeiB57q3r4Bcm.png' },
+      { id: 1024, name: 'Amazon', logo: 'https://image.tmdb.org/t/p/w92/ifhbNuuVnlwYy5oXA5VIb2YR8AZ.png' },
+      { id: 2739, name: 'Disney+', logo: 'https://image.tmdb.org/t/p/w92/gJ8VX6JSu3ciXHuC2dDGAo2lvwM.png' },
+      { id: 49, name: 'HBO', logo: 'https://image.tmdb.org/t/p/w92/tuomPhY2UtuPTqqFnKMVHvSb724.png' },
+      { id: 3186, name: 'HBO Max', logo: 'https://image.tmdb.org/t/p/w92/aVkuqXFR1CQdkMkGximgKbQwINq.png' },
+      { id: 2552, name: 'Apple TV+', logo: 'https://image.tmdb.org/t/p/w92/4KAy34EHvRM25Ih8wb82AuGU7zJ.png' },
+      { id: 453, name: 'Hulu', logo: 'https://image.tmdb.org/t/p/w92/pqUTCleNUiTLAVlelGxUgWn1ELh.png' },
+      { id: 2697, name: 'Peacock', logo: 'https://image.tmdb.org/t/p/w92/xTHltMrZPAJFLQ6qyCBjAnXSmZt.png' },
+      { id: 4330, name: 'Paramount+', logo: 'https://image.tmdb.org/t/p/w92/xbhHHa1YgtpwhC8lb1NQ3ACVcLd.png' },
+      { id: 174, name: 'AMC', logo: 'https://image.tmdb.org/t/p/w92/pmvRmATOCaDykE6JrVoeYxlFHw3.png' },
+      { id: 19, name: 'FOX', logo: 'https://image.tmdb.org/t/p/w92/1DSpHrWyOORkL9N2QHX7Adt31mQ.png' },
+      { id: 16, name: 'CBS', logo: 'https://image.tmdb.org/t/p/w92/nm8d7P7MJNiBLdgIzUK0gkuEA4r.png' },
+      { id: 6, name: 'NBC', logo: 'https://image.tmdb.org/t/p/w92/o3OedEP0f9mfZr33jz2BfXOUK5.png' },
+      { id: 2, name: 'ABC', logo: 'https://image.tmdb.org/t/p/w92/ndAvF4JLsliGreX87jAc9LdjmJY.png' },
+      { id: 71, name: 'The CW', logo: 'https://image.tmdb.org/t/p/w92/ge9hzeaU7nMtQ4PjkFlc68dGAJ9.png' },
+      { id: 67, name: 'Showtime', logo: 'https://image.tmdb.org/t/p/w92/Allse9kbjiP6ExaQrnSpIhkurEi.png' },
+      { id: 318, name: 'Starz', logo: 'https://image.tmdb.org/t/p/w92/8GJjw3HHsAJYwIWKIPBPfqMxlEa.png' },
+      { id: 77, name: 'Syfy', logo: 'https://image.tmdb.org/t/p/w92/wPvJzLaYRgOBu4VNWQFXSIFAMwm.png' },
+      { id: 64, name: 'Discovery', logo: 'https://image.tmdb.org/t/p/w92/3vSOkjgntwMlpCCKe9EODxvKn7j.png' },
+      { id: 4, name: 'BBC One', logo: 'https://image.tmdb.org/t/p/w92/mVn7xESaTNmjBUyUtGNvDQd3CT1.png' },
+      { id: 493, name: 'BBC America', logo: 'https://image.tmdb.org/t/p/w92/teegNMEPYdHLBKRl2O2v6byjqn9.png' },
+      { id: 1, name: 'Fuji TV', logo: 'https://image.tmdb.org/t/p/w92/yS5UJjsSdZXML0YikWTYYHLPKhQ.png' },
+      { id: 614, name: 'Crunchyroll', logo: 'https://image.tmdb.org/t/p/w92/8Gt4xpeTJgkSWNQBEhWNxNFZ8Hc.png' }
+    ];
+
+    res.json({ networks });
+  } catch (error) {
+    logger.error('Networks list error:', error);
+    res.status(500).json({ error: 'Failed to fetch networks' });
   }
 });
 

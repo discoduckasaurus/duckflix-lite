@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DuckFlix Lite - Admin Dashboard</title>
-    <link rel="stylesheet" href="/static/admin/styles.css?v=7">
+    <link rel="stylesheet" href="/static/admin/styles.css?v=13">
 </head>
 <body>
     <!-- Login Screen -->
@@ -39,6 +39,7 @@
                 <li><a href="#" data-view="failures">Playback Failures</a></li>
                 <li><a href="#" data-view="health">Service Health</a></li>
                 <li><a href="#" data-view="loading-phrases">Loading Phrases</a></li>
+                <li><a href="#" data-view="livetv">Live TV</a></li>
             </ul>
             <button id="logout-btn" class="btn btn-secondary">Logout</button>
         </nav>
@@ -100,6 +101,41 @@
                 </div>
                 <div id="loading-phrases-container"></div>
             </div>
+
+            <!-- Live TV Channels View -->
+            <div id="view-livetv" class="view">
+                <div class="view-header">
+                    <h1>Live TV Channels</h1>
+                    <div class="view-header-actions">
+                        <button class="btn btn-secondary" id="seed-logos-btn">Auto-Match Logos</button>
+                        <button class="btn btn-secondary" id="reset-sources-btn" title="Reset all channels back to DaddyLive primary">Reset Sources</button>
+                        <button class="btn btn-primary" id="save-channels-btn">Save All Changes</button>
+                    </div>
+                </div>
+                <div class="livetv-toolbar">
+                    <input type="text" id="channel-search" placeholder="Search channels..." class="channel-search-input">
+                    <div class="livetv-filters">
+                        <select id="channel-source-filter">
+                            <option value="all">All Sources</option>
+                            <option value="tvpass">TVPass</option>
+                            <option value="cabernet">DaddyLive-only</option>
+                            <option value="has-daddylive">Has DaddyLive</option>
+                            <option value="failover">On Failover (not DL)</option>
+                            <option value="special">Special</option>
+                        </select>
+                        <select id="channel-status-filter">
+                            <option value="all">All Status</option>
+                            <option value="enabled">Enabled</option>
+                            <option value="disabled">Disabled</option>
+                            <option value="new">New (No Config)</option>
+                        </select>
+                    </div>
+                    <div class="livetv-stats">
+                        <span id="channel-stats"></span>
+                    </div>
+                </div>
+                <div id="channels-table-container"></div>
+            </div>
         </main>
     </div>
 
@@ -148,6 +184,9 @@
         </div>
     </div>
 
-    <script src="/static/admin/app.js?v=7"></script>
+    <!-- Hidden file input for logo uploads -->
+    <input type="file" id="logo-upload-input" accept="image/*" style="display:none">
+
+    <script src="/static/admin/app.js?v=13"></script>
 </body>
 </html>

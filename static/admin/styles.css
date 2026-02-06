@@ -573,6 +573,329 @@ body {
     color: var(--danger-color);
 }
 
+/* =========================================
+   Live TV Channel Management
+   ========================================= */
+
+.view-header-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.livetv-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.channel-search-input {
+    flex: 1;
+    min-width: 200px;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    font-size: 1rem;
+}
+
+.livetv-filters {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.livetv-filters select {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    font-size: 0.875rem;
+    background: white;
+}
+
+.livetv-stats {
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+/* Channel Table */
+.channel-row {
+    display: grid;
+    grid-template-columns: 24px 40px 44px 1fr 100px 50px;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    background: white;
+    transition: background 0.15s, opacity 0.2s;
+}
+
+.channel-row:hover {
+    background: var(--bg-light);
+}
+
+.channel-row.disabled-row {
+    opacity: 0.5;
+}
+
+.channel-row.new-row {
+    border-left: 3px solid var(--warning-color);
+}
+
+.channel-row.dragging {
+    opacity: 0.3;
+}
+
+.channel-row.drag-over-above {
+    border-top: 2px solid var(--primary-color);
+}
+
+.channel-row.drag-over-below {
+    border-bottom: 2px solid var(--primary-color);
+}
+
+.drag-handle {
+    cursor: grab;
+    color: #94a3b8;
+    font-size: 0.875rem;
+    text-align: center;
+    user-select: none;
+    line-height: 1;
+}
+
+.drag-handle:hover {
+    color: var(--text-primary);
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+.channel-header-row {
+    display: grid;
+    grid-template-columns: 24px 40px 44px 1fr 100px 50px;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: var(--bg-dark);
+    color: white;
+    font-weight: 600;
+    font-size: 0.875rem;
+    border-radius: 0.5rem 0.5rem 0 0;
+}
+
+.channel-enable-toggle {
+    width: 20px;
+    height: 20px;
+    cursor: pointer;
+    accent-color: var(--primary-color);
+}
+
+.channel-logo-cell {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.channel-logo {
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    object-fit: contain;
+    background: #f3f4f6;
+    cursor: pointer;
+    border: 1px solid var(--border-color);
+}
+
+.channel-logo:hover {
+    border-color: var(--primary-color);
+}
+
+.channel-logo-placeholder {
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    background: #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.625rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border: 1px dashed var(--border-color);
+}
+
+.channel-logo-placeholder:hover {
+    border-color: var(--primary-color);
+    background: #dbeafe;
+}
+
+.channel-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.channel-display-name {
+    padding: 0.25rem 0.4rem;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    background: transparent;
+    width: 100%;
+}
+
+.channel-display-name:hover {
+    border-color: var(--border-color);
+}
+
+.channel-display-name:focus {
+    border-color: var(--primary-color);
+    outline: none;
+    background: white;
+}
+
+.channel-meta {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    display: flex;
+    gap: 0.5rem;
+}
+
+.channel-source-badge {
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.source-tvpass {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.source-cabernet {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.source-daddylive {
+    background: #dcfce7;
+    color: #15803d;
+}
+
+.source-special {
+    background: #ede9fe;
+    color: #6d28d9;
+}
+
+/* Stream source badges (DL, Backup) */
+.stream-badge {
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.stream-badge-dl {
+    background: #dcfce7;
+    color: #15803d;
+}
+
+.stream-badge-backup {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.stream-badge-tvpass {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.stream-badge-active {
+    background: #dcfce7;
+    color: #166534;
+    font-weight: 600;
+}
+
+.stream-badge-failover {
+    background: #fef3c7;
+    color: #92400e;
+    font-weight: 600;
+}
+
+.channel-group-text {
+    color: var(--text-secondary);
+}
+
+.channel-order-input {
+    width: 60px;
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    font-size: 0.875rem;
+    text-align: center;
+}
+
+.channel-order-input:focus {
+    border-color: var(--primary-color);
+    outline: none;
+}
+
+.channel-order-disabled {
+    color: #94a3b8;
+    text-align: center;
+    display: block;
+    font-size: 0.875rem;
+}
+
+.channel-list-container {
+    background: white;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+    max-height: calc(100vh - 300px);
+    overflow-y: auto;
+}
+
+/* Toast notification */
+.toast {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    padding: 1rem 1.5rem;
+    border-radius: 0.5rem;
+    color: white;
+    font-weight: 500;
+    z-index: 2000;
+    animation: slideIn 0.3s ease, fadeOut 0.3s ease 2.7s;
+    animation-fill-mode: forwards;
+}
+
+.toast-success {
+    background: var(--success-color);
+}
+
+.toast-error {
+    background: var(--danger-color);
+}
+
+@keyframes slideIn {
+    from { transform: translateY(1rem); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fadeOut {
+    to { opacity: 0; }
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     #admin-screen {
@@ -600,5 +923,15 @@ body {
 
     .stats-grid {
         grid-template-columns: 1fr;
+    }
+
+    .channel-row,
+    .channel-header-row {
+        grid-template-columns: 20px 30px 36px 1fr 50px;
+    }
+
+    .channel-header-row > :nth-child(5),
+    .channel-row > :nth-child(6) {
+        display: none;
     }
 }

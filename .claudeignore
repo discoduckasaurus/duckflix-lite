@@ -1,0 +1,8 @@
+static/apk/
+static/logos/
+logs/
+*.log
+*.apk
+db/*.db
+db/*.db-shm
+db/*.db-wal

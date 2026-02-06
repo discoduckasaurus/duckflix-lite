@@ -1,0 +1,207 @@
+{
+  "_comment": "Backup stream sources for channels. First working stream is used. Sources: iptv-org/iptv us.m3u",
+
+  "amc-eastern-feed": {
+    "backups": [
+      "http://cors.tundracast.com:2000/https://streamer1.nexgen.bz/AMC/index.m3u8"
+    ]
+  },
+
+  "bloomberg-tv-usa": {
+    "primary": "https://bloomberg.com/media-manifest/streams/us.m3u8",
+    "backups": [
+      "https://bloomberg.com/media-manifest/streams/phoenix-us.m3u8",
+      "https://viamotionhsi.netplus.ch/live/eds/bloomberg/browser-HLS8/bloomberg.m3u8"
+    ]
+  },
+
+  "cnbc-usa": {
+    "primary": "https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8",
+    "backups": []
+  },
+
+  "cnn": {
+    "backups": []
+  },
+
+  "comedy-central-us-eastern-feed": {
+    "primary": "https://fl1.moveonjoy.com/Comedy_Central/index.m3u8",
+    "backups": [
+      "https://streamer1.nexgen.bz/COMEDY_CENTRAL/index.m3u8"
+    ]
+  },
+
+  "comedy-central-pluto-tv": {
+    "primary": "http://cfd-v4-service-channel-stitcher-use1-1.prd.pluto.tv/stitch/hls/channel/5ca671f215a62078d2ec0abf/master.m3u8?appName=web&appVersion=unknown&clientTime=0&deviceDNT=0&deviceId=6c282e20-30d3-11ef-9cf5-e9ddff8ff496&deviceMake=Chrome&deviceModel=web&deviceType=web&deviceVersion=unknown&includeExtendedEvents=false&serverSideAds=false&sid=c8883a8b-3441-4f7d-a15e-3a8365fbcaef",
+    "backups": []
+  },
+
+  "disney-eastern-feed": {
+    "primary": "https://fl31.moveonjoy.com/DISNEY/index.m3u8",
+    "backups": [
+      "https://e3.thetvapp.to/hls/DisneyChannelEast/index.m3u8",
+      "https://e5.thetvapp.to/hls/DisneyChannelEast/index.m3u8"
+    ]
+  },
+
+  "espn-deportes": {
+    "primary": "https://e3.thetvapp.to/hls/espn-deportes/index.m3u8",
+    "backups": []
+  },
+
+  "fox-news": {
+    "primary": "https://stream.livenewsplay.com:9443/hls/foxnews/foxsd.m3u8",
+    "backups": [
+      "http://247preview.foxnews.com/hls/live/2020027/fncv3preview/primary.m3u8"
+    ]
+  },
+
+  "fox-business": {
+    "primary": "http://41.205.93.154/FOXBUSINESS/index.m3u8",
+    "backups": []
+  },
+
+  "msnbc-usa": {
+    "primary": "http://41.205.93.154/MSNBC/index.m3u8",
+    "backups": []
+  },
+
+  "abc-wabc-new-york-ny": {
+    "primary": "https://fl61.moveonjoy.com/NY_NEW_YORK_ABC/index.m3u8",
+    "backups": [
+      "http://41.205.93.154/ABC/index.m3u8"
+    ]
+  },
+
+  "abc-kabc-los-angeles-ca": {
+    "backups": [
+      "http://41.205.93.154/ABC/index.m3u8"
+    ]
+  },
+
+  "cbs-wcbs-new-york-ny": {
+    "primary": "https://fl1.moveonjoy.com/NY_NEW_YORK_CBS/index.m3u8",
+    "backups": [
+      "https://fl1.moveonjoy.com/CBS/index.m3u8"
+    ]
+  },
+
+  "cbs-kcbs-los-angeles-ca": {
+    "primary": "https://fl1.moveonjoy.com/CBS/index.m3u8",
+    "backups": [
+      "https://fl1.moveonjoy.com/PA_PHILADELPHIA_CBS/index.m3u8"
+    ]
+  },
+
+  "nbc-wnbc-new-york-ny": {
+    "primary": "https://fl61.moveonjoy.com/NY_New_York_NBC/mpegts",
+    "backups": [
+      "https://cors-proxy.cooks.fyi/https://streamer2.nexgen.bz/NBC/index.m3u8",
+      "https://fl1.moveonjoy.com/NBC/index.m3u8"
+    ]
+  },
+
+  "nbc-knbc-los-angeles-ca": {
+    "primary": "https://nbculocallive.akamaized.net/hls/live/2037084/losangeles/stream1/master.m3u8",
+    "backups": [
+      "https://cors-proxy.cooks.fyi/https://streamer2.nexgen.bz/NBC/index.m3u8"
+    ]
+  },
+
+  "nickelodeon-usa-east-feed": {
+    "primary": "http://23.237.104.106:8080/USA_NICKELODEON/index.m3u8",
+    "backups": []
+  },
+
+  "fox-sports-2": {
+    "primary": "http://23.237.104.106:8080/USA_FS2/index.m3u8",
+    "backups": []
+  },
+
+  "national-geographic-us-eastern": {
+    "backups": [
+      "https://cors-proxy.cooks.fyi/https://streamer1.nexgen.bz/NAT_GEO/index.m3u8"
+    ]
+  },
+
+  "syfy-eastern-feed": {
+    "backups": [
+      "https://cors-proxy.cooks.fyi/https://streamer1.nexgen.bz/SYFY/index.m3u8"
+    ]
+  },
+
+  "history-channel-us-eastern-feed": {
+    "backups": [
+      "https://cors-proxy.cooks.fyi/https://streamer1.nexgen.bz/HISTORY2/index.m3u8"
+    ]
+  },
+
+  "we-womens-entertainment-eastern": {
+    "backups": [
+      "http://cors.tundracast.com:2000/https://streamer1.nexgen.bz/WE_TV/index.m3u8"
+    ]
+  },
+
+  "metv-wjlp-new-jerseynew-york": {
+    "primary": "https://fl61.moveonjoy.com/ME_TV/index.m3u8",
+    "backups": [
+      "https://e5.thetvapp.to/hls/metv-wjlp-new-jerseynew-york/index.m3u8",
+      "https://streamer1.nexgen.bz/ME_TV/index.m3u8"
+    ]
+  },
+
+  "metv-toons-wjlp2-new-jersey": {
+    "primary": "https://e3.thetvapp.to/hls/metv-toons/index.m3u8",
+    "backups": []
+  },
+
+  "wpix-new-york-superstation": {
+    "primary": "https://e1.thetvapp.to/hls/WPIX/index.m3u8",
+    "backups": [
+      "https://streamer1.nexgen.bz/WPIX/index.m3u8"
+    ]
+  },
+
+  "msg-madison-square-gardens": {
+    "backups": [
+      "https://fl1.moveonjoy.com/MSG/mpegts"
+    ]
+  },
+
+  "marquee-sports-network": {
+    "primary": "https://fl1.moveonjoy.com/MARQUEE_SPORTS_NETWORK/index.m3u8",
+    "backups": []
+  },
+
+  "sec-network": {
+    "primary": "http://fl1.moveonjoy.com/SEC_NETWORK/index.m3u8",
+    "backups": []
+  },
+
+  "fanduel-sports-network-detroit-hd": {
+    "primary": "https://fl7.moveonjoy.com/BALLY_SPORTS_DETROIT/index.m3u8",
+    "backups": []
+  },
+
+  "nhl-network-usa": {
+    "primary": "https://fl1.moveonjoy.com/NHL_NETWORK/mpegts",
+    "backups": []
+  },
+
+  "ion-eastern-feed": {
+    "primary": "https://d1mumb5jst6zw0.cloudfront.net/11603/88889668/hls/master.m3u8",
+    "backups": [
+      "http://cors.tundracast.com:2000/https://streamer1.nexgen.bz/IONMYSTERY/index.m3u8"
+    ]
+  },
+
+  "telemundo-eastern-feed": {
+    "primary": "http://cors.tundracast.com:2000/https://streamer2.nexgen.bz/77-TELEMUNDO/index.m3u8",
+    "backups": []
+  },
+
+  "boomerang": {
+    "primary": "http://cors.tundracast.com:2000/https://streamer1.nexgen.bz/BOUNCE/index.m3u8",
+    "backups": []
+  }
+}
