@@ -279,7 +279,8 @@ class DetailViewModel @Inject constructor(
                         type = contentType,
                         year = content.year,
                         posterUrl = content.posterUrl,
-                        addedAt = System.currentTimeMillis()
+                        addedAt = System.currentTimeMillis(),
+                        voteAverage = content.voteAverage
                     )
                     watchlistDao.add(watchlistItem)
                     _uiState.value = _uiState.value.copy(isInWatchlist = true)

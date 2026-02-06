@@ -24,6 +24,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.duckflix.lite.ui.theme.Dimens
 import com.duckflix.lite.data.local.entity.WatchlistEntity
 import com.duckflix.lite.data.remote.dto.ContinueWatchingItem
 import com.duckflix.lite.data.remote.dto.DisplayState
@@ -147,8 +148,8 @@ private fun LoadingRow() {
         repeat(4) {
             Card(
                 modifier = Modifier
-                    .width(128.dp)
-                    .height(240.dp),
+                    .width(Dimens.posterCardWidth)
+                    .height(Dimens.posterCardHeight),
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                 )
@@ -200,8 +201,8 @@ private fun ContinueWatchingCard(
     MediaCard(
         onClick = onClick,
         modifier = Modifier
-            .width(128.dp)
-            .height(240.dp)
+            .width(Dimens.posterCardWidth)
+            .height(Dimens.posterCardHeight)
             .pointerInput(Unit) {
                 detectTapGestures(
                     onLongPress = {
@@ -219,7 +220,7 @@ private fun ContinueWatchingCard(
                 contentDescription = item.title,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(190.dp),
+                    .height(Dimens.posterImageHeight),
                 contentScale = ContentScale.Crop
             )
 
@@ -229,7 +230,7 @@ private fun ContinueWatchingCard(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(190.dp)
+                            .height(Dimens.posterImageHeight)
                             .background(Color.Black.copy(alpha = 0.6f)),
                         contentAlignment = Alignment.Center
                     ) {
@@ -258,7 +259,7 @@ private fun ContinueWatchingCard(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(190.dp)
+                            .height(Dimens.posterImageHeight)
                             .background(Color(0x99FF0000)),
                         contentAlignment = Alignment.Center
                     ) {
@@ -396,8 +397,8 @@ private fun WatchlistRow(
             MediaCard(
                 onClick = { onItemClick(item) },
                 modifier = Modifier
-                    .width(128.dp)
-                    .height(240.dp)
+                    .width(Dimens.posterCardWidth)
+                    .height(Dimens.posterCardHeight)
                     .pointerInput(Unit) {
                         detectTapGestures(
                             onLongPress = { onItemLongPress(item) }
@@ -410,7 +411,7 @@ private fun WatchlistRow(
                         contentDescription = item.title,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(190.dp),
+                            .height(Dimens.posterImageHeight),
                         contentScale = ContentScale.Crop
                     )
                     Column(
@@ -422,9 +423,17 @@ private fun WatchlistRow(
                             text = item.title,
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color.White,
-                            maxLines = 2,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        // Show rating if available
+                        if (item.voteAverage != null && item.voteAverage > 0) {
+                            Text(
+                                text = String.format("%.1f", item.voteAverage),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFFFD700).copy(alpha = 0.9f)
+                            )
+                        }
                     }
                 }
             }
@@ -444,8 +453,8 @@ private fun RecommendationsRow(
             MediaCard(
                 onClick = { onItemClick(item) },
                 modifier = Modifier
-                    .width(128.dp)
-                    .height(240.dp)
+                    .width(Dimens.posterCardWidth)
+                    .height(Dimens.posterCardHeight)
             ) {
                 Column {
                     AsyncImage(
@@ -453,7 +462,7 @@ private fun RecommendationsRow(
                         contentDescription = item.title,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(190.dp),
+                            .height(Dimens.posterImageHeight),
                         contentScale = ContentScale.Crop
                     )
                     Column(

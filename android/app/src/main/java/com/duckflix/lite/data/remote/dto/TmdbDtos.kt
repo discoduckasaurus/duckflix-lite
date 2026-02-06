@@ -262,6 +262,22 @@ data class WatchlistSyncRequest(
 )
 
 @JsonClass(generateAdapter = true)
+data class WatchlistResponse(
+    val watchlist: List<WatchlistItem>
+)
+
+@JsonClass(generateAdapter = true)
+data class WatchlistItem(
+    val tmdbId: Int,
+    val type: String,
+    val title: String,
+    val posterPath: String?,
+    val releaseDate: String?,
+    val voteAverage: Double?,
+    val addedAt: String?  // ISO date string from server
+)
+
+@JsonClass(generateAdapter = true)
 data class RandomEpisodeResponse(
     val season: Int,
     val episode: Int,

@@ -10,18 +10,17 @@ import androidx.compose.ui.unit.dp
 /**
  * TV Safe Area wrapper for Android TV overscan compensation.
  *
- * Most TVs have overscan that cuts off 5-10% of the screen edges.
- * This wrapper ensures content stays within the visible area.
+ * Modern smart TVs have minimal overscan. Most streaming apps (Netflix, etc.)
+ * use aggressive margins of 16-24dp. Users can adjust TV settings for overscan.
  *
- * Standard Android TV safe area is 48dp minimum, but 60-80dp is recommended
- * for better compatibility with older TVs.
+ * Using minimal safe zones to maximize screen real estate on modern displays.
  */
 object TVSafeArea {
-    // Horizontal safe padding (left/right)
-    val HorizontalPadding = 32.dp
+    // Horizontal safe padding (left/right) - aggressive for modern TVs
+    val HorizontalPadding = 16.dp
 
-    // Vertical safe padding (top/bottom)
-    val VerticalPadding = 24.dp
+    // Vertical safe padding (top/bottom) - aggressive for modern TVs
+    val VerticalPadding = 12.dp
 }
 
 /**

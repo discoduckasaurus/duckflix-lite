@@ -21,9 +21,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -46,11 +47,14 @@ fun EpgGrid(
     channelColumnWidth: Dp = 180.dp,
     timeSlotWidth: Dp = 150.dp,    // Width per 30-minute slot
     rowHeight: Dp = 64.dp,
-    firstChannelFocusRequester: FocusRequester? = null
+    focusTrigger: Int = 0  // Changes to trigger focus restoration
 ) {
     // Shared horizontal scroll state for time bar and program grid
     val horizontalScrollState = rememberScrollState()
     val verticalListState = rememberLazyListState()
+
+    // Track whether initial focus has been requested (only once per screen load)
+    val shouldRequestInitialFocus = remember { mutableStateOf(true) }
 
     // Scroll to current time on first load
     LaunchedEffect(epgStartTime, currentTime) {
@@ -60,6 +64,22 @@ fun EpgGrid(
             val scrollOffset = (minutesSinceStart * pixelsPerMinute).toInt()
             // Scroll to 1 hour before current time for context
             horizontalScrollState.animateScrollTo((scrollOffset - 200).coerceAtLeast(0))
+        }
+    }
+
+    // Mark initial focus as done after a delay (to prevent re-triggering)
+    LaunchedEffect(shouldRequestInitialFocus.value) {
+        if (shouldRequestInitialFocus.value) {
+            kotlinx.coroutines.delay(500)
+            shouldRequestInitialFocus.value = false
+        }
+    }
+
+    // Reset focus request when returning from fullscreen (focusTrigger changes)
+    LaunchedEffect(focusTrigger) {
+        if (focusTrigger > 0) {
+            println("[EpgGrid] Focus trigger changed to $focusTrigger, resetting initial focus")
+            shouldRequestInitialFocus.value = true
         }
     }
 
@@ -104,13 +124,20 @@ fun EpgGrid(
                         )
                 ) {
                     // Channel info (sticky left column)
+                    // Request initial focus on first channel, or on selected channel when returning from fullscreen
+                    val shouldFocus = when {
+                        isSelected -> true  // Focus selected channel (when returning from fullscreen)
+                        index == 0 && shouldRequestInitialFocus.value && selectedChannel == null -> true  // Focus first channel on initial load
+                        else -> false
+                    }
                     ChannelRow(
                         channel = channel,
                         isSelected = isSelected,
                         onClick = { onChannelClick(channel) },
                         width = channelColumnWidth,
                         height = rowHeight,
-                        focusRequester = if (index == 0) firstChannelFocusRequester else null
+                        displayNumber = index + 1,  // 1-based position in list
+                        requestInitialFocus = shouldFocus
                     )
 
                     // Program cells (horizontally scrollable)
@@ -121,7 +148,8 @@ fun EpgGrid(
                         timeSlotWidth = timeSlotWidth,
                         rowHeight = rowHeight,
                         horizontalScrollState = horizontalScrollState,
-                        onProgramClick = { program -> onProgramClick(channel, program) }
+                        onProgramClick = { program -> onProgramClick(channel, program) },
+                        modifier = Modifier.weight(1f)
                     )
                 }
 
@@ -147,47 +175,60 @@ private fun ProgramRow(
     timeSlotWidth: Dp,
     rowHeight: Dp,
     horizontalScrollState: ScrollState,
-    onProgramClick: (com.duckflix.lite.data.remote.dto.LiveTvProgram) -> Unit
+    onProgramClick: (com.duckflix.lite.data.remote.dto.LiveTvProgram) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     // Calculate total grid width
     val totalMinutes = ((epgEndTime - epgStartTime) / 60).toInt()
     val gridWidth = (totalMinutes.toFloat() / 30f * timeSlotWidth.value).dp
 
+    // Outer box is the viewport (takes remaining width via modifier)
+    // Inner box is the scrollable content with full grid width
     Box(
-        modifier = Modifier
-            .width(gridWidth)
+        modifier = modifier
             .height(rowHeight)
+            .clipToBounds()
             .horizontalScroll(horizontalScrollState)
     ) {
-        // Position each program based on its start time
-        channel.allPrograms
-            .filter { it.stop > epgStartTime && it.start < epgEndTime }
-            .forEach { program ->
-                // Clamp program start time to EPG window for positioning
-                val displayStart = maxOf(program.start, epgStartTime)
-                val offset = calculateProgramOffset(displayStart, epgStartTime, timeSlotWidth)
+        // Inner content box with full grid width
+        Box(
+            modifier = Modifier
+                .width(gridWidth)
+                .height(rowHeight)
+        ) {
+            // Position each program based on its start time
+            channel.allPrograms
+                .filter { it.stop > epgStartTime && it.start < epgEndTime }
+                .forEach { program ->
+                    // Clamp program times to EPG window
+                    val displayStart = maxOf(program.start, epgStartTime)
+                    val displayEnd = minOf(program.stop, epgEndTime)
+                    val displayDurationMinutes = ((displayEnd - displayStart) / 60).toInt()
 
-                Box(
-                    modifier = Modifier.offset(x = offset)
-                ) {
-                    ProgramCell(
-                        program = program,
-                        epgStartTime = epgStartTime,
-                        timeSlotWidth = timeSlotWidth,
-                        rowHeight = rowHeight,
-                        onClick = { onProgramClick(program) }
-                    )
+                    val offset = calculateProgramOffset(displayStart, epgStartTime, timeSlotWidth)
+                    Box(
+                        modifier = Modifier.offset(x = offset)
+                    ) {
+                        ProgramCell(
+                            program = program,
+                            displayDurationMinutes = displayDurationMinutes,
+                            timeSlotWidth = timeSlotWidth,
+                            onClick = { onProgramClick(program) },
+                            horizontalScrollState = horizontalScrollState,
+                            offsetDp = offset
+                        )
+                    }
                 }
-            }
 
-        // Fill empty space if no programs
-        if (channel.allPrograms.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight()
-                    .background(Color(0xFF1A1A1A))
-            )
+            // Fill empty space if no programs
+            if (channel.allPrograms.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight()
+                        .background(Color(0xFF1A1A1A))
+                )
+            }
         }
     }
 }

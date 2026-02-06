@@ -1,5 +1,6 @@
 package com.duckflix.lite.ui.components.livetv
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -21,7 +22,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -42,6 +46,7 @@ import com.duckflix.lite.data.remote.dto.LiveTvChannel
 /**
  * Channel row showing logo and name (clickable to go fullscreen)
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChannelRow(
     channel: LiveTvChannel,
@@ -50,23 +55,45 @@ fun ChannelRow(
     width: Dp,
     height: Dp,
     modifier: Modifier = Modifier,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    displayNumber: Int? = null,  // Position in list (1-based), overrides channel.channelNumber
+    requestInitialFocus: Boolean = false  // If true, this row will request focus on compose
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+
+    // Create local focus requester if we need to request initial focus
+    val localFocusRequester = remember { FocusRequester() }
+    val effectiveFocusRequester = focusRequester ?: localFocusRequester
+
+    // Scroll into view when focused
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            bringIntoViewRequester.bringIntoView()
+        }
+    }
+
+    // Request focus when this row should have initial focus
+    LaunchedEffect(requestInitialFocus) {
+        if (requestInitialFocus) {
+            kotlinx.coroutines.delay(100)
+            try {
+                effectiveFocusRequester.requestFocus()
+                println("[ChannelRow] Requested initial focus for ${channel.effectiveDisplayName}")
+            } catch (e: Exception) {
+                println("[ChannelRow] Focus request failed: ${e.message}")
+            }
+        }
+    }
 
     Card(
         onClick = onClick,
         modifier = modifier
             .width(width)
             .height(height)
-            .then(
-                if (focusRequester != null) {
-                    Modifier.focusRequester(focusRequester)
-                } else {
-                    Modifier
-                }
-            )
+            .bringIntoViewRequester(bringIntoViewRequester)
+            .focusRequester(effectiveFocusRequester)
             .focusable(interactionSource = interactionSource),
         interactionSource = interactionSource,
         shape = RoundedCornerShape(4.dp),
@@ -91,13 +118,14 @@ fun ChannelRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Start
         ) {
-            // Channel number (if available)
-            channel.channelNumber?.let { number ->
+            // Channel number - use displayNumber (position) if provided, otherwise fall back to channel.channelNumber
+            val numberToShow = displayNumber ?: channel.channelNumber
+            numberToShow?.let { number ->
                 Text(
-                    text = number.toString().padStart(3, ' '),
+                    text = number.toString(),
                     style = MaterialTheme.typography.labelMedium,
                     color = Color.White.copy(alpha = 0.5f),
-                    modifier = Modifier.width(32.dp)
+                    modifier = Modifier.width(28.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
             }

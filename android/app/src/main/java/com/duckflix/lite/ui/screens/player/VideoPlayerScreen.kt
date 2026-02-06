@@ -51,7 +51,8 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Request focus on background only when controls are hidden
+    // Request focus on background when controls are hidden
+    // Also request focus on initial launch to ensure we capture key events
     LaunchedEffect(uiState.showControls) {
         if (!uiState.showControls) {
             delay(100) // Small delay to ensure focus system is ready
@@ -60,6 +61,16 @@ fun VideoPlayerScreen(
             } catch (e: IllegalArgumentException) {
                 // Focus system not ready, ignore
             }
+        }
+    }
+
+    // Request focus on initial launch to ensure Back key is captured
+    LaunchedEffect(Unit) {
+        delay(100)
+        try {
+            backgroundFocusRequester.requestFocus()
+        } catch (e: IllegalArgumentException) {
+            // Focus system not ready, ignore
         }
     }
 

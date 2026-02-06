@@ -241,7 +241,7 @@ fun HomeScreen(
             )
         }
 
-        // Continue Watching action dialog
+        // Continue Watching action dialog - placed last so it renders on top
         if (showContinueWatchingDialog && selectedContinueWatchingItem != null) {
             ContinueWatchingActionDialog(
                 item = selectedContinueWatchingItem!!,

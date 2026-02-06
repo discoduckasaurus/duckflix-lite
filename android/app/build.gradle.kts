@@ -33,7 +33,7 @@ android {
         }
         debug {
             isMinifyEnabled = false
-            applicationIdSuffix = ".debug"
+            // applicationIdSuffix removed - debug replaces release app
             versionNameSuffix = "-debug"
         }
     }

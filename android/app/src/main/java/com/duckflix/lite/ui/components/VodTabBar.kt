@@ -23,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.duckflix.lite.ui.theme.Dimens
+import com.duckflix.lite.ui.theme.TextSizes
 
 /**
  * Tab options for VOD section navigation
@@ -47,7 +49,7 @@ fun VodTabBar(
 ) {
     Row(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(Dimens.itemSpacing)
     ) {
         tabs.forEach { tab ->
             VodTabItem(
@@ -73,7 +75,7 @@ private fun RowScope.VodTabItem(
     val shape = RoundedCornerShape(8.dp)
 
     val backgroundColor = when {
-        isSelected -> MaterialTheme.colorScheme.primary
+        isSelected -> Color(0xFF0D47A1) // Darker blue to distinguish from menu tiles
         else -> Color.Transparent
     }
 
@@ -82,19 +84,22 @@ private fun RowScope.VodTabItem(
         else -> Color.White.copy(alpha = 0.7f)
     }
 
-    val borderModifier = if (isFocused) {
-        Modifier.border(
+    val borderModifier = when {
+        isFocused -> Modifier.border(
             BorderStroke(4.dp, MaterialTheme.colorScheme.primary),
             shape
         )
-    } else {
-        Modifier
+        !isSelected -> Modifier.border(
+            BorderStroke(2.dp, Color.White.copy(alpha = 0.3f)),
+            shape
+        )
+        else -> Modifier
     }
 
     Box(
         modifier = Modifier
             .weight(1f)
-            .height(56.dp)
+            .height(Dimens.tabBarHeight)
             .clip(shape)
             .then(borderModifier)
             .background(backgroundColor, shape)
@@ -108,7 +113,7 @@ private fun RowScope.VodTabItem(
     ) {
         Text(
             text = tab.displayName,
-            style = MaterialTheme.typography.titleMedium,
+            fontSize = TextSizes.tab,
             color = textColor
         )
     }

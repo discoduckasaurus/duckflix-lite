@@ -28,12 +28,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -45,11 +42,11 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.duckflix.lite.ui.components.ErrorScreen
+import com.duckflix.lite.ui.components.TVSafeArea
 import com.duckflix.lite.ui.components.TVSafeContent
 import com.duckflix.lite.ui.components.livetv.CurrentProgramInfo
 import com.duckflix.lite.ui.components.livetv.EpgGrid
 import com.duckflix.lite.ui.components.livetv.PipPlayer
-import kotlinx.coroutines.delay
 
 /**
  * Live TV screen with EPG grid and PiP player
@@ -62,37 +59,13 @@ fun LiveTvScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    val firstChannelFocusRequester = remember { FocusRequester() }
 
     // Hide keyboard when entering Live TV screen
     LaunchedEffect(Unit) {
         keyboardController?.hide()
     }
 
-    // Request focus on first channel when loaded
-    LaunchedEffect(uiState.channels) {
-        if (uiState.channels.isNotEmpty() && !uiState.isLoading) {
-            delay(200)
-            try {
-                firstChannelFocusRequester.requestFocus()
-            } catch (e: Exception) {
-                // Focus system not ready
-            }
-        }
-    }
-
-    // Request focus on channel when exiting fullscreen
-    LaunchedEffect(uiState.isFullscreen) {
-        if (!uiState.isFullscreen && uiState.channels.isNotEmpty()) {
-            println("[LiveTV-UI] Exiting fullscreen, channels: ${uiState.channels.size}, filtered: ${viewModel.getFilteredChannels().size}")
-            delay(200)
-            try {
-                firstChannelFocusRequester.requestFocus()
-            } catch (e: Exception) {
-                println("[LiveTV-UI] Focus request failed: ${e.message}")
-            }
-        }
-    }
+    // Note: Focus handling is now done inside EpgGrid/ChannelRow components
 
     // Debug: Log state changes
     LaunchedEffect(uiState.channels.size, uiState.isLoading, uiState.error) {
@@ -194,9 +167,15 @@ fun LiveTvScreen(
             else -> {
                 // EPG grid mode
                 println("[LiveTV-UI] Rendering EPG grid mode, channels: ${uiState.channels.size}, filtered: ${viewModel.getFilteredChannels().size}")
-                TVSafeContent {
+                Column(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    // Header and PiP section with safe padding
                     Column(
-                        modifier = Modifier.fillMaxSize()
+                        modifier = Modifier.padding(
+                            horizontal = TVSafeArea.HorizontalPadding,
+                            vertical = TVSafeArea.VerticalPadding
+                        )
                     ) {
                         // Header row
                         Row(
@@ -233,7 +212,7 @@ fun LiveTvScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(180.dp)
-                                .padding(bottom = 16.dp),
+                                .padding(bottom = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
                             // PiP Player (left side)
@@ -259,9 +238,10 @@ fun LiveTvScreen(
                                 )
                             }
                         }
+                    }
 
-                        // EPG Grid
-                        EpgGrid(
+                    // EPG Grid - stretches to screen edges (no safe padding)
+                    EpgGrid(
                             channels = viewModel.getFilteredChannels(),
                             selectedChannel = uiState.selectedChannel,
                             epgStartTime = uiState.epgStartTime,
@@ -280,10 +260,9 @@ fun LiveTvScreen(
                                 ).show()
                             },
                             modifier = Modifier.weight(1f),
-                            firstChannelFocusRequester = firstChannelFocusRequester
+                            focusTrigger = uiState.focusTrigger
                         )
                     }
-                }
             }
         }
 

@@ -20,6 +20,8 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.duckflix.lite.data.remote.dto.ContinueWatchingItem
 import com.duckflix.lite.data.remote.dto.DisplayState
@@ -36,32 +38,26 @@ fun ContinueWatchingActionDialog(
     val firstButtonFocusRequester = remember { FocusRequester() }
     val secondButtonFocusRequester = remember { FocusRequester() }
     val thirdButtonFocusRequester = remember { FocusRequester() }
-    val dialogFocusRequester = remember { FocusRequester() }
 
     val isFailed = item.isFailed
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.85f))
-            .focusRequester(dialogFocusRequester)
-            .onKeyEvent { keyEvent ->
-                if (keyEvent.type == KeyEventType.KeyUp) {
-                    when (keyEvent.key) {
-                        Key.Back, Key.Escape -> {
-                            onDismiss()
-                            true
-                        }
-                        else -> false
-                    }
-                } else {
-                    false
-                }
-            }
-            .focusable()
-            .padding(48.dp),
-        contentAlignment = Alignment.Center
+    // Use Dialog composable to ensure it renders above all other content
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false
+        )
     ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.85f))
+                .focusable()
+                .padding(48.dp),
+            contentAlignment = Alignment.Center
+        ) {
         Surface(
             modifier = Modifier.widthIn(max = 420.dp),
             shape = MaterialTheme.shapes.large,
@@ -231,6 +227,7 @@ fun ContinueWatchingActionDialog(
                     }
                 }
             }
+        }
         }
     }
 

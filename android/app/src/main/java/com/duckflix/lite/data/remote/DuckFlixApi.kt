@@ -152,6 +152,9 @@ interface DuckFlixApi {
     suspend fun getLoadingPhrases(): com.duckflix.lite.data.remote.dto.LoadingPhrasesResponse
 
     // Watchlist sync
+    @GET("user/watchlist")
+    suspend fun getWatchlist(): com.duckflix.lite.data.remote.dto.WatchlistResponse
+
     @POST("user/watchlist")
     suspend fun addToWatchlist(@Body request: com.duckflix.lite.data.remote.dto.WatchlistSyncRequest)
 

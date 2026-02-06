@@ -52,7 +52,7 @@ class HomeViewModel @Inject constructor(
     init {
         loadLocalData()
         loadUserAdminStatus()
-        syncExistingDataToServer()
+        fetchWatchlistFromServer() // Fetch from server first
         loadContinueWatching() // Load from server
         loadRecommendations()
         loadTrendingMovies()
@@ -255,6 +255,45 @@ class HomeViewModel @Inject constructor(
     fun removeFromWatchlist(tmdbId: Int) {
         viewModelScope.launch {
             watchlistDao.remove(tmdbId)
+        }
+    }
+
+    private fun fetchWatchlistFromServer() {
+        viewModelScope.launch {
+            try {
+                println("[HomeViewModel] Fetching watchlist from server...")
+                val response = api.getWatchlist()
+                println("[HomeViewModel] Server watchlist: ${response.watchlist.size} items")
+
+                // Convert server items to local entities and save
+                response.watchlist.forEach { item ->
+                    // Parse ISO date string to timestamp
+                    val addedAtTimestamp = try {
+                        item.addedAt?.let {
+                            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+                                .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+                                .parse(it)?.time
+                        } ?: System.currentTimeMillis()
+                    } catch (e: Exception) {
+                        System.currentTimeMillis()
+                    }
+
+                    val entity = WatchlistEntity(
+                        tmdbId = item.tmdbId,
+                        title = item.title,
+                        type = item.type,
+                        year = item.releaseDate,
+                        posterUrl = item.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
+                        addedAt = addedAtTimestamp,
+                        voteAverage = item.voteAverage
+                    )
+                    watchlistDao.add(entity)
+                }
+                println("[HomeViewModel] Watchlist synced to local DB")
+            } catch (e: Exception) {
+                println("[HomeViewModel] Failed to fetch watchlist from server: ${e.message}")
+                // Fall back to local data which is already being loaded
+            }
         }
     }
 

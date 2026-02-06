@@ -33,7 +33,7 @@ import com.duckflix.lite.data.local.entity.WatchlistEntity
         PlaybackErrorEntity::class,
         AutoPlaySettingsEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class DuckFlixDatabase : RoomDatabase() {

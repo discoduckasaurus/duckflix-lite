@@ -38,47 +38,57 @@ fun TimeBar(
     modifier: Modifier = Modifier
 ) {
     val timeSlotMinutes = 30
-    val totalMinutes = ((epgEndTime - epgStartTime) / 60).toInt()
-    val slotCount = totalMinutes / timeSlotMinutes
 
-    // Calculate current time offset for the red indicator line
+    // Round epgStartTime DOWN to nearest half hour for clean time slots
+    val halfHourSeconds = 30 * 60L
+    val roundedStartTime = (epgStartTime / halfHourSeconds) * halfHourSeconds
+
+    val totalMinutes = ((epgEndTime - roundedStartTime) / 60).toInt()
+    val slotCount = (totalMinutes / timeSlotMinutes) + 1  // +1 to ensure we cover the full range
+
+    // Calculate current time offset relative to rounded start
     val currentTimeOffset = calculateCurrentTimeOffset(
-        epgStartTime, currentTime, timeSlotWidth, timeSlotMinutes
+        roundedStartTime, currentTime, timeSlotWidth, timeSlotMinutes
     )
 
-    // Wrap everything in a Box so TimeBar only emits one root composable
-    Box(
+    // Calculate total width for time slots
+    val totalTimeWidth = (slotCount * timeSlotWidth.value).dp
+
+    // Main container with fixed height
+    Row(
         modifier = modifier
             .height(40.dp)
             .background(Color(0xFF1A1A1A))
     ) {
-        Row(
-            modifier = Modifier.matchParentSize()
+        // Channel column placeholder with "TIME" label
+        Box(
+            modifier = Modifier
+                .width(channelColumnWidth)
+                .fillMaxHeight()
+                .background(Color(0xFF1A1A1A)),
+            contentAlignment = Alignment.CenterStart
         ) {
-            // Empty space for channel column alignment
-            Box(
-                modifier = Modifier
-                    .width(channelColumnWidth)
-                    .fillMaxHeight()
-                    .background(Color(0xFF1A1A1A))
-            ) {
-                Text(
-                    text = "TIME",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.5f),
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 8.dp)
-                )
-            }
+            Text(
+                text = "TIME",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.5f),
+                modifier = Modifier.padding(start = 8.dp)
+            )
+        }
 
-            // Time slots (scrollable, synchronized with EPG)
+        // Scrollable time slots container
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+        ) {
             Row(
                 modifier = Modifier
+                    .width(totalTimeWidth)
+                    .fillMaxHeight()
                     .horizontalScroll(horizontalScrollState)
             ) {
                 repeat(slotCount) { index ->
-                    val slotStartTime = epgStartTime + (index * timeSlotMinutes * 60)
+                    val slotStartTime = roundedStartTime + (index * timeSlotMinutes * 60)
                     val isCurrentSlot = currentTime >= slotStartTime &&
                             currentTime < slotStartTime + (timeSlotMinutes * 60)
 
@@ -87,37 +97,48 @@ fun TimeBar(
                             .width(timeSlotWidth)
                             .fillMaxHeight()
                             .background(
-                                if (isCurrentSlot) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                                else Color.Transparent
-                            ),
-                        contentAlignment = Alignment.CenterStart
+                                if (isCurrentSlot) MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                                else Color(0xFF1A1A1A)
+                            )
                     ) {
+                        // Timestamp label - show on-the-hour times (:00 and :30)
                         Text(
-                            text = formatTimeSlot(slotStartTime),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (isCurrentSlot) MaterialTheme.colorScheme.primary
-                                   else Color.White.copy(alpha = 0.7f),
-                            modifier = Modifier.padding(start = 8.dp)
+                            text = formatTimeSlotRounded(slotStartTime),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isCurrentSlot) Color.White else Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .padding(start = 8.dp)
+                        )
+
+                        // Delimiter line at right edge of each slot
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .width(1.dp)
+                                .fillMaxHeight()
+                                .background(Color(0xFF444444))
                         )
                     }
                 }
             }
-        }
 
-        // Current time indicator line (inside the Box, won't affect parent Column layout)
-        if (currentTimeOffset > 0.dp) {
-            Box(
-                modifier = Modifier
-                    .offset(x = channelColumnWidth + currentTimeOffset - horizontalScrollState.value.dp)
-                    .width(2.dp)
-                    .fillMaxHeight()
-                    .background(Color.Red)
-            )
+            // Current time indicator line (red)
+            if (currentTimeOffset > 0.dp) {
+                Box(
+                    modifier = Modifier
+                        .offset(x = currentTimeOffset - horizontalScrollState.value.dp)
+                        .width(2.dp)
+                        .fillMaxHeight()
+                        .background(Color.Red)
+                )
+            }
         }
     }
 }
 
-private fun formatTimeSlot(timestamp: Long): String {
+private fun formatTimeSlotRounded(timestamp: Long): String {
+    // Format showing hour and half-hour marks (e.g., "10:00 PM", "10:30 PM")
     val formatter = SimpleDateFormat("h:mm a", Locale.getDefault())
     return formatter.format(Date(timestamp * 1000))
 }

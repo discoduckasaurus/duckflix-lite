@@ -4,7 +4,10 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
     primary = Color(0xFF1E88E5),
@@ -22,11 +25,17 @@ private val DarkColorScheme = darkColorScheme(
 @Composable
 fun DuckFlixTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    uiScale: UiScale? = null,
     content: @Composable () -> Unit
 ) {
-    MaterialTheme(
-        colorScheme = DarkColorScheme,  // Always use dark theme for TV
-        typography = Typography,
-        content = content
-    )
+    val context = LocalContext.current
+    val resolvedScale = uiScale ?: remember { UiScalePreferences.getUiScale(context) }
+
+    CompositionLocalProvider(LocalUiScale provides resolvedScale) {
+        MaterialTheme(
+            colorScheme = DarkColorScheme,  // Always use dark theme for TV
+            typography = Typography,
+            content = content
+        )
+    }
 }

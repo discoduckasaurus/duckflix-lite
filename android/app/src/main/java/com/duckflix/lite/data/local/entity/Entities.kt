@@ -74,5 +74,6 @@ data class WatchlistEntity(
     val type: String, // "movie" or "tv"
     val year: String?,
     val posterUrl: String?,
-    val addedAt: Long // timestamp
+    val addedAt: Long, // timestamp
+    val voteAverage: Double? = null // Rating for movies/shows
 )

@@ -47,7 +47,8 @@ data class LiveTvUiState(
     val audioTracks: List<LiveTvTrackInfo> = emptyList(),
     val subtitleTracks: List<LiveTvTrackInfo> = emptyList(),
     val showAudioPanel: Boolean = false,
-    val showSubtitlePanel: Boolean = false
+    val showSubtitlePanel: Boolean = false,
+    val focusTrigger: Int = 0  // Increments to trigger focus restoration after fullscreen exit
 )
 
 @HiltViewModel
@@ -251,7 +252,8 @@ class LiveTvViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             isFullscreen = false,
             showAudioPanel = false,
-            showSubtitlePanel = false
+            showSubtitlePanel = false,
+            focusTrigger = _uiState.value.focusTrigger + 1  // Trigger focus restoration
         )
     }
 

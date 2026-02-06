@@ -1,6 +1,7 @@
 package com.duckflix.lite.ui.components.livetv
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,10 +17,12 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -35,19 +38,38 @@ import com.duckflix.lite.data.remote.dto.LiveTvProgram
 @Composable
 fun ProgramCell(
     program: LiveTvProgram,
-    @Suppress("UNUSED_PARAMETER") epgStartTime: Long,  // Kept for API consistency
-    timeSlotWidth: Dp,         // Width per 30-minute slot
-    @Suppress("UNUSED_PARAMETER") rowHeight: Dp,       // Kept for API consistency
+    displayDurationMinutes: Int,  // Clamped duration within EPG window
+    timeSlotWidth: Dp,            // Width per 30-minute slot
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    horizontalScrollState: ScrollState? = null,  // For auto-scrolling when focused
+    offsetDp: Dp = 0.dp  // This cell's horizontal offset in Dp
 ) {
+    val density = LocalDensity.current
+    val offsetPx = with(density) { offsetDp.toPx().toInt() }
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
-    // Calculate cell width based on program duration
-    val programDurationMinutes = program.durationMinutes
-    val cellWidth = (programDurationMinutes.toFloat() / 30f * timeSlotWidth.value).dp.coerceAtLeast(60.dp)
+    // Debug: log when focus changes
+    LaunchedEffect(isFocused) {
+        if (isFocused) {
+            println("[ProgramCell] FOCUSED: ${program.title}")
+        }
+    }
+
+    // Calculate cell width based on clamped display duration (prevents overlap)
+    val cellWidth = (displayDurationMinutes.toFloat() / 30f * timeSlotWidth.value).dp.coerceAtLeast(20.dp)
+    val cellWidthPx = (displayDurationMinutes.toFloat() / 30f * timeSlotWidth.value).toInt()
+
+    // Scroll into view when focused - keep cell at consistent position on screen
+    LaunchedEffect(isFocused) {
+        if (isFocused && horizontalScrollState != null) {
+            // Scroll so the focused cell is near the left edge (with small margin)
+            val targetScroll = (offsetPx - 30).coerceAtLeast(0)
+            horizontalScrollState.scrollTo(targetScroll)
+        }
+    }
 
     // Determine if program is currently airing or past
     val isAiring = program.isCurrentlyAiring
@@ -142,3 +164,4 @@ fun calculateProgramOffset(
     val pixelsPerMinute = timeSlotWidth.value / 30f
     return (minutesSinceEpgStart * pixelsPerMinute).dp.coerceAtLeast(0.dp)
 }
+
