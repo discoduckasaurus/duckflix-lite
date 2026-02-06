@@ -3,6 +3,7 @@ package com.duckflix.lite.data.remote
 import com.duckflix.lite.data.remote.dto.BandwidthReportRequest
 import com.duckflix.lite.data.remote.dto.BandwidthStatusResponse
 import com.duckflix.lite.data.remote.dto.FallbackRequest
+import com.duckflix.lite.data.remote.dto.LiveTvChannelsResponse
 import com.duckflix.lite.data.remote.dto.LoginRequest
 import com.duckflix.lite.data.remote.dto.LoginResponse
 import com.duckflix.lite.data.remote.dto.PlaybackSettingsResponse
@@ -205,6 +206,10 @@ interface DuckFlixApi {
     // Subtitle search
     @POST("vod/subtitles/search")
     suspend fun searchSubtitles(@Body request: com.duckflix.lite.data.remote.dto.SubtitleSearchRequest): com.duckflix.lite.data.remote.dto.SubtitleSearchResponse
+
+    // Live TV
+    @GET("livetv/channels")
+    suspend fun getLiveTvChannels(): LiveTvChannelsResponse
 
     // TODO: Add remaining API endpoints (Prowlarr search UI, etc.)
 }

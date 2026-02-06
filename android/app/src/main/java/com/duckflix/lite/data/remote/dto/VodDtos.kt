@@ -1,6 +1,7 @@
 package com.duckflix.lite.data.remote.dto
 
 import com.squareup.moshi.JsonClass
+import java.net.URLDecoder
 
 @JsonClass(generateAdapter = true)
 data class VodSessionCheckResponse(
@@ -77,6 +78,14 @@ data class ContinueWatchingItem(
             } else {
                 "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
             }
+        }
+
+    // Decode URL-encoded title (server sends + for spaces)
+    val displayTitle: String
+        get() = try {
+            URLDecoder.decode(title, "UTF-8")
+        } catch (e: Exception) {
+            title
         }
 
     val isReadyToPlay: Boolean

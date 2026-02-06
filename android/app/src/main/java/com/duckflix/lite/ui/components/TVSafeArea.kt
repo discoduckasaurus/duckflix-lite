@@ -18,10 +18,10 @@ import androidx.compose.ui.unit.dp
  */
 object TVSafeArea {
     // Horizontal safe padding (left/right)
-    val HorizontalPadding = 60.dp
+    val HorizontalPadding = 32.dp
 
     // Vertical safe padding (top/bottom)
-    val VerticalPadding = 60.dp
+    val VerticalPadding = 24.dp
 }
 
 /**

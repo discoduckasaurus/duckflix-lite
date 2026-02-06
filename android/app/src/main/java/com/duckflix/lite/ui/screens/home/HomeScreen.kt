@@ -40,9 +40,11 @@ import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.duckflix.lite.Screen
 import com.duckflix.lite.data.local.entity.WatchlistEntity
+import com.duckflix.lite.data.remote.dto.ContinueWatchingItem
 import com.duckflix.lite.data.remote.dto.DisplayState
 import com.duckflix.lite.data.remote.dto.RecommendationItem
 import com.duckflix.lite.data.remote.dto.TrendingResult
+import com.duckflix.lite.ui.components.ContinueWatchingActionDialog
 import com.duckflix.lite.ui.components.ExitConfirmationDialog
 import com.duckflix.lite.ui.components.FocusableCard
 import com.duckflix.lite.ui.components.MediaCard
@@ -55,11 +57,13 @@ fun HomeScreen(
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     var showExitDialog by remember { mutableStateOf(false) }
+    var selectedContinueWatchingItem by remember { mutableStateOf<ContinueWatchingItem?>(null) }
+    var showContinueWatchingDialog by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
 
-    // Only handle Back when dialog is not showing
-    BackHandler(enabled = !showExitDialog) {
+    // Only handle Back when dialogs are not showing
+    BackHandler(enabled = !showExitDialog && !showContinueWatchingDialog) {
         showExitDialog = true
     }
 
@@ -92,7 +96,7 @@ fun HomeScreen(
             )
             CompactMenuTile(
                 title = "Live TV",
-                onClick = { /* TODO: navController.navigate(Screen.LiveTV.route) */ },
+                onClick = { navController.navigate(Screen.LiveTV.route) },
                 coroutineScope = coroutineScope,
                 scrollState = scrollState
             )
@@ -116,6 +120,19 @@ fun HomeScreen(
                 coroutineScope = coroutineScope,
                 scrollState = scrollState
             )
+        }
+
+        // Continue Watching Section
+        if (uiState.continueWatching.isNotEmpty()) {
+            ContentSection(title = "Continue Watching") {
+                ContinueWatchingRow(
+                    items = uiState.continueWatching,
+                    onItemClick = { item ->
+                        selectedContinueWatchingItem = item
+                        showContinueWatchingDialog = true
+                    }
+                )
+            }
         }
 
         // My Watchlist Section
@@ -220,6 +237,59 @@ fun HomeScreen(
                 },
                 onDismiss = {
                     showExitDialog = false
+                }
+            )
+        }
+
+        // Continue Watching action dialog
+        if (showContinueWatchingDialog && selectedContinueWatchingItem != null) {
+            ContinueWatchingActionDialog(
+                item = selectedContinueWatchingItem!!,
+                onResume = { item ->
+                    showContinueWatchingDialog = false
+                    val resumePosition = if (item.position > 0) item.position else null
+                    navController.navigate(
+                        Screen.Player.createRoute(
+                            tmdbId = item.tmdbId,
+                            title = item.title,
+                            type = item.type,
+                            season = item.season,
+                            episode = item.episode,
+                            resumePosition = resumePosition,
+                            posterUrl = item.posterUrl
+                        )
+                    )
+                },
+                onRetry = { item ->
+                    showContinueWatchingDialog = false
+                    viewModel.retryFailedDownload(item) {
+                        navController.navigate(
+                            Screen.Player.createRoute(
+                                tmdbId = item.tmdbId,
+                                title = item.title,
+                                type = item.type,
+                                season = item.season,
+                                episode = item.episode,
+                                posterUrl = item.posterUrl
+                            )
+                        )
+                    }
+                },
+                onDetails = { item ->
+                    showContinueWatchingDialog = false
+                    navController.navigate(Screen.Detail.createRoute(item.tmdbId, item.type))
+                },
+                onRemove = { item ->
+                    showContinueWatchingDialog = false
+                    val jobId = item.jobId
+                    if (item.isFailed && jobId != null) {
+                        viewModel.dismissFailedDownload(jobId)
+                    } else {
+                        viewModel.removeFromContinueWatching(item)
+                    }
+                },
+                onDismiss = {
+                    showContinueWatchingDialog = false
                 }
             )
         }
@@ -442,6 +512,130 @@ private fun TrendingRow(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = Color(0xFFFFD700).copy(alpha = 0.9f)
                             )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContinueWatchingRow(
+    items: List<ContinueWatchingItem>,
+    onItemClick: (ContinueWatchingItem) -> Unit
+) {
+    LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(items) { item ->
+            MediaCard(
+                onClick = { onItemClick(item) },
+                modifier = Modifier
+                    .width(128.dp)
+                    .height(240.dp)
+            ) {
+                Box {
+                    Column {
+                        // Poster with overlays
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(190.dp)
+                        ) {
+                            AsyncImage(
+                                model = item.posterUrl,
+                                contentDescription = item.title,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+
+                            // State-based overlays
+                            when (item.displayState) {
+                                DisplayState.ERROR -> {
+                                    // Red tint overlay for failed downloads
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Red.copy(alpha = 0.3f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .background(Color.Red.copy(alpha = 0.8f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "!",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                color = Color.White
+                                            )
+                                        }
+                                    }
+                                }
+                                DisplayState.DOWNLOADING -> {
+                                    // Progress overlay for active downloads
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black.copy(alpha = 0.5f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            progress = { item.downloadProgress / 100f },
+                                            modifier = Modifier.size(40.dp),
+                                            color = Color(0xFF64B5F6),
+                                            strokeWidth = 3.dp
+                                        )
+                                    }
+                                }
+                                else -> {
+                                    // No overlay for ready/in-progress states
+                                }
+                            }
+
+                            // Progress bar at bottom (watch progress)
+                            if (item.displayState == DisplayState.IN_PROGRESS && item.progressPercent > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .fillMaxWidth()
+                                        .height(4.dp)
+                                        .background(Color.Black.copy(alpha = 0.6f))
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxHeight()
+                                            .fillMaxWidth(item.progressPercent / 100f)
+                                            .background(Color(0xFFE50914)) // Netflix red
+                                    )
+                                }
+                            }
+                        }
+
+                        // Title and info
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = item.displayTitle,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            // Episode info for TV shows
+                            if (item.type == "tv" && item.season != null && item.episode != null) {
+                                Text(
+                                    text = "S${item.season} E${item.episode}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.7f)
+                                )
+                            }
                         }
                     }
                 }

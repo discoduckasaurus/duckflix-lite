@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import coil.compose.AsyncImage
 import com.duckflix.lite.data.remote.dto.CastDto
 import com.duckflix.lite.data.remote.dto.TmdbDetailResponse
+import com.duckflix.lite.ui.components.CircularBackButton
 import com.duckflix.lite.ui.components.ErrorScreen
 import com.duckflix.lite.ui.components.FocusableButton
 import com.duckflix.lite.ui.components.LoadingIndicator
@@ -199,20 +200,16 @@ private fun ContentDetailView(
         ) {
             // Back button and Watchlist toggle
             Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                FocusableButton(
-                    onClick = onNavigateBack,
-                    modifier = Modifier.width(100.dp)
-                ) {
-                    Text("Back")
-                }
+                CircularBackButton(onClick = onNavigateBack)
 
                 FocusableButton(
                     onClick = onToggleWatchlist,
                     modifier = Modifier.width(140.dp)
                 ) {
-                    Text("+ Watchlist")
+                    Text(if (isInWatchlist) "- Watchlist" else "+ Watchlist")
                 }
             }
 

@@ -535,7 +535,12 @@ class VideoPlayerViewModel @Inject constructor(
                     val progress = api.getStreamProgress(jobId)
                     consecutiveErrors = 0 // Reset error counter on successful poll
 
-                    println("[POLL] Status: ${progress.status}, Progress: ${progress.progress}%, Message: '${progress.message}'")
+                    println("[POLL] Status: ${progress.status}, Progress: ${progress.progress}%, Message: '${progress.message}', Error: '${progress.error}'")
+
+                    // Check for error conditions first - error field or error-like messages
+                    if (progress.error != null) {
+                        throw Exception(progress.error)
+                    }
 
                     // Update loading phase based on server status
                     val loadingPhase = when (progress.status) {
@@ -582,8 +587,12 @@ class VideoPlayerViewModel @Inject constructor(
                             )
                             break
                         }
-                        "failed" -> {
-                            throw Exception("Unable to find a working stream. Please try again later.")
+                        "failed", "error" -> {
+                            // Use server message if available, otherwise generic message
+                            val errorMsg = progress.message.takeIf {
+                                it.isNotBlank() && !it.equals("searching", ignoreCase = true)
+                            } ?: "Unable to find a working stream. Please try again later."
+                            throw Exception(errorMsg)
                         }
                         "searching", "downloading" -> {
                             // Continue polling - these are expected active states

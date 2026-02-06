@@ -21,18 +21,19 @@ class DuckFlixApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // Initialize loading phrases cache with defaults
-        LoadingPhrasesCache.setDefaults()
+        // Load cached phrases immediately (synchronous, fast)
+        // This runs before Hilt injection completes, so phrases are ready instantly
+        LoadingPhrasesCache.initFromStorage(this)
 
-        // Fetch loading phrases from API
+        // Refresh phrases from API in background
         applicationScope.launch {
             try {
                 val response = api.getLoadingPhrases()
                 LoadingPhrasesCache.setPhrases(response.phrasesA, response.phrasesB)
-                println("[DuckFlixApp] Loading phrases loaded: ${response.phrasesA.size} A phrases, ${response.phrasesB.size} B phrases")
+                println("[DuckFlixApp] Loading phrases refreshed: ${response.phrasesA.size} A, ${response.phrasesB.size} B")
             } catch (e: Exception) {
-                println("[DuckFlixApp] Failed to load loading phrases, using defaults: ${e.message}")
-                // Defaults already set above
+                println("[DuckFlixApp] Failed to refresh loading phrases: ${e.message}")
+                // Cached or default phrases already loaded
             }
         }
     }

@@ -18,6 +18,11 @@ fun LoginScreen(
     val uiState by viewModel.uiState.collectAsState()
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    // Always hide keyboard on initial mount to prevent auto-login keyboard flash
+    LaunchedEffect(Unit) {
+        keyboardController?.hide()
+    }
+
     // Dismiss keyboard whenever we're in a loading/logged-in state
     LaunchedEffect(uiState.isCheckingAuth, uiState.isLoggedIn, uiState.isMeasuringBandwidth) {
         if (uiState.isCheckingAuth || uiState.isLoggedIn || uiState.isMeasuringBandwidth) {

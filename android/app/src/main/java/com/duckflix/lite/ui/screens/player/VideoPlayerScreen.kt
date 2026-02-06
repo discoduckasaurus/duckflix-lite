@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.ui.PlayerView
+import com.duckflix.lite.ui.components.CircularBackButton
 import com.duckflix.lite.ui.components.ErrorScreen
 import com.duckflix.lite.ui.components.LoadingIndicator
 import com.duckflix.lite.ui.components.SourceSelectionScreen
@@ -83,6 +84,25 @@ fun VideoPlayerScreen(
     var indicatorJob by remember { mutableStateOf<Job?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
+    // Track panel dismissal to prevent accidental player exit
+    // When a panel closes, we briefly block the "exit player" action on Back
+    var panelJustDismissed by remember { mutableStateOf(false) }
+    var wasPanelOpen by remember { mutableStateOf(false) }
+    val isPanelOpen = uiState.showVideoIssuesPanel || uiState.showAudioPanel || uiState.showSubtitlePanel
+
+    // Detect when any panel closes and set the flag
+    LaunchedEffect(isPanelOpen) {
+        if (isPanelOpen) {
+            wasPanelOpen = true
+        } else if (wasPanelOpen) {
+            // Panel was open and now closed - set the flag
+            wasPanelOpen = false
+            panelJustDismissed = true
+            delay(500) // Block exit for 500ms after panel dismissal
+            panelJustDismissed = false
+        }
+    }
+
     // Accumulated seek state for smooth rapid seeking (Bug 4 fix)
     var accumulatedSeekTarget by remember { mutableStateOf<Long?>(null) }
     var seekApplyJob by remember { mutableStateOf<Job?>(null) }
@@ -91,97 +111,116 @@ fun VideoPlayerScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .then(
-                // Only handle key events when controls are hidden
-                if (!uiState.showControls) {
-                    Modifier
-                        .focusRequester(backgroundFocusRequester)
-                        .onKeyEvent { keyEvent ->
-                            val currentTime = System.currentTimeMillis()
+            .focusRequester(backgroundFocusRequester)
+            .onKeyEvent { keyEvent ->
+                val currentTime = System.currentTimeMillis()
 
-                            // Handle on KeyDown for continuous seeking with accumulation
-                            if (keyEvent.type == KeyEventType.KeyDown) {
-                                when (keyEvent.key) {
-                                    Key.DirectionRight -> {
-                                        // Allow seeking if enough time has passed (debounce)
-                                        if (currentTime - lastSeekTime >= seekDebounceMs) {
-                                            // Accumulate seek target locally instead of calling seekForward each time
-                                            val basePosition = accumulatedSeekTarget ?: uiState.currentPosition
-                                            accumulatedSeekTarget = (basePosition + 10000).coerceAtMost(uiState.duration)
-                                            lastSeekTime = currentTime
+                // Handle on KeyDown for continuous seeking (only when controls hidden)
+                if (keyEvent.type == KeyEventType.KeyDown && !uiState.showControls) {
+                    when (keyEvent.key) {
+                        Key.DirectionRight -> {
+                            // Allow seeking if enough time has passed (debounce)
+                            if (currentTime - lastSeekTime >= seekDebounceMs) {
+                                // Accumulate seek target locally instead of calling seekForward each time
+                                val basePosition = accumulatedSeekTarget ?: uiState.currentPosition
+                                accumulatedSeekTarget = (basePosition + 10000).coerceAtMost(uiState.duration)
+                                lastSeekTime = currentTime
 
-                                            // Show accumulated offset indicator
-                                            val totalOffset = accumulatedSeekTarget!! - uiState.currentPosition
-                                            seekIndicator = if (totalOffset >= 0) "+${totalOffset / 1000}s" else "${totalOffset / 1000}s"
+                                // Show accumulated offset indicator
+                                val totalOffset = accumulatedSeekTarget!! - uiState.currentPosition
+                                seekIndicator = if (totalOffset >= 0) "+${totalOffset / 1000}s" else "${totalOffset / 1000}s"
 
-                                            // Cancel previous apply job and schedule new one
-                                            seekApplyJob?.cancel()
-                                            seekApplyJob = coroutineScope.launch {
-                                                delay(300) // Wait for rapid key events to settle
-                                                accumulatedSeekTarget?.let { target ->
-                                                    viewModel.seekTo(target)
-                                                    accumulatedSeekTarget = null
-                                                }
-                                                delay(700)
-                                                seekIndicator = null
-                                            }
-                                        }
-                                        true
+                                // Cancel previous apply job and schedule new one
+                                seekApplyJob?.cancel()
+                                seekApplyJob = coroutineScope.launch {
+                                    delay(300) // Wait for rapid key events to settle
+                                    accumulatedSeekTarget?.let { target ->
+                                        viewModel.seekTo(target)
+                                        accumulatedSeekTarget = null
                                     }
-                                    Key.DirectionLeft -> {
-                                        // Allow seeking if enough time has passed (debounce)
-                                        if (currentTime - lastSeekTime >= seekDebounceMs) {
-                                            // Accumulate seek target locally instead of calling seekBackward each time
-                                            val basePosition = accumulatedSeekTarget ?: uiState.currentPosition
-                                            accumulatedSeekTarget = (basePosition - 10000).coerceAtLeast(0)
-                                            lastSeekTime = currentTime
-
-                                            // Show accumulated offset indicator
-                                            val totalOffset = accumulatedSeekTarget!! - uiState.currentPosition
-                                            seekIndicator = if (totalOffset >= 0) "+${totalOffset / 1000}s" else "${totalOffset / 1000}s"
-
-                                            // Cancel previous apply job and schedule new one
-                                            seekApplyJob?.cancel()
-                                            seekApplyJob = coroutineScope.launch {
-                                                delay(300) // Wait for rapid key events to settle
-                                                accumulatedSeekTarget?.let { target ->
-                                                    viewModel.seekTo(target)
-                                                    accumulatedSeekTarget = null
-                                                }
-                                                delay(700)
-                                                seekIndicator = null
-                                            }
-                                        }
-                                        true
-                                    }
-                                    else -> false
+                                    delay(700)
+                                    seekIndicator = null
                                 }
-                            } else if (keyEvent.type == KeyEventType.KeyUp) {
-                                when (keyEvent.key) {
-                                    Key.DirectionCenter, Key.Enter, Key.Spacebar -> {
-                                        viewModel.togglePlayPause()
-                                        viewModel.showControls()
-                                        true
+                            }
+                            true
+                        }
+                        Key.DirectionLeft -> {
+                            // Allow seeking if enough time has passed (debounce)
+                            if (currentTime - lastSeekTime >= seekDebounceMs) {
+                                // Accumulate seek target locally instead of calling seekBackward each time
+                                val basePosition = accumulatedSeekTarget ?: uiState.currentPosition
+                                accumulatedSeekTarget = (basePosition - 10000).coerceAtLeast(0)
+                                lastSeekTime = currentTime
+
+                                // Show accumulated offset indicator
+                                val totalOffset = accumulatedSeekTarget!! - uiState.currentPosition
+                                seekIndicator = if (totalOffset >= 0) "+${totalOffset / 1000}s" else "${totalOffset / 1000}s"
+
+                                // Cancel previous apply job and schedule new one
+                                seekApplyJob?.cancel()
+                                seekApplyJob = coroutineScope.launch {
+                                    delay(300) // Wait for rapid key events to settle
+                                    accumulatedSeekTarget?.let { target ->
+                                        viewModel.seekTo(target)
+                                        accumulatedSeekTarget = null
                                     }
-                                    Key.DirectionUp, Key.DirectionDown -> {
-                                        viewModel.showControls()
-                                        true
-                                    }
-                                    Key.Back, Key.Escape -> {
-                                        onNavigateBack()
-                                        true
-                                    }
-                                    else -> false
+                                    delay(700)
+                                    seekIndicator = null
                                 }
-                            } else {
-                                false
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                } else if (keyEvent.type == KeyEventType.KeyUp) {
+                    when (keyEvent.key) {
+                        Key.Back, Key.Escape -> {
+                            // Back button handling priority:
+                            // 1. If a panel is open, let the panel handle it (return false)
+                            // 2. If panel was just dismissed OR controls are visible, hide controls
+                            // 3. If controls are hidden (and no recent panel dismissal), exit the player
+                            when {
+                                uiState.showVideoIssuesPanel || uiState.showAudioPanel || uiState.showSubtitlePanel -> {
+                                    // Panel is open - let it handle the back press
+                                    false
+                                }
+                                uiState.showControls || panelJustDismissed -> {
+                                    // Controls visible OR panel just closed - hide controls (don't exit)
+                                    viewModel.hideControls()
+                                    panelJustDismissed = false // Clear the flag
+                                    true
+                                }
+                                else -> {
+                                    // Controls hidden - exit player
+                                    onNavigateBack()
+                                    true
+                                }
                             }
                         }
-                        .focusable()
+                        Key.DirectionCenter, Key.Enter, Key.Spacebar -> {
+                            if (!uiState.showControls) {
+                                viewModel.togglePlayPause()
+                                viewModel.showControls()
+                                true
+                            } else {
+                                false // Let controls handle it
+                            }
+                        }
+                        Key.DirectionUp, Key.DirectionDown -> {
+                            if (!uiState.showControls) {
+                                viewModel.showControls()
+                                true
+                            } else {
+                                false // Let controls handle navigation
+                            }
+                        }
+                        else -> false
+                    }
                 } else {
-                    Modifier
+                    false
                 }
-            )
+            }
+            .focusable()
     ) {
         when {
             uiState.error != null -> {
@@ -910,42 +949,6 @@ private fun PlayerIconButton(
             }
         }
     }
-}
-
-@Composable
-private fun CircularBackButton(
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    focusRequester: FocusRequester? = null
-) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val isFocused by interactionSource.collectIsFocusedAsState()
-
-    Image(
-        painter = painterResource(id = com.duckflix.lite.R.drawable.df_back),
-        contentDescription = "Back",
-        modifier = modifier
-            .height(48.dp)
-            .then(
-                if (focusRequester != null) {
-                    Modifier.focusRequester(focusRequester)
-                } else {
-                    Modifier
-                }
-            )
-            .focusable(interactionSource = interactionSource)
-            .clickable(
-                interactionSource = interactionSource,
-                indication = null
-            ) { onClick() }
-            .then(
-                if (isFocused) {
-                    Modifier.border(3.dp, Color.White, androidx.compose.foundation.shape.RoundedCornerShape(12.dp))
-                } else {
-                    Modifier
-                }
-            )
-    )
 }
 
 @Composable

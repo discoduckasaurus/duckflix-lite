@@ -1,6 +1,7 @@
 package com.duckflix.lite
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -19,6 +20,7 @@ import com.duckflix.lite.ui.screens.home.HomeScreen
 import com.duckflix.lite.ui.screens.player.VideoPlayerScreen
 import com.duckflix.lite.ui.screens.search.SearchScreen
 import com.duckflix.lite.ui.screens.settings.SettingsScreen
+import com.duckflix.lite.ui.screens.livetv.LiveTvScreen
 
 sealed class Screen(val route: String) {
     object Login : Screen("login")
@@ -71,9 +73,21 @@ fun DuckFlixApp(
     val navController = rememberNavController()
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
 
-    // TODO: Re-enable login after testing
-    // val startDestination = Screen.Home.route // Skip login for testing
-    val startDestination = if (isLoggedIn) Screen.Home.route else Screen.LoginUsername.route
+    // Navigate to Home when login status changes to true (auto-login)
+    LaunchedEffect(isLoggedIn) {
+        if (isLoggedIn) {
+            val currentRoute = navController.currentDestination?.route
+            if (currentRoute == Screen.LoginUsername.route ||
+                currentRoute?.startsWith("login") == true) {
+                navController.navigate(Screen.Home.route) {
+                    popUpTo(0) { inclusive = true }
+                }
+            }
+        }
+    }
+
+    // Start at login, will auto-navigate to Home if already logged in
+    val startDestination = Screen.LoginUsername.route
 
     NavHost(
         navController = navController,
@@ -291,6 +305,14 @@ fun DuckFlixApp(
             )
         }
 
-        // TODO: Add other screens (VOD detail, Live TV, DVR)
+        composable(Screen.LiveTV.route) {
+            LiveTvScreen(
+                onNavigateBack = {
+                    navController.navigateUp()
+                }
+            )
+        }
+
+        // TODO: Add other screens (VOD detail, DVR)
     }
 }
