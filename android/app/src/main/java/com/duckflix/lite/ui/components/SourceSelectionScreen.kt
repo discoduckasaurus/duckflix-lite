@@ -146,7 +146,7 @@ fun SourceSelectionScreen(
 
             // Progress bar (only shown when progress is significant or downloading)
             if (showProgress) {
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Smooth animated progress bar
                 val animatedProgress by animateFloatAsState(
@@ -164,7 +164,7 @@ fun SourceSelectionScreen(
                     trackColor = Color.White.copy(alpha = 0.3f)
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Auto-play message
                 if (progress < 100) {
@@ -201,7 +201,7 @@ fun SourceSelectionScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Action buttons row
             Row(
