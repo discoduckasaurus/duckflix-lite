@@ -59,9 +59,43 @@ router.use(authenticateToken);
 router.get('/channels', async (req, res) => {
   try {
     const userId = req.user.sub;
-    const channels = await liveTVService.getChannelsForUser(userId);
+    const channelsRaw = await liveTVService.getChannelsForUser(userId);
 
-    res.json({ channels });
+    // Transform to snake_case for APK compatibility
+    const now = Math.floor(Date.now() / 1000);
+    const channels = channelsRaw.map(ch => ({
+      id: ch.id,
+      name: ch.name,
+      display_name: ch.displayName || ch.name,
+      channel_number: ch.channelNumber,
+      logo: ch.logo,
+      group: ch.group,
+      is_favorite: ch.isFavorite,
+      current_program: ch.currentProgram ? {
+        title: ch.currentProgram.title,
+        start: Math.floor(ch.currentProgram.start / 1000), // Convert to Unix seconds
+        stop: Math.floor(ch.currentProgram.stop / 1000),
+        description: ch.currentProgram.description,
+        category: ch.currentProgram.category
+      } : null,
+      upcoming_programs: (ch.upcomingPrograms || []).map(p => ({
+        title: p.title,
+        start: Math.floor(p.start / 1000),
+        stop: Math.floor(p.stop / 1000),
+        description: p.description,
+        category: p.category
+      }))
+    }));
+
+    // Calculate EPG time window
+    const epgStart = now;
+    const epgEnd = now + (6 * 60 * 60); // 6 hours from now
+
+    res.json({
+      channels,
+      epg_start: epgStart,
+      epg_end: epgEnd
+    });
   } catch (error) {
     logger.error('Get channels error:', error);
     res.status(500).json({ error: 'Failed to load channels' });
@@ -76,106 +110,168 @@ router.get('/channels', async (req, res) => {
  * For M3U8 manifests, it rewrites segment URLs to point back through this proxy.
  * For TS segments and other content, it passes through as-is.
  */
+// Track which stream source is currently working per channel (auto-failover state)
+const channelActiveSource = new Map(); // channelId -> { urlIndex, baseUrl, failCount }
+const SOURCE_FAIL_THRESHOLD = 3; // consecutive segment failures before switching
+
+/**
+ * Rewrite an HLS manifest: make relative URLs absolute and route through our proxy
+ */
+function rewriteManifest(manifest, baseUrl, channelId) {
+  return manifest.split('\n').map(line => {
+    const trimmed = line.trim();
+
+    // Skip comments and empty lines
+    if (trimmed.startsWith('#') || trimmed === '') {
+      return line;
+    }
+
+    // This is a URL line (segment or sub-playlist)
+    let segUrl = trimmed;
+
+    // Make relative URLs absolute
+    if (!segUrl.startsWith('http://') && !segUrl.startsWith('https://')) {
+      segUrl = baseUrl + segUrl;
+    }
+
+    // Rewrite to go through our proxy
+    return `/api/livetv/stream/${channelId}?url=${encodeURIComponent(segUrl)}`;
+  }).join('\n');
+}
+
+/**
+ * Fetch a manifest URL, follow redirects, and rewrite it.
+ * Handles both master playlists (with sub-playlist refs) and media playlists (with segments).
+ * For master playlists: resolves sub-playlist inline so the player gets a media playlist directly.
+ */
+async function fetchAndRewriteManifest(url, channelId) {
+  const response = await axios.get(url, {
+    timeout: 10000,
+    headers: { 'User-Agent': 'DuckFlix/1.0' }
+  });
+
+  const manifest = typeof response.data === 'string' ? response.data : String(response.data);
+  const finalUrl = response.request?.res?.responseUrl || url;
+  const baseUrl = finalUrl.substring(0, finalUrl.lastIndexOf('/') + 1);
+
+  if (finalUrl !== url) {
+    logger.info(`[LiveTV] Redirect: ${url.substring(0, 40)}... -> ${finalUrl.substring(0, 60)}...`);
+  }
+
+  // Detect master playlist (has #EXT-X-STREAM-INF)
+  if (manifest.includes('#EXT-X-STREAM-INF')) {
+    // Master playlist — resolve the first variant's sub-playlist directly
+    const lines = manifest.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#')) {
+        // First non-comment, non-empty line after #EXT-X-STREAM-INF = sub-playlist URL
+        let subUrl = trimmed;
+        if (!subUrl.startsWith('http://') && !subUrl.startsWith('https://')) {
+          subUrl = baseUrl + subUrl;
+        }
+        logger.info(`[LiveTV] Master playlist -> resolving sub-playlist: ${subUrl.substring(0, 80)}`);
+        return fetchAndRewriteManifest(subUrl, channelId);
+      }
+    }
+  }
+
+  // Media playlist — rewrite segment URLs through our proxy
+  return rewriteManifest(manifest, baseUrl, channelId);
+}
+
 router.get('/stream/:channelId', async (req, res) => {
   try {
     const { channelId } = req.params;
     const userId = req.user.sub;
 
-    logger.info(`Stream request: user=${userId}, channel=${channelId}`);
-
-    // Get the stream URL for this channel
-    const streamUrl = liveTVService.getStreamUrl(channelId);
-
-    // Check if this is a request for a segment or the manifest
-    // If the URL has query params like ?segment=... it's a segment request
+    // Check if this is a request for a segment/sub-manifest or the top-level manifest
     const isSegmentRequest = req.query.segment || req.query.url;
 
     if (isSegmentRequest) {
-      // Proxy a specific segment or URL
       const targetUrl = req.query.url || req.query.segment;
+      const isSubManifest = targetUrl.endsWith('.m3u8');
 
       try {
+        if (isSubManifest) {
+          // Sub-playlist — fetch as text, rewrite URLs, serve as manifest
+          const rewritten = await fetchAndRewriteManifest(targetUrl, channelId);
+          res.set('Content-Type', 'application/vnd.apple.mpegurl');
+          return res.send(rewritten);
+        }
+
+        // Regular segment — pipe through as stream
         const response = await axios.get(targetUrl, {
           responseType: 'stream',
           timeout: 30000,
-          headers: {
-            'User-Agent': 'DuckFlix/1.0',
-          }
+          headers: { 'User-Agent': 'DuckFlix/1.0' }
         });
 
-        // Forward headers
         res.set('Content-Type', response.headers['content-type'] || 'video/mp2t');
         if (response.headers['content-length']) {
           res.set('Content-Length', response.headers['content-length']);
         }
 
-        // Stream the response
         response.data.pipe(res);
+
+        // Reset fail count on successful segment
+        const active = channelActiveSource.get(channelId);
+        if (active) active.failCount = 0;
       } catch (error) {
-        logger.error(`Failed to fetch segment ${targetUrl}:`, error.message);
+        // Track consecutive segment failures for auto-failover
+        const active = channelActiveSource.get(channelId);
+        if (active) {
+          active.failCount = (active.failCount || 0) + 1;
+          if (active.failCount >= SOURCE_FAIL_THRESHOLD) {
+            const streamUrls = liveTVService.getStreamUrls(channelId);
+            const nextIndex = (active.urlIndex + 1) % streamUrls.length;
+            if (nextIndex !== active.urlIndex) {
+              logger.warn(`[LiveTV] ${SOURCE_FAIL_THRESHOLD} consecutive segment failures on ${channelId}, switching from source ${active.urlIndex} to ${nextIndex}`);
+              channelActiveSource.set(channelId, { urlIndex: nextIndex, failCount: 0 });
+            }
+          }
+        }
+
+        logger.error(`[LiveTV] Failed to fetch ${isSubManifest ? 'sub-manifest' : 'segment'}: ${error.message}`);
         res.status(502).json({ error: 'Failed to fetch stream segment' });
       }
       return;
     }
 
-    // This is a manifest request - fetch and rewrite it
-    try {
-      const response = await axios.get(streamUrl, {
-        timeout: 10000,
-        headers: {
-          'User-Agent': 'DuckFlix/1.0',
-        }
-      });
+    // Manifest request — try stream URLs in priority order with fallback
+    const streamUrls = liveTVService.getStreamUrls(channelId);
 
-      const contentType = response.headers['content-type'] || '';
+    // Start from the active source if we have one (auto-failover state)
+    const active = channelActiveSource.get(channelId);
+    const startIndex = active?.urlIndex || 0;
 
-      if (contentType.includes('application/vnd.apple.mpegurl') ||
-          contentType.includes('application/x-mpegurl') ||
-          streamUrl.endsWith('.m3u8')) {
+    for (let attempt = 0; attempt < streamUrls.length; attempt++) {
+      const i = (startIndex + attempt) % streamUrls.length;
+      const streamUrl = streamUrls[i];
 
-        // This is an M3U8 manifest - rewrite URLs
-        let manifest = response.data;
+      try {
+        const rewritten = await fetchAndRewriteManifest(streamUrl, channelId);
 
-        // Parse base URL for relative URLs
-        const baseUrl = streamUrl.substring(0, streamUrl.lastIndexOf('/') + 1);
-
-        // Rewrite relative URLs to absolute URLs through our proxy
-        manifest = manifest.split('\n').map(line => {
-          const trimmed = line.trim();
-
-          // Skip comments and empty lines
-          if (trimmed.startsWith('#') || trimmed === '') {
-            return line;
-          }
-
-          // This is a URL line
-          let targetUrl = trimmed;
-
-          // Make relative URLs absolute
-          if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-            targetUrl = baseUrl + targetUrl;
-          }
-
-          // Rewrite to go through our proxy
-          const proxyUrl = `/api/livetv/stream/${channelId}?url=${encodeURIComponent(targetUrl)}`;
-          return proxyUrl;
-        }).join('\n');
+        // Remember which source worked
+        channelActiveSource.set(channelId, { urlIndex: i, failCount: 0 });
 
         res.set('Content-Type', 'application/vnd.apple.mpegurl');
-        res.send(manifest);
-      } else {
-        // Not a manifest, redirect or proxy directly
-        res.redirect(streamUrl);
+        return res.send(rewritten);
+      } catch (error) {
+        logger.warn(`[LiveTV] Stream ${i + 1}/${streamUrls.length} failed for ${channelId}: ${error.message}`);
+        // Try next URL
       }
-    } catch (error) {
-      logger.error(`Failed to fetch stream ${streamUrl}:`, error.message);
-      res.status(502).json({ error: 'Failed to fetch stream' });
     }
+
+    // All URLs failed
+    logger.error(`[LiveTV] All ${streamUrls.length} stream URLs failed for ${channelId}`);
+    res.status(502).json({ error: 'All stream sources failed' });
   } catch (error) {
-    logger.error('Stream proxy error:', error);
+    logger.error('[LiveTV] Stream proxy error:', error);
     res.status(500).json({ error: 'Stream proxy failed' });
   }
 });
+
 
 /**
  * PATCH /api/livetv/channels/:id/toggle

@@ -254,51 +254,176 @@ async function extractSubtitleStream(videoUrl, streamIndex, outputPath) {
   });
 }
 
+const CODEC_CHECK_TIMEOUT = 8000; // 8 seconds — probing all streams takes slightly longer
+
+// Audio codecs the ONN 4K (S905X4) can decode natively
+const COMPATIBLE_AUDIO_CODECS = new Set([
+  'aac', 'ac3', 'eac3', 'mp3', 'vorbis', 'opus', 'mp2', 'mp1'
+]);
+
+// Audio codecs the S905X4 cannot decode
+const INCOMPATIBLE_AUDIO_CODECS = new Set([
+  'dts', 'dca',           // DTS core
+  'dts_hd_ma', 'dtshd',   // DTS-HD Master Audio
+  'dts_hd', 'dts_hd_hra', // DTS-HD High Resolution
+  'truehd'                 // Dolby TrueHD
+]);
+
 /**
- * Incompatible codec patterns for low-end Android TV devices
- * Based on actual decoder failure reports from Nvidia/Android TV
+ * Check if an audio codec is compatible with S905X4
  */
-const INCOMPATIBLE_CODECS = [
-  // H.264 profiles that fail on Android TV
-  /^avc1\.6E/i,      // High 10 Profile (10-bit) - all levels
-  /^avc1\.7A/i,      // High 4:2:2 Profile - all levels
-  /^avc1\.F4/i,      // High 4:4:4 Predictive - all levels
-  /^avc1\.64..33/i,  // High Profile Level 5.1
-  /^avc1\.64..34/i,  // High Profile Level 5.2
-
-  // HEVC/H.265 problematic profiles
-  /^hvc1\.2/i,       // Main 10 Profile (10-bit)
-  /^hev1\.2/i,       // Main 10 Profile alternate
-
-  // VP9 problematic profiles
-  /^vp09\.02/i,      // Profile 2 (10-bit)
-  /^vp09\.03/i,      // Profile 3 (10-bit + 4:2:2/4:4:4)
-];
-
-const CODEC_CHECK_TIMEOUT = 6000; // 6 seconds max per source
+function isAudioCompatible(codecName, channels) {
+  const codec = (codecName || '').toLowerCase();
+  if (COMPATIBLE_AUDIO_CODECS.has(codec)) return true;
+  if (INCOMPATIBLE_AUDIO_CODECS.has(codec)) return false;
+  // flac/pcm: compatible at <=2ch only
+  if (codec === 'flac' || codec.startsWith('pcm_')) {
+    return (channels || 0) <= 2;
+  }
+  // Unknown codec — assume compatible (don't block playback)
+  return true;
+}
 
 /**
- * Check if a video stream's codec is compatible with Android TV
+ * Check video stream compatibility for S905X4 (ONN 4K)
+ * Returns { compatible: boolean, reason: string|null }
+ */
+function checkVideoCompatibility(stream) {
+  const codecName = (stream.codec_name || '').toLowerCase();
+  const profile = (stream.profile || '').toLowerCase();
+  const level = stream.level || 0;
+  const width = stream.width || 0;
+  const height = stream.height || 0;
+  const pixFmt = (stream.pix_fmt || '').toLowerCase();
+  const colorTransfer = (stream.color_transfer || '').toLowerCase();
+  const extradataSize = stream.extradata_size || 0;
+
+  // Parse framerate
+  let fps = 0;
+  if (stream.avg_frame_rate) {
+    const parts = stream.avg_frame_rate.split('/');
+    if (parts.length === 2 && parseInt(parts[1]) > 0) {
+      fps = parseInt(parts[0]) / parseInt(parts[1]);
+    }
+  }
+
+  // 1. Supported codec check
+  const supportedCodecs = new Set(['h264', 'hevc', 'h265', 'vp9', 'av1']);
+  if (!supportedCodecs.has(codecName)) {
+    return { compatible: false, reason: `unsupported_codec_${codecName}` };
+  }
+
+  // 2. Resolution cap
+  if (width > 4096 || height > 2304) {
+    return { compatible: false, reason: `resolution_${width}x${height}` };
+  }
+
+  // 3. Bad chroma subsampling (applies to all codecs)
+  if (/422|444|gbr|rgb/.test(pixFmt)) {
+    return { compatible: false, reason: `chroma_${pixFmt}` };
+  }
+
+  // 4. 12-bit depth
+  if (/p12|12le|12be/.test(pixFmt)) {
+    return { compatible: false, reason: `12bit_${pixFmt}` };
+  }
+
+  // 5. H.264 specific checks
+  if (codecName === 'h264') {
+    if (profile.includes('high 10')) {
+      return { compatible: false, reason: 'h264_high10' };
+    }
+    if (profile.includes('4:2:2') || profile.includes('4:4:4') || profile.includes('high 4:2:2') || profile.includes('high 4:4:4')) {
+      return { compatible: false, reason: `h264_profile_${profile}` };
+    }
+    if (level > 51) {
+      return { compatible: false, reason: `h264_level_${level}` };
+    }
+    if (width >= 3840 && fps > 30) {
+      return { compatible: false, reason: `h264_4k_${Math.round(fps)}fps` };
+    }
+    // HDR10 on H.264 is not valid/supported
+    if (colorTransfer === 'smpte2084') {
+      return { compatible: false, reason: 'h264_hdr10' };
+    }
+    // No extradata = can't init decoder
+    if (extradataSize === 0) {
+      return { compatible: false, reason: 'h264_no_extradata' };
+    }
+  }
+
+  // 6. HEVC specific checks — HEVC Main 10 is ALLOWED (S905X4 handles it fine)
+  if (codecName === 'hevc' || codecName === 'h265') {
+    if (profile.includes('rext') || profile.includes('scc') || profile.includes('4:2:2') || profile.includes('4:4:4')) {
+      return { compatible: false, reason: `hevc_profile_${profile}` };
+    }
+    if (level > 153) { // Level 5.1 = 153
+      return { compatible: false, reason: `hevc_level_${level}` };
+    }
+    if (extradataSize === 0) {
+      return { compatible: false, reason: 'hevc_no_extradata' };
+    }
+  }
+
+  // 7. VP9 — Profile 2 (10-bit 4:2:0) is ALLOWED on S905X4
+  if (codecName === 'vp9') {
+    if (profile.includes('3')) { // Profile 3 = 10-bit + 4:2:2/4:4:4
+      return { compatible: false, reason: 'vp9_profile3' };
+    }
+  }
+
+  // 8. Dolby Vision checks via side_data
+  if (stream.side_data_list) {
+    for (const sd of stream.side_data_list) {
+      if (sd.side_data_type === 'DOVI configuration record' || sd.dv_profile !== undefined) {
+        const dvProfile = sd.dv_profile;
+        const compatId = sd.dv_bl_signal_compatibility_id;
+
+        // DV Profile 7 with no HDR10 compat layer = won't play
+        if (dvProfile === 7 && compatId === 0) {
+          return { compatible: false, reason: 'dv_profile7_no_compat' };
+        }
+        // DV Profile 4 = no compat layer
+        if (dvProfile === 4) {
+          return { compatible: false, reason: 'dv_profile4' };
+        }
+      }
+    }
+  }
+
+  return { compatible: true, reason: null };
+}
+
+/**
+ * Full stream analysis: video compatibility + audio compatibility + best audio track selection
+ * Single ffprobe call for both video and audio streams.
+ *
  * @param {string} videoUrl - URL to the video file
- * @returns {Promise<{compatible: boolean, codec: string|null, reason: string|null, probeTimeMs: number, timedOut: boolean}>}
+ * @returns {Promise<Object>} Analysis result
  */
-async function checkCodecCompatibility(videoUrl) {
+async function analyzeStreamCompatibility(videoUrl) {
   const startTime = Date.now();
 
   if (!videoUrl) {
-    return { compatible: true, codec: null, reason: 'no_url', probeTimeMs: 0, timedOut: false };
+    return {
+      videoCompatible: true, videoReason: null,
+      audioCompatible: true, audioNeedsProcessing: false,
+      bestCompatibleAudioIndex: null, defaultAudioCodec: null,
+      audioStreams: [], probeTimeMs: 0, timedOut: false
+    };
   }
 
   return new Promise((resolve) => {
     let stdout = '';
     let timedOut = false;
 
-    // Only probe video stream, limit to first stream for speed
     const args = [
-      '-v', 'quiet',
+      '-v', 'error',
       '-print_format', 'json',
-      '-show_streams',
-      '-select_streams', 'v:0', // First video stream only
+      '-show_entries', 'stream=index,codec_type,codec_name,profile,level,width,height,pix_fmt,avg_frame_rate,bit_rate,bits_per_raw_sample,channels,sample_rate,extradata_size,color_transfer,codec_tag_string',
+      '-show_entries', 'stream_side_data_list',
+      '-show_entries', 'stream_disposition=default',
+      '-show_entries', 'stream_tags=language,title',
       videoUrl
     ];
 
@@ -310,10 +435,17 @@ async function checkCodecCompatibility(videoUrl) {
       stdout += data.toString();
     });
 
+    const makeDefaultResult = (overrides = {}) => ({
+      videoCompatible: true, videoReason: null,
+      audioCompatible: true, audioNeedsProcessing: false,
+      bestCompatibleAudioIndex: null, defaultAudioCodec: null,
+      audioStreams: [], probeTimeMs: Date.now() - startTime, timedOut: false,
+      ...overrides
+    });
+
     proc.on('error', (err) => {
-      const probeTimeMs = Date.now() - startTime;
-      logger.warn(`FFprobe codec check error: ${err.message}`);
-      resolve({ compatible: true, codec: null, reason: 'probe_error', probeTimeMs, timedOut: false });
+      logger.warn(`FFprobe stream analysis error: ${err.message}`);
+      resolve(makeDefaultResult({ reason: 'probe_error' }));
     });
 
     proc.on('close', (code) => {
@@ -322,72 +454,88 @@ async function checkCodecCompatibility(videoUrl) {
       const probeTimeMs = Date.now() - startTime;
 
       if (code !== 0) {
-        resolve({ compatible: true, codec: null, reason: 'probe_failed', probeTimeMs, timedOut: false });
+        resolve(makeDefaultResult({ probeTimeMs }));
         return;
       }
 
       try {
         const result = JSON.parse(stdout);
-        const videoStream = result.streams?.[0];
+        const streams = result.streams || [];
 
+        // Find first video stream
+        const videoStream = streams.find(s => s.codec_type === 'video');
         if (!videoStream) {
-          resolve({ compatible: true, codec: null, reason: 'no_video_stream', probeTimeMs, timedOut: false });
+          resolve(makeDefaultResult({ probeTimeMs }));
           return;
         }
 
-        // Get codec tag string (e.g., "avc1.6E0029", "hvc1.2.4.L120")
-        const codecTag = videoStream.codec_tag_string || '';
-        const codecName = videoStream.codec_name || '';
-        const profile = videoStream.profile || '';
-        const level = videoStream.level || 0;
+        // Video compatibility check
+        const videoCheck = checkVideoCompatibility(videoStream);
+        const videoCodecTag = videoStream.codec_tag_string || '';
+        const videoCodecName = videoStream.codec_name || '';
+        const videoProfile = videoStream.profile || '';
+        const videoLevel = videoStream.level || 0;
+        const fullVideoCodec = videoCodecTag || `${videoCodecName} (${videoProfile}, L${videoLevel})`;
 
-        // Build full codec identifier for logging
-        const fullCodec = codecTag || `${codecName} (${profile}, L${level})`;
+        // Audio analysis
+        const audioStreams = streams
+          .filter(s => s.codec_type === 'audio')
+          .map(s => ({
+            index: s.index,
+            codec: (s.codec_name || 'unknown').toLowerCase(),
+            channels: s.channels || 0,
+            language: s.tags?.language || null,
+            title: s.tags?.title || null,
+            isDefault: s.disposition?.default === 1,
+            compatible: isAudioCompatible(s.codec_name, s.channels)
+          }));
 
-        // Check against incompatible patterns
-        for (const pattern of INCOMPATIBLE_CODECS) {
-          if (pattern.test(codecTag)) {
-            resolve({
-              compatible: false,
-              codec: fullCodec,
-              reason: 'exceeds_capabilities',
-              probeTimeMs,
-              timedOut: false
-            });
-            return;
+        const defaultAudio = audioStreams.find(a => a.isDefault) || audioStreams[0] || null;
+        const defaultAudioCodec = defaultAudio?.codec || null;
+        const audioCompatible = !defaultAudio || defaultAudio.compatible;
+
+        // Find best compatible audio track (when default is incompatible)
+        let bestCompatibleAudioIndex = null;
+        let audioNeedsProcessing = false;
+
+        if (!audioCompatible && audioStreams.length > 0) {
+          audioNeedsProcessing = true;
+
+          // Priority: (1) default+compatible, (2) english+compatible, (3) any compatible
+          const compatTracks = audioStreams.filter(a => a.compatible);
+
+          if (compatTracks.length > 0) {
+            // Prefer default track if it's compatible (shouldn't reach here, but safety)
+            const defaultCompat = compatTracks.find(a => a.isDefault);
+            if (defaultCompat) {
+              bestCompatibleAudioIndex = defaultCompat.index;
+            } else {
+              // Prefer English
+              const engCompat = compatTracks.find(a =>
+                a.language && (a.language === 'eng' || a.language === 'en')
+              );
+              bestCompatibleAudioIndex = engCompat ? engCompat.index : compatTracks[0].index;
+            }
           }
+          // If no compatible tracks found, bestCompatibleAudioIndex stays null (needs transcode)
         }
 
-        // Additional check: H.264 High 10 might not have proper tag
-        if (codecName === 'h264' && profile?.toLowerCase().includes('high 10')) {
-          resolve({
-            compatible: false,
-            codec: fullCodec,
-            reason: 'exceeds_capabilities',
-            probeTimeMs,
-            timedOut: false
-          });
-          return;
-        }
-
-        // Additional check: HEVC Main 10
-        if ((codecName === 'hevc' || codecName === 'h265') && profile?.toLowerCase().includes('main 10')) {
-          resolve({
-            compatible: false,
-            codec: fullCodec,
-            reason: 'exceeds_capabilities',
-            probeTimeMs,
-            timedOut: false
-          });
-          return;
-        }
-
-        resolve({ compatible: true, codec: fullCodec, reason: null, probeTimeMs, timedOut: false });
+        resolve({
+          videoCompatible: videoCheck.compatible,
+          videoReason: videoCheck.reason,
+          videoCodec: fullVideoCodec,
+          audioCompatible,
+          audioNeedsProcessing,
+          bestCompatibleAudioIndex,
+          defaultAudioCodec,
+          audioStreams,
+          probeTimeMs,
+          timedOut: false
+        });
 
       } catch (parseErr) {
-        const probeTimeMs = Date.now() - startTime;
-        logger.warn(`FFprobe codec check parse error: ${parseErr.message}`);
-        resolve({ compatible: true, codec: null, reason: 'parse_error', probeTimeMs, timedOut: false });
+        logger.warn(`FFprobe stream analysis parse error: ${parseErr.message}`);
+        resolve(makeDefaultResult({ probeTimeMs }));
       }
     });
 
@@ -396,11 +544,26 @@ async function checkCodecCompatibility(videoUrl) {
       proc.kill('SIGKILL');
       const probeTimeMs = Date.now() - startTime;
       // On timeout, assume compatible (don't block playback)
-      resolve({ compatible: true, codec: null, reason: 'timeout', probeTimeMs, timedOut: true });
+      resolve(makeDefaultResult({ probeTimeMs, timedOut: true }));
     }, CODEC_CHECK_TIMEOUT);
 
     proc.on('close', () => clearTimeout(timeout));
   });
+}
+
+/**
+ * Legacy wrapper — calls analyzeStreamCompatibility() and returns the old shape.
+ * Keeps backward compatibility with any callers using the old API.
+ */
+async function checkCodecCompatibility(videoUrl) {
+  const analysis = await analyzeStreamCompatibility(videoUrl);
+  return {
+    compatible: analysis.videoCompatible,
+    codec: analysis.videoCodec || null,
+    reason: analysis.videoReason,
+    probeTimeMs: analysis.probeTimeMs,
+    timedOut: analysis.timedOut
+  };
 }
 
 module.exports = {
@@ -409,6 +572,7 @@ module.exports = {
   getAllStreams,
   extractSubtitleStream,
   checkCodecCompatibility,
+  analyzeStreamCompatibility,
   FFPROBE_TIMEOUT,
   CODEC_CHECK_TIMEOUT
 };

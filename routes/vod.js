@@ -14,8 +14,11 @@ const { v4: uuidv4 } = require('uuid');
 const opensubtitlesService = require('../services/opensubtitles-service');
 const { detectEmbeddedSubtitles, getBestEmbeddedSubtitle } = require('../services/embedded-subtitle-service');
 const { standardizeLanguage } = require('../utils/language-standardizer');
-const { extractSubtitleStream, checkCodecCompatibility } = require('../services/ffprobe-service');
+const { extractSubtitleStream, analyzeStreamCompatibility } = require('../services/ffprobe-service');
+const { remuxWithCompatibleAudio, transcodeAudioToEac3 } = require('../services/audio-processor');
 const path = require('path');
+
+const TRANSCODED_DIR = path.join(__dirname, '..', 'transcoded');
 
 const router = express.Router();
 
@@ -90,6 +93,88 @@ router.get("/stream/:streamId", async (req, res) => {
     const chunksize = (end - start) + 1;
 
     logger.info(`[Stream Proxy] Range: ${start}-${end}/${fileSize}`);
+
+    const file = handleStreamError(fs.createReadStream(filePath, { start, end }), 'Range');
+    const head = {
+      "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+      "Accept-Ranges": "bytes",
+      "Content-Length": chunksize,
+      "Content-Type": contentType,
+    };
+    res.writeHead(206, head);
+    file.pipe(res);
+  } else {
+    const head = {
+      "Content-Length": fileSize,
+      "Content-Type": contentType,
+      "Accept-Ranges": "bytes"
+    };
+    res.writeHead(200, head);
+    handleStreamError(fs.createReadStream(filePath), 'Full').pipe(res);
+  }
+});
+
+// Serve processed (remuxed/transcoded) files — no auth, jobId acts as security token (same pattern as /stream/:streamId)
+router.get("/stream-processed/:jobId", async (req, res) => {
+  const { jobId } = req.params;
+  const job = downloadJobManager.getJob(jobId);
+
+  if (!job || !job.processedFilePath) {
+    return res.status(404).json({ error: "Processed file not found" });
+  }
+
+  const filePath = job.processedFilePath;
+
+  // Security: Only allow files within transcoded/ directory
+  const resolvedPath = path.resolve(filePath);
+  const resolvedDir = path.resolve(TRANSCODED_DIR);
+  if (!resolvedPath.startsWith(resolvedDir)) {
+    logger.error(`[Stream Processed] Unauthorized path access attempt: ${filePath}`);
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const fs = require("fs");
+
+  let fileSize;
+  try {
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "File not found" });
+    }
+    const stat = fs.statSync(filePath);
+    fileSize = stat.size;
+  } catch (err) {
+    logger.error(`[Stream Processed] Filesystem error: ${err.code || err.message}`);
+    return res.status(503).json({ error: "Filesystem temporarily unavailable" });
+  }
+
+  const range = req.headers.range;
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeTypes = {
+    ".mp4": "video/mp4",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm"
+  };
+  const contentType = mimeTypes[ext] || "application/octet-stream";
+
+  const handleStreamError = (stream, streamType) => {
+    stream.on('error', (err) => {
+      logger.error(`[Stream Processed] ${streamType} stream error: ${err.code || err.message}`);
+      if (!res.headersSent) {
+        res.status(503).json({ error: "Stream read error" });
+      } else {
+        res.destroy();
+      }
+    });
+    return stream;
+  };
+
+  if (range) {
+    const parts = range.replace(/bytes=/, "").split("-");
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = (end - start) + 1;
 
     const file = handleStreamError(fs.createReadStream(filePath, { start, end }), 'Range');
     const head = {
@@ -347,6 +432,79 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
 }
 
 /**
+ * Validate video+audio compatibility and process audio if needed.
+ * Returns { accepted: boolean, streamUrl?: string, reason?: string }
+ */
+async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, serverHost) {
+  const analysis = await analyzeStreamCompatibility(candidateUrl);
+
+  // Log full analysis
+  logger.info({
+    msg: 'Stream analysis',
+    source: sourceLabel,
+    videoCompatible: analysis.videoCompatible,
+    videoReason: analysis.videoReason,
+    videoCodec: analysis.videoCodec,
+    audioCompatible: analysis.audioCompatible,
+    audioNeedsProcessing: analysis.audioNeedsProcessing,
+    defaultAudioCodec: analysis.defaultAudioCodec,
+    bestCompatibleAudioIndex: analysis.bestCompatibleAudioIndex,
+    audioTracks: analysis.audioStreams?.length || 0,
+    probeTimeMs: analysis.probeTimeMs,
+    timedOut: analysis.timedOut
+  });
+
+  // Video check
+  if (!analysis.videoCompatible) {
+    return { accepted: false, reason: analysis.videoReason };
+  }
+
+  // Audio compatible as-is, or probe timed out (assume compatible)
+  if (analysis.audioCompatible || analysis.timedOut) {
+    return { accepted: true, streamUrl: candidateUrl };
+  }
+
+  // Audio needs processing
+  const outputPath = path.join(TRANSCODED_DIR, `${jobId}_${Date.now()}.mkv`);
+
+  if (analysis.bestCompatibleAudioIndex !== null) {
+    // Remux: strip incompatible audio, keep compatible track
+    downloadJobManager.updateJob(jobId, {
+      status: 'processing',
+      message: 'Remuxing compatible audio track...'
+    });
+
+    logger.info(`[AudioProcess] Remuxing audio stream ${analysis.bestCompatibleAudioIndex} for ${sourceLabel}`);
+    const result = await remuxWithCompatibleAudio(candidateUrl, outputPath, analysis.bestCompatibleAudioIndex);
+
+    if (!result.success) {
+      return { accepted: false, reason: 'audio_remux_failed' };
+    }
+  } else {
+    // Transcode: convert DTS/TrueHD to EAC3
+    downloadJobManager.updateJob(jobId, {
+      status: 'processing',
+      message: 'Converting audio to EAC3...'
+    });
+
+    logger.info(`[AudioProcess] Transcoding ${analysis.defaultAudioCodec} -> EAC3 for ${sourceLabel}`);
+    const result = await transcodeAudioToEac3(candidateUrl, outputPath);
+
+    if (!result.success) {
+      return { accepted: false, reason: 'audio_transcode_failed' };
+    }
+  }
+
+  // Store processed file path on job for cleanup + serving
+  downloadJobManager.updateJob(jobId, { processedFilePath: outputPath });
+
+  const host = serverHost || process.env.SERVER_HOST || `localhost:${process.env.PORT || 3001}`;
+  const processedUrl = `https://${host}/api/vod/stream-processed/${jobId}`;
+
+  return { accepted: true, streamUrl: processedUrl };
+}
+
+/**
  * Background RD download processor with progressive updates
  */
 async function processRdDownload(jobId, contentInfo) {
@@ -395,55 +553,37 @@ async function processRdDownload(jobId, contentInfo) {
         const isValid = await rdCacheService.verifyLink(cached.streamUrl);
 
         if (isValid) {
-          // Validate codec compatibility before using cached link
+          // Validate codec + audio compatibility before using cached link
           downloadJobManager.updateJob(jobId, {
             status: 'searching',
-            message: 'Validating codec...'
+            message: 'Validating stream...'
           });
 
-          const codecCheck = await checkCodecCompatibility(cached.streamUrl);
+          const validation = await validateAndProcessSource(cached.streamUrl, jobId, 'rd-cache', serverHost);
 
-          if (!codecCheck.compatible) {
+          if (!validation.accepted) {
             logger.warn({
-              msg: 'Codec rejected (cached link)',
+              msg: 'Stream rejected (cached link)',
               rejected: true,
               source: 'rd-cache',
-              codec: codecCheck.codec,
-              reason: codecCheck.reason,
-              probeTimeMs: codecCheck.probeTimeMs,
-              timedOut: codecCheck.timedOut
+              reason: validation.reason
             });
             // Fall through to fresh search
           } else {
-            // Compatible or timed out (assume compatible)
-            if (codecCheck.timedOut) {
-              logger.warn({
-                msg: 'Codec probe timeout on cached link (assuming compatible)',
-                source: 'rd-cache',
-                probeTimeMs: codecCheck.probeTimeMs,
-                timedOut: true
-              });
-            } else {
-              logger.info({
-                msg: 'Codec validated (cached link)',
-                source: 'rd-cache',
-                codec: codecCheck.codec,
-                probeTimeMs: codecCheck.probeTimeMs
-              });
-            }
+            // SUCCESS - use cached link (or processed URL if audio was remuxed/transcoded)
+            const finalStreamUrl = validation.streamUrl;
 
-            // SUCCESS - use cached link directly
             downloadJobManager.updateJob(jobId, {
               status: 'completed',
               progress: 100,
               message: 'Ready to play! (cached)',
-              streamUrl: cached.streamUrl,
+              streamUrl: finalStreamUrl,
               fileName: cached.fileName,
               quality: cached.resolution ? `${cached.resolution}p` : null,
               subtitles: [] // Will be populated in background
             });
 
-            // Fetch subtitles in background (same as normal flow)
+            // Fetch subtitles in background (use original URL for embedded subtitle detection)
             fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, cached.streamUrl, serverHost);
 
             // Track playback
@@ -454,7 +594,7 @@ async function processRdDownload(jobId, contentInfo) {
                   contentInfo,
                   job.userInfo,
                   'rd-cached',
-                  cached.streamUrl,
+                  finalStreamUrl,
                   cached.fileName
                 );
               }
@@ -701,50 +841,30 @@ async function processRdDownload(jobId, contentInfo) {
           }
         }
 
-        // If we got a candidate URL, validate codec compatibility before accepting
+        // If we got a candidate URL, validate video+audio compatibility before accepting
         if (candidateUrl) {
           downloadJobManager.updateJob(jobId, {
             status: 'searching',
-            message: `Validating codec...`
+            message: `Validating stream...`
           });
 
-          const codecCheck = await checkCodecCompatibility(candidateUrl);
+          const validation = await validateAndProcessSource(candidateUrl, jobId, source.title?.substring(0, 50), serverHost);
 
-          // Log codec validation result
-          if (!codecCheck.compatible) {
+          if (!validation.accepted) {
             logger.warn({
-              msg: 'Codec rejected',
+              msg: 'Stream rejected',
               rejected: true,
               source: source.title?.substring(0, 50),
               sourceType: source.source,
-              codec: codecCheck.codec,
-              reason: codecCheck.reason,
-              probeTimeMs: codecCheck.probeTimeMs,
-              timedOut: codecCheck.timedOut
+              reason: validation.reason
             });
-            lastError = new Error(`Incompatible codec: ${codecCheck.reason}`);
+            lastError = new Error(`Incompatible: ${validation.reason}`);
             continue; // Try next source
-          } else if (codecCheck.timedOut) {
-            logger.warn({
-              msg: 'Codec probe timeout (assuming compatible)',
-              source: source.title?.substring(0, 50),
-              sourceType: source.source,
-              probeTimeMs: codecCheck.probeTimeMs,
-              timedOut: true
-            });
-          } else {
-            logger.info({
-              msg: 'Codec validated',
-              source: source.title?.substring(0, 50),
-              sourceType: source.source,
-              codec: codecCheck.codec,
-              probeTimeMs: codecCheck.probeTimeMs
-            });
           }
 
-          // Codec is compatible - accept this source
+          // Stream accepted (possibly with audio processing)
           result = {
-            download: candidateUrl,
+            download: validation.streamUrl,
             filename: candidateFilename
           };
           successfulSource = source;
@@ -1061,49 +1181,29 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
           }
         }
 
-        // Validate codec compatibility before accepting
+        // Validate video+audio compatibility before accepting
         if (candidateUrl) {
           downloadJobManager.updateJob(jobId, {
             status: 'searching',
-            message: `Validating codec...`
+            message: `Validating stream...`
           });
 
-          const codecCheck = await checkCodecCompatibility(candidateUrl);
+          const validation = await validateAndProcessSource(candidateUrl, jobId, source.title?.substring(0, 50), serverHost);
 
-          // Log codec validation result
-          if (!codecCheck.compatible) {
+          if (!validation.accepted) {
             logger.warn({
-              msg: 'Codec rejected (re-search)',
+              msg: 'Stream rejected (re-search)',
               rejected: true,
               source: source.title?.substring(0, 50),
               sourceType: source.source,
-              codec: codecCheck.codec,
-              reason: codecCheck.reason,
-              probeTimeMs: codecCheck.probeTimeMs,
-              timedOut: codecCheck.timedOut
+              reason: validation.reason
             });
-            lastError = new Error(`Incompatible codec: ${codecCheck.reason}`);
+            lastError = new Error(`Incompatible: ${validation.reason}`);
             continue; // Try next source
-          } else if (codecCheck.timedOut) {
-            logger.warn({
-              msg: 'Codec probe timeout (assuming compatible)',
-              source: source.title?.substring(0, 50),
-              sourceType: source.source,
-              probeTimeMs: codecCheck.probeTimeMs,
-              timedOut: true
-            });
-          } else {
-            logger.info({
-              msg: 'Codec validated (re-search)',
-              source: source.title?.substring(0, 50),
-              sourceType: source.source,
-              codec: codecCheck.codec,
-              probeTimeMs: codecCheck.probeTimeMs
-            });
           }
 
           result = {
-            download: candidateUrl,
+            download: validation.streamUrl,
             filename: candidateFilename
           };
           successfulSource = source;

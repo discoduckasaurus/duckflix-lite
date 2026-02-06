@@ -105,6 +105,19 @@ async function start() {
     logger.info('Creating admin user if not exists...');
     await createAdminUser();
 
+    // Create transcoded/ directory for audio processing output
+    const transcodedDir = path.join(__dirname, 'transcoded');
+    fs.mkdirSync(transcodedDir, { recursive: true });
+    logger.info('Transcoded directory ready');
+
+    // Clean up old transcoded files on startup + daily at 3am
+    const { cleanupOldFiles } = require('./services/audio-processor');
+    cleanupOldFiles(transcodedDir, 1); // Delete anything older than 1 day
+
+    setInterval(() => {
+      cleanupOldFiles(transcodedDir, 1);
+    }, 24 * 60 * 60 * 1000); // Daily
+
     logger.info('Starting EPG/M3U sync jobs...');
     startSyncJobs();
 

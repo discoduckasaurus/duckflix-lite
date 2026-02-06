@@ -1,3 +1,5 @@
+const fs = require('fs');
+
 /**
  * In-memory store for active RD download jobs and all playback activity
  */
@@ -148,9 +150,15 @@ class DownloadJobManager {
       const isError = job.status === 'error';
 
       if (isCompleted && job.completedAt && job.completedAt < fiveMinutesAgo) {
+        if (job.processedFilePath) {
+          fs.unlink(job.processedFilePath, () => {});
+        }
         this.jobs.delete(jobId);
         cleaned++;
       } else if (isError && job.completedAt && job.completedAt < twelveHoursAgo) {
+        if (job.processedFilePath) {
+          fs.unlink(job.processedFilePath, () => {});
+        }
         this.jobs.delete(jobId);
         cleaned++;
       }
