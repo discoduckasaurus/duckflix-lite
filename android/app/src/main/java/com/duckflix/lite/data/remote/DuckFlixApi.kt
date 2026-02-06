@@ -2,6 +2,9 @@ package com.duckflix.lite.data.remote
 
 import com.duckflix.lite.data.remote.dto.BandwidthReportRequest
 import com.duckflix.lite.data.remote.dto.BandwidthStatusResponse
+import com.duckflix.lite.data.remote.dto.CollectionResponse
+import com.duckflix.lite.data.remote.dto.GenresResponse
+import com.duckflix.lite.data.remote.dto.ProvidersResponse
 import com.duckflix.lite.data.remote.dto.FallbackRequest
 import com.duckflix.lite.data.remote.dto.LiveTvChannelsResponse
 import com.duckflix.lite.data.remote.dto.LoginRequest
@@ -210,6 +213,58 @@ interface DuckFlixApi {
     // Live TV
     @GET("livetv/channels")
     suspend fun getLiveTvChannels(): LiveTvChannelsResponse
+
+    // ===============================================
+    // COLLECTION ENDPOINTS (VOD Discover Redesign)
+    // ===============================================
+
+    // Popular content
+    @GET("search/collections/popular")
+    suspend fun getPopular(
+        @Query("type") type: String, // "movie" or "tv"
+        @Query("page") page: Int = 1
+    ): CollectionResponse
+
+    // Top Rated content
+    @GET("search/collections/top-rated")
+    suspend fun getTopRated(
+        @Query("type") type: String, // "movie" or "tv"
+        @Query("page") page: Int = 1
+    ): CollectionResponse
+
+    // Now Playing (movies in theaters)
+    @GET("search/collections/now-playing")
+    suspend fun getNowPlaying(
+        @Query("page") page: Int = 1
+    ): CollectionResponse
+
+    // Discover with filters
+    @GET("search/collections/discover")
+    suspend fun discover(
+        @Query("type") type: String? = null, // "movie" or "tv"
+        @Query("genre") genre: Int? = null,
+        @Query("year") year: Int? = null,
+        @Query("minRating") minRating: Float? = null,
+        @Query("maxRating") maxRating: Float? = null,
+        @Query("minRuntime") minRuntime: Int? = null,
+        @Query("maxRuntime") maxRuntime: Int? = null,
+        @Query("sortBy") sortBy: String? = null,
+        @Query("watchProvider") watchProvider: Int? = null,
+        @Query("page") page: Int = 1
+    ): CollectionResponse
+
+    // Genres list
+    @GET("search/collections/genres")
+    suspend fun getGenres(
+        @Query("type") type: String // "movie" or "tv"
+    ): GenresResponse
+
+    // Streaming providers list
+    @GET("search/collections/providers")
+    suspend fun getWatchProviders(
+        @Query("type") type: String = "movie",
+        @Query("region") region: String = "US"
+    ): ProvidersResponse
 
     // TODO: Add remaining API endpoints (Prowlarr search UI, etc.)
 }

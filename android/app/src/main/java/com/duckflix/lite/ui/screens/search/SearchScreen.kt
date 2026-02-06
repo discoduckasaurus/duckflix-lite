@@ -5,9 +5,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -16,23 +13,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.duckflix.lite.ui.components.ErrorScreen
 import com.duckflix.lite.ui.components.FocusableButton
+import com.duckflix.lite.ui.components.FocusableSearchBar
 import com.duckflix.lite.ui.components.LoadingIndicator
 import com.duckflix.lite.ui.components.MediaCard
 
@@ -44,14 +33,13 @@ fun SearchScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val focusManager = LocalFocusManager.current
-    val keyboardController = LocalSoftwareKeyboardController.current
     val searchFocusRequester = remember { FocusRequester() }
     val backButtonFocusRequester = remember { FocusRequester() }
     val contentFocusRequester = remember { FocusRequester() }
 
+    // Focus the search bar on load (but don't activate keyboard)
     LaunchedEffect(Unit) {
         searchFocusRequester.requestFocus()
-        keyboardController?.hide()
     }
 
     BackHandler {
@@ -96,72 +84,28 @@ fun SearchScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Surface(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(72.dp),
-                color = MaterialTheme.colorScheme.surface,
-                shape = MaterialTheme.shapes.medium
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 24.dp),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    if (uiState.query.isEmpty()) {
-                        Text(
-                            text = "Enter movie or TV show title...",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                    }
-                    BasicTextField(
-                        value = uiState.query,
-                        onValueChange = viewModel::onQueryChange,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(searchFocusRequester)
-                            .onPreviewKeyEvent { keyEvent ->
-                                if (keyEvent.type == KeyEventType.KeyDown) {
-                                    when (keyEvent.key) {
-                                        Key.DirectionUp -> {
-                                            focusManager.clearFocus()
-                                            try {
-                                                backButtonFocusRequester.requestFocus()
-                                            } catch (_: IllegalStateException) {
-                                                // FocusRequester not attached yet
-                                            }
-                                            true
-                                        }
-                                        Key.DirectionDown -> {
-                                            focusManager.clearFocus()
-                                            try {
-                                                contentFocusRequester.requestFocus()
-                                            } catch (_: IllegalStateException) {
-                                                // FocusRequester not attached yet
-                                            }
-                                            true
-                                        }
-                                        else -> false
-                                    }
-                                } else {
-                                    false
-                                }
-                            },
-                        textStyle = TextStyle(
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = MaterialTheme.typography.bodyLarge.fontSize
-                        ),
-                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(
-                            onSearch = { viewModel.search() }
-                        )
-                    )
+            // Search Input - click to activate
+            FocusableSearchBar(
+                value = uiState.query,
+                onValueChange = viewModel::onQueryChange,
+                placeholder = "Enter movie or TV show title...",
+                onSearch = { viewModel.search() },
+                modifier = Modifier.weight(1f),
+                height = 72.dp,
+                focusRequester = searchFocusRequester,
+                onNavigateUp = {
+                    focusManager.clearFocus()
+                    try {
+                        backButtonFocusRequester.requestFocus()
+                    } catch (_: IllegalStateException) {}
+                },
+                onNavigateDown = {
+                    focusManager.clearFocus()
+                    try {
+                        contentFocusRequester.requestFocus()
+                    } catch (_: IllegalStateException) {}
                 }
-            }
+            )
 
             FocusableButton(
                 onClick = { viewModel.search() },
