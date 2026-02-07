@@ -1,6 +1,5 @@
 package com.duckflix.lite.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,15 +33,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.duckflix.lite.ui.theme.TvOsColors
+import com.duckflix.lite.ui.theme.tvOsScaleOnly
 
 /**
  * TV-remote-friendly dropdown for selecting from a list of options.
- * Supports both single-select and multi-select modes.
- *
- * Uses pill-shaped trigger button matching FilterToggleButton styling.
- * Focus border appears when trigger is focused via D-pad navigation.
+ * Grey when unfocused, gradient when focused or has selection.
  */
 @Composable
 fun <T> FilterDropdown(
@@ -66,24 +65,27 @@ fun <T> FilterDropdown(
         else -> "${selectedOptions.size} ${label.lowercase()}"
     }
 
-    // Styling matches FilterToggleButton
     val hasSelection = selectedOptions.isNotEmpty()
-    val backgroundColor = when {
-        hasSelection -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.3f)
-    }
-    val textColor = when {
-        hasSelection -> Color.White
-        else -> Color.White.copy(alpha = 0.7f)
+    val gradientBrush = Brush.linearGradient(
+        colors = TvOsColors.gradientColors
+    )
+
+    // Grey when not focused and no selection, gradient when focused or has selection
+    val backgroundModifier = when {
+        isFocused -> Modifier.background(brush = gradientBrush, shape = shape)
+        hasSelection -> Modifier.background(brush = gradientBrush, shape = shape)
+        else -> Modifier.background(color = Color(0xFF3A3A3A), shape = shape)
     }
 
     val borderModifier = if (isFocused) {
-        Modifier.border(
-            BorderStroke(4.dp, MaterialTheme.colorScheme.primary),
-            shape
-        )
+        Modifier.border(2.dp, gradientBrush, shape)
     } else {
         Modifier
+    }
+
+    val textColor = when {
+        isFocused || hasSelection -> Color.White
+        else -> Color.White.copy(alpha = 0.7f)
     }
 
     Box(modifier = modifier) {
@@ -91,9 +93,10 @@ fun <T> FilterDropdown(
         Box(
             modifier = Modifier
                 .height(48.dp)
+                .tvOsScaleOnly(isFocused = isFocused, focusedScale = 1.03f)
                 .clip(shape)
+                .then(backgroundModifier)
                 .then(borderModifier)
-                .background(backgroundColor, shape)
                 .focusable(interactionSource = interactionSource)
                 .clickable(
                     interactionSource = interactionSource,
@@ -127,7 +130,7 @@ fun <T> FilterDropdown(
             expanded = expanded,
             onDismissRequest = { expanded = false },
             modifier = Modifier
-                .background(MaterialTheme.colorScheme.surface)
+                .background(Color(0xFF2A2A2A))
         ) {
             options.forEach { option ->
                 val isSelected = selectedOptions.contains(option)
@@ -143,10 +146,10 @@ fun <T> FilterDropdown(
                             Text(
                                 text = optionLabel(option),
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = if (isSelected) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
+                                color = when {
+                                    isItemFocused -> Color.White
+                                    isSelected -> TvOsColors.gradientColors[1]
+                                    else -> Color.White.copy(alpha = 0.8f)
                                 }
                             )
                             if (multiSelect && isSelected) {
@@ -154,7 +157,7 @@ fun <T> FilterDropdown(
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = "Selected",
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = TvOsColors.gradientColors[1],
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -162,7 +165,6 @@ fun <T> FilterDropdown(
                     },
                     onClick = {
                         if (multiSelect) {
-                            // Toggle selection in multi-select mode
                             val newSelection = if (isSelected) {
                                 selectedOptions - option
                             } else {
@@ -170,7 +172,6 @@ fun <T> FilterDropdown(
                             }
                             onSelectionChange(newSelection)
                         } else {
-                            // Replace selection in single-select mode
                             onSelectionChange(listOf(option))
                             expanded = false
                         }
@@ -180,7 +181,9 @@ fun <T> FilterDropdown(
                         .then(
                             if (isItemFocused) {
                                 Modifier.background(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                    brush = Brush.linearGradient(
+                                        colors = TvOsColors.gradientColors.map { it.copy(alpha = 0.4f) }
+                                    )
                                 )
                             } else {
                                 Modifier
@@ -193,7 +196,7 @@ fun <T> FilterDropdown(
             // Done button for multi-select mode
             if (multiSelect) {
                 HorizontalDivider(
-                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                    color = Color.White.copy(alpha = 0.2f),
                     modifier = Modifier.padding(vertical = 4.dp)
                 )
 
@@ -205,7 +208,7 @@ fun <T> FilterDropdown(
                         Text(
                             text = "Done",
                             style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary
+                            color = if (isDoneFocused) Color.White else TvOsColors.gradientColors[1]
                         )
                     },
                     onClick = { expanded = false },
@@ -214,7 +217,9 @@ fun <T> FilterDropdown(
                         .then(
                             if (isDoneFocused) {
                                 Modifier.background(
-                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                                    brush = Brush.linearGradient(
+                                        colors = TvOsColors.gradientColors.map { it.copy(alpha = 0.4f) }
+                                    )
                                 )
                             } else {
                                 Modifier

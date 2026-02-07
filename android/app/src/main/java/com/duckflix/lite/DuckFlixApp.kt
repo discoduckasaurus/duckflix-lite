@@ -17,6 +17,7 @@ import com.duckflix.lite.ui.screens.login.LoginScreen
 import com.duckflix.lite.ui.screens.login.UsernameScreen
 import com.duckflix.lite.ui.screens.login.PasswordScreen
 import com.duckflix.lite.ui.screens.home.HomeScreen
+import com.duckflix.lite.ui.screens.landing.LandingScreen
 import com.duckflix.lite.ui.screens.vod.VodContainerScreen
 import com.duckflix.lite.ui.screens.providers.ProviderDetailScreen
 import com.duckflix.lite.ui.screens.player.VideoPlayerScreen
@@ -150,6 +151,20 @@ fun DuckFlixApp(
         }
 
         composable(Screen.Home.route) {
+            LandingScreen(
+                onNavigateToVod = {
+                    navController.navigate(Screen.Vod.route)
+                },
+                onNavigateToLiveTv = {
+                    navController.navigate(Screen.LiveTV.route)
+                },
+                onNavigateToSettings = {
+                    navController.navigate(Screen.Settings.route)
+                }
+            )
+        }
+
+        composable(Screen.Vod.route) {
             VodContainerScreen(navController = navController)
         }
 

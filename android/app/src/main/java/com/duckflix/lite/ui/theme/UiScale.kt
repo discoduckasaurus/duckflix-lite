@@ -13,27 +13,29 @@ import androidx.compose.ui.unit.sp
 
 /**
  * UI Scale presets for adjusting the overall size of UI elements
- * Font scaling is slightly more aggressive than dimension scaling
+ * All elements scale uniformly
  */
 enum class UiScale(
     val displayName: String,
     val factor: Float,
-    val fontFactor: Float,  // Font scales more aggressively
-    val posterFactor: Float // Posters scale even more
+    val fontFactor: Float,
+    val posterFactor: Float
 ) {
-    EXTRA_SMALL("Extra Small", 0.60f, 0.65f, 0.80f),
-    SMALL("Small", 0.75f, 0.80f, 0.95f),
-    NORMAL("Normal", 0.90f, 0.95f, 1.15f),
-    LARGE("Large", 1.05f, 1.10f, 1.35f),
-    EXTRA_LARGE("Extra Large", 1.20f, 1.25f, 1.60f);
+    REGULAR("Regular", 1.00f, 1.00f, 1.00f),
+    ZOOMED("Zoomed", 1.20f, 1.44f, 1.20f);
 
     companion object {
         fun fromFactor(factor: Float): UiScale {
-            return entries.minByOrNull { kotlin.math.abs(it.factor - factor) } ?: NORMAL
+            return entries.minByOrNull { kotlin.math.abs(it.factor - factor) } ?: REGULAR
         }
 
         fun fromOrdinal(ordinal: Int): UiScale {
-            return entries.getOrNull(ordinal) ?: NORMAL
+            // Migration: old ordinals 0-2 (XS, S, Normal) -> REGULAR, 3-4 (L, XL) -> ZOOMED
+            return when (ordinal) {
+                0, 1, 2 -> REGULAR  // Old Extra Small, Small, Normal -> Regular
+                3, 4 -> ZOOMED      // Old Large, Extra Large -> Zoomed
+                else -> entries.getOrNull(ordinal) ?: REGULAR
+            }
         }
     }
 }
@@ -41,7 +43,7 @@ enum class UiScale(
 /**
  * CompositionLocal for providing UI scale factor throughout the app
  */
-val LocalUiScale = compositionLocalOf { UiScale.NORMAL }
+val LocalUiScale = compositionLocalOf { UiScale.REGULAR }
 
 /**
  * Helper object for persisting UI scale preference
@@ -52,7 +54,7 @@ object UiScalePreferences {
 
     fun getUiScale(context: Context): UiScale {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val ordinal = prefs.getInt(KEY_UI_SCALE, UiScale.NORMAL.ordinal)
+        val ordinal = prefs.getInt(KEY_UI_SCALE, UiScale.REGULAR.ordinal)
         return UiScale.fromOrdinal(ordinal)
     }
 

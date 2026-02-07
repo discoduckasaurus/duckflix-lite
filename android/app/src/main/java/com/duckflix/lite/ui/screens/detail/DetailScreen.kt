@@ -7,6 +7,7 @@ import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -28,6 +29,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -41,6 +44,8 @@ import com.duckflix.lite.ui.components.ErrorScreen
 import com.duckflix.lite.ui.components.FocusableButton
 import com.duckflix.lite.ui.components.LoadingIndicator
 import com.duckflix.lite.ui.components.MediaCard
+import com.duckflix.lite.ui.theme.TvOsGradientRow
+import com.duckflix.lite.ui.theme.getGlowColorForPosition
 
 @Composable
 fun DetailScreen(
@@ -220,14 +225,87 @@ private fun ContentDetailView(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(24.dp)
             ) {
-                // Poster
-                AsyncImage(
-                    model = content.posterUrl,
-                    contentDescription = content.title,
+                // Poster with gradient glow border
+                Box(
                     modifier = Modifier
                         .width(180.dp)
                         .height(270.dp)
-                )
+                        .graphicsLayer { clip = false }
+                        .drawBehind {
+                            val glowExtend = 12.dp.toPx()
+                            val glowAlpha = 0.55f
+                            val glowWidth = size.width + (glowExtend * 2)
+                            val glowHeight = size.height + (glowExtend * 2)
+                            val fadeRatioH = glowExtend / glowWidth
+                            val fadeRatioV = glowExtend / glowHeight
+                            val topLeft = androidx.compose.ui.geometry.Offset(-glowExtend, -glowExtend)
+                            val glowSize = androidx.compose.ui.geometry.Size(glowWidth, glowHeight)
+
+                            val layerRect = androidx.compose.ui.geometry.Rect(
+                                topLeft.x, topLeft.y,
+                                topLeft.x + glowSize.width, topLeft.y + glowSize.height
+                            )
+                            drawContext.canvas.saveLayer(layerRect, androidx.compose.ui.graphics.Paint())
+
+                            // Angled gradient glow (purple → red → pink)
+                            drawRect(
+                                brush = Brush.linearGradient(
+                                    colors = listOf(
+                                        Color(0xFF6B1EEF).copy(alpha = glowAlpha),
+                                        Color(0xFFE93326).copy(alpha = glowAlpha),
+                                        Color(0xFFE93397).copy(alpha = glowAlpha)
+                                    ),
+                                    start = androidx.compose.ui.geometry.Offset(0f, 0f),
+                                    end = androidx.compose.ui.geometry.Offset(size.width + glowExtend * 2, size.height + glowExtend * 2)
+                                ),
+                                topLeft = topLeft,
+                                size = glowSize
+                            )
+
+                            // Fade edges
+                            drawRect(
+                                brush = Brush.horizontalGradient(
+                                    colorStops = arrayOf(
+                                        0f to Color.Transparent,
+                                        fadeRatioH to Color.White,
+                                        (1f - fadeRatioH) to Color.White,
+                                        1f to Color.Transparent
+                                    ),
+                                    startX = -glowExtend,
+                                    endX = size.width + glowExtend
+                                ),
+                                topLeft = topLeft,
+                                size = glowSize,
+                                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
+                            )
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    colorStops = arrayOf(
+                                        0f to Color.Transparent,
+                                        fadeRatioV to Color.White,
+                                        (1f - fadeRatioV) to Color.White,
+                                        1f to Color.Transparent
+                                    ),
+                                    startY = -glowExtend,
+                                    endY = size.height + glowExtend
+                                ),
+                                topLeft = topLeft,
+                                size = glowSize,
+                                blendMode = androidx.compose.ui.graphics.BlendMode.DstIn
+                            )
+
+                            drawContext.canvas.restore()
+                        }
+                ) {
+                    AsyncImage(
+                        model = content.posterUrl,
+                        contentDescription = content.title,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop
+                    )
+                }
 
                 // Info
                 Column(
@@ -314,13 +392,17 @@ private fun ContentDetailView(
                                     FocusableButton(
                                         onClick = { onPlayClick(content, contentType, null, null, watchProgress.position, content.posterUrl, content.logoUrl) },
                                         modifier = Modifier.width(140.dp).height(48.dp),
-                                        focusRequester = primaryActionFocusRequester
+                                        focusRequester = primaryActionFocusRequester,
+                                        index = 0,
+                                        totalItems = 2
                                     ) {
                                         Text("\u25B6 Resume ($progressPercent%)", style = MaterialTheme.typography.bodyLarge)
                                     }
                                     FocusableButton(
                                         onClick = { onPlayClick(content, contentType, null, null, 0L, content.posterUrl, content.logoUrl) },
-                                        modifier = Modifier.width(120.dp).height(48.dp)
+                                        modifier = Modifier.width(120.dp).height(48.dp),
+                                        index = 1,
+                                        totalItems = 2
                                     ) {
                                         Text("\u27F2 Restart", style = MaterialTheme.typography.bodyLarge)
                                     }
@@ -466,7 +548,9 @@ private fun SeasonControls(
                 FocusableButton(
                     onClick = { expanded = !expanded },
                     modifier = Modifier.width(260.dp).height(48.dp),
-                    focusRequester = focusRequester
+                    focusRequester = focusRequester,
+                    index = 0,
+                    totalItems = 2
                 ) {
                     Row(
                         modifier = Modifier
@@ -521,7 +605,9 @@ private fun SeasonControls(
                         onClick = onPlayRandomEpisode,
                         modifier = Modifier.size(48.dp),
                         contentPadding = PaddingValues(0.dp),
-                        interactionSource = interactionSource
+                        interactionSource = interactionSource,
+                        index = 1,
+                        totalItems = 2
                     ) {
                         Text(
                             text = "🎰",
@@ -621,19 +707,23 @@ private fun EpisodeGrid(
     seriesPosterUrl: String?, // Series poster for Continue Watching
     onEpisodeClick: (Int, Int, Long?, String?) -> Unit
 ) {
+    val totalEpisodes = episodes.size
     Column(
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        episodes.chunked(3).forEach { rowEpisodes ->
+        episodes.chunked(3).forEachIndexed { rowIndex, rowEpisodes ->
             Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                rowEpisodes.forEach { episode ->
+                rowEpisodes.forEachIndexed { colIndex, episode ->
+                    val episodeIndex = rowIndex * 3 + colIndex
                     Box(modifier = Modifier.weight(1f)) {
                         EpisodeCard(
                             episode = episode,
-                            seriesPosterUrl = seriesPosterUrl, // Pass series poster
+                            seriesPosterUrl = seriesPosterUrl,
+                            index = episodeIndex,
+                            totalItems = totalEpisodes,
                             onEpisodeClick = { resumePos, posterUrl ->
                                 onEpisodeClick(seasonNumber, episode.episodeNumber, resumePos, posterUrl)
                             }
@@ -654,23 +744,29 @@ private fun EpisodeGrid(
 private fun EpisodeCard(
     episode: com.duckflix.lite.data.remote.dto.EpisodeDto,
     seriesPosterUrl: String?, // Series poster for Continue Watching (not episode still)
+    index: Int = 0,
+    totalItems: Int = 1,
     onEpisodeClick: (Long?, String?) -> Unit
 ) {
-    // --- Task 5: Track focus state for marquee scrolling ---
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
 
+    // Get gradient color based on position
+    val normalizedPosition = if (totalItems > 1) index.toFloat() / (totalItems - 1) else 0.5f
+    val gradientColor = getGlowColorForPosition(normalizedPosition)
+
     MediaCard(
-        onClick = { onEpisodeClick(null, seriesPosterUrl) }, // Use series poster, not episode still
+        onClick = { onEpisodeClick(null, seriesPosterUrl) },
         modifier = Modifier
             .fillMaxWidth()
-            .height(252.dp), // --- Task 4: Increased from 240dp to 252dp (5% increase) ---
-        interactionSource = interactionSource
+            .height(190.dp),
+        interactionSource = interactionSource,
+        borderColor = gradientColor
     ) {
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-            // Episode still/thumbnail with 16:9 aspect ratio and 6dp top rounded corners
+            // Episode still/thumbnail
             if (episode.stillUrl != null) {
                 AsyncImage(
                     model = episode.stillUrl,
@@ -693,22 +789,21 @@ private fun EpisodeCard(
                     Text(
                         text = "E${episode.episodeNumber}",
                         color = Color.White.copy(alpha = 0.5f),
-                        style = MaterialTheme.typography.bodyLarge
+                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
             }
 
-            // Grey overlay info area at bottom
-            // --- Task 4: Increased info area from 80dp to 88dp for proportional scaling ---
+            // Info area at bottom
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(88.dp)
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                    .height(65.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Text(
                     text = "E${episode.episodeNumber}: ${episode.name}",
-                    style = MaterialTheme.typography.bodyMedium,
+                    fontSize = 13.sp,
                     color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -716,12 +811,11 @@ private fun EpisodeCard(
                 if (episode.overview != null && episode.overview.isNotBlank()) {
                     Text(
                         text = episode.overview,
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 11.sp,
                         color = Color.White.copy(alpha = 0.7f),
-                        maxLines = 7, // --- Task 4: Increased from 5 to 7 for taller card ---
+                        maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
-                        lineHeight = 16.sp,
-                        // --- Task 5: Marquee scroll when focused and text is truncated ---
+                        lineHeight = 13.sp,
                         modifier = if (isFocused) {
                             Modifier.basicMarquee(iterations = Int.MAX_VALUE)
                         } else {
@@ -736,29 +830,38 @@ private fun EpisodeCard(
 
 @Composable
 private fun CastRow(cast: List<CastDto>, onActorClick: (Int) -> Unit) {
+    val totalCast = cast.size
     LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 48.dp),
+        modifier = Modifier.graphicsLayer { clip = false }
     ) {
-        items(cast) { member ->
+        items(totalCast) { index ->
+            val member = cast[index]
+            val normalizedPosition = if (totalCast > 1) index.toFloat() / (totalCast - 1) else 0.5f
+            val gradientColor = getGlowColorForPosition(normalizedPosition)
+
             MediaCard(
                 onClick = { onActorClick(member.id) },
-                modifier = Modifier.width(120.dp)
+                modifier = Modifier.width(110.dp),
+                borderColor = gradientColor
             ) {
                 Column(
-                    modifier = Modifier.padding(8.dp),
+                    modifier = Modifier.padding(6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     AsyncImage(
                         model = member.profileUrl,
                         contentDescription = member.name,
                         modifier = Modifier
-                            .size(120.dp)
-                            .clip(RoundedCornerShape(8.dp))
+                            .size(98.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        contentScale = ContentScale.Crop
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = member.name,
-                        style = MaterialTheme.typography.bodyMedium,
+                        style = MaterialTheme.typography.bodySmall,
                         color = Color.White,
                         maxLines = 2,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -766,7 +869,7 @@ private fun CastRow(cast: List<CastDto>, onActorClick: (Int) -> Unit) {
                     if (member.character != null) {
                         Text(
                             text = member.character,
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.labelSmall,
                             color = Color.White.copy(alpha = 0.7f),
                             maxLines = 1,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center

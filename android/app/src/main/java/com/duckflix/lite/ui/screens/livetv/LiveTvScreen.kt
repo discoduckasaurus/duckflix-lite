@@ -42,9 +42,11 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.duckflix.lite.ui.components.ErrorScreen
+import com.duckflix.lite.ui.components.LogoButton
 import com.duckflix.lite.ui.components.TVSafeArea
 import com.duckflix.lite.ui.components.TVSafeContent
 import com.duckflix.lite.ui.components.livetv.CurrentProgramInfo
+import com.duckflix.lite.ui.theme.Dimens
 import com.duckflix.lite.ui.components.livetv.EpgGrid
 import com.duckflix.lite.ui.components.livetv.PipPlayer
 
@@ -185,7 +187,7 @@ fun LiveTvScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 16.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
@@ -207,6 +209,14 @@ fun LiveTvScreen(
                                     containerColor = Color(0xFF2A2A2A),
                                     selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                                 )
+                            )
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+                            // Logo at top right
+                            LogoButton(
+                                onClick = onNavigateBack,
+                                size = Dimens.tabBarHeight
                             )
                         }
 

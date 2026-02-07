@@ -1,6 +1,5 @@
 package com.duckflix.lite.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,12 +18,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.duckflix.lite.ui.theme.TvOsColors
+import com.duckflix.lite.ui.theme.tvOsScaleOnly
 
 /**
  * Toggle button for TV/Movie filters
- * Pill-shaped button with distinct selected/unselected states
+ * Grey when unfocused, gradient when focused or selected
  * Optimized for TV D-pad navigation with clear focus indication
  */
 @Composable
@@ -38,31 +40,35 @@ fun FilterToggleButton(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val shape = RoundedCornerShape(24.dp)
 
-    val backgroundColor = when {
-        isSelected -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.surface.copy(alpha = 0.3f)
-    }
+    val gradientBrush = Brush.linearGradient(
+        colors = TvOsColors.gradientColors
+    )
 
-    val textColor = when {
-        isSelected -> Color.White
-        else -> Color.White.copy(alpha = 0.7f)
+    // Grey when not focused and not selected, gradient when focused or selected
+    val backgroundModifier = when {
+        isFocused -> Modifier.background(brush = gradientBrush, shape = shape)
+        isSelected -> Modifier.background(brush = gradientBrush, shape = shape)
+        else -> Modifier.background(color = Color(0xFF3A3A3A), shape = shape)
     }
 
     val borderModifier = if (isFocused) {
-        Modifier.border(
-            BorderStroke(4.dp, MaterialTheme.colorScheme.primary),
-            shape
-        )
+        Modifier.border(2.dp, gradientBrush, shape)
     } else {
         Modifier
+    }
+
+    val textColor = when {
+        isFocused || isSelected -> Color.White
+        else -> Color.White.copy(alpha = 0.7f)
     }
 
     Box(
         modifier = modifier
             .height(48.dp)
+            .tvOsScaleOnly(isFocused = isFocused, focusedScale = 1.03f)
             .clip(shape)
+            .then(backgroundModifier)
             .then(borderModifier)
-            .background(backgroundColor, shape)
             .focusable(interactionSource = interactionSource)
             .clickable(
                 interactionSource = interactionSource,

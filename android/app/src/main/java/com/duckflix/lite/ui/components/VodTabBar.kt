@@ -1,6 +1,5 @@
 package com.duckflix.lite.ui.components
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,10 +20,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.duckflix.lite.ui.theme.Dimens
 import com.duckflix.lite.ui.theme.TextSizes
+import com.duckflix.lite.ui.theme.TvOsColors
+import com.duckflix.lite.ui.theme.tvOsScaleOnly
 
 /**
  * Tab options for VOD section navigation
@@ -38,7 +40,7 @@ enum class VodTab(val displayName: String) {
 
 /**
  * Horizontal tab bar for VOD section navigation
- * Optimized for TV D-pad navigation with clear focus states
+ * Grey when unfocused, gradient when focused or selected
  */
 @Composable
 fun VodTabBar(
@@ -51,11 +53,13 @@ fun VodTabBar(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(Dimens.itemSpacing)
     ) {
-        tabs.forEach { tab ->
+        tabs.forEachIndexed { index, tab ->
             VodTabItem(
                 tab = tab,
                 isSelected = tab == selectedTab,
-                onSelect = { onTabSelected(tab) }
+                onSelect = { onTabSelected(tab) },
+                index = index,
+                totalTabs = tabs.size
             )
         }
     }
@@ -63,46 +67,50 @@ fun VodTabBar(
 
 /**
  * Individual tab item within the VodTabBar
+ * Grey when unfocused/unselected, gradient when focused or selected
  */
 @Composable
 private fun RowScope.VodTabItem(
     tab: VodTab,
     isSelected: Boolean,
     onSelect: () -> Unit,
+    index: Int,
+    totalTabs: Int,
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
     val isFocused by interactionSource.collectIsFocusedAsState()
     val shape = RoundedCornerShape(8.dp)
 
-    val backgroundColor = when {
-        isSelected -> Color(0xFF0D47A1) // Darker blue to distinguish from menu tiles
-        else -> Color.Transparent
+    val gradientBrush = Brush.linearGradient(
+        colors = TvOsColors.gradientColors
+    )
+
+    // Grey when not focused and not selected, gradient when focused or selected
+    val backgroundModifier = when {
+        isFocused -> Modifier.background(brush = gradientBrush, shape = shape)
+        isSelected -> Modifier.background(brush = gradientBrush, shape = shape)
+        else -> Modifier.background(color = Color(0xFF3A3A3A), shape = shape)
+    }
+
+    val borderModifier = if (isFocused) {
+        Modifier.border(2.dp, gradientBrush, shape)
+    } else {
+        Modifier
     }
 
     val textColor = when {
-        isSelected -> Color.White
+        isFocused || isSelected -> Color.White
         else -> Color.White.copy(alpha = 0.7f)
-    }
-
-    val borderModifier = when {
-        isFocused -> Modifier.border(
-            BorderStroke(4.dp, MaterialTheme.colorScheme.primary),
-            shape
-        )
-        !isSelected -> Modifier.border(
-            BorderStroke(2.dp, Color.White.copy(alpha = 0.3f)),
-            shape
-        )
-        else -> Modifier
     }
 
     Box(
         modifier = Modifier
             .weight(1f)
             .height(Dimens.tabBarHeight)
+            .tvOsScaleOnly(isFocused = isFocused, focusedScale = 1.03f)
             .clip(shape)
+            .then(backgroundModifier)
             .then(borderModifier)
-            .background(backgroundColor, shape)
             .focusable(interactionSource = interactionSource)
             .clickable(
                 interactionSource = interactionSource,

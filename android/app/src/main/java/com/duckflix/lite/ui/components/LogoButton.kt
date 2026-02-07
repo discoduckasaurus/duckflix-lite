@@ -20,6 +20,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.duckflix.lite.R
+import com.duckflix.lite.ui.theme.tvOsFocusEffects
 
 /**
  * Circular logo button with DuckFlix duck icon
@@ -41,6 +42,10 @@ fun LogoButton(
         modifier = modifier
             .size(size)
             .clip(CircleShape)
+            .tvOsFocusEffects(
+                isFocused = isFocused,
+                respectTransparency = true
+            )
             .then(
                 if (focusRequester != null) {
                     Modifier.focusRequester(focusRequester)
@@ -55,7 +60,7 @@ fun LogoButton(
             ) { onClick() }
             .then(
                 if (isFocused) {
-                    Modifier.border(3.dp, Color.White, CircleShape)
+                    Modifier.border(2.dp, Color.White, CircleShape)
                 } else {
                     Modifier
                 }
