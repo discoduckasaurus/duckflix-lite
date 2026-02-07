@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -87,6 +88,8 @@ fun LiveTvFullscreenPlayer(
     subtitleTracks: List<LiveTvTrackInfo>,
     showAudioPanel: Boolean,
     showSubtitlePanel: Boolean,
+    error: String?,
+    isRecovering: Boolean,
     onBack: () -> Unit,
     onChannelUp: () -> Unit,
     onChannelDown: () -> Unit,
@@ -96,6 +99,7 @@ fun LiveTvFullscreenPlayer(
     onSelectAudioTrack: (String) -> Unit,
     onSelectSubtitleTrack: (String) -> Unit,
     onDismissPanels: () -> Unit,
+    onRetry: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -246,6 +250,27 @@ fun LiveTvFullscreenPlayer(
                                 false
                             }
                         }
+                        // Media remote control buttons
+                        Key.MediaPlayPause -> {
+                            onTogglePlayPause()
+                            true
+                        }
+                        Key.MediaPlay -> {
+                            player?.play()
+                            true
+                        }
+                        Key.MediaPause -> {
+                            player?.pause()
+                            true
+                        }
+                        Key.MediaNext -> {
+                            onChannelUp()
+                            true
+                        }
+                        Key.MediaPrevious -> {
+                            onChannelDown()
+                            true
+                        }
                         else -> {
                             // Any other key shows controls if hidden
                             if (!showControls) {
@@ -280,6 +305,7 @@ fun LiveTvFullscreenPlayer(
                         this.player = player
                         useController = false
                         keepScreenOn = true
+                        setKeepContentOnPlayerReset(true)  // Keep last frame during recovery
                         // Configure subtitle view with visible styling
                         subtitleView?.apply {
                             setApplyEmbeddedStyles(true)
@@ -360,6 +386,19 @@ fun LiveTvFullscreenPlayer(
                 showOffOption = true,
                 onTrackSelected = { onSelectSubtitleTrack(it); onDismissPanels() },
                 onDismiss = onDismissPanels
+            )
+        }
+
+        // Stream error/recovery overlay
+        AnimatedVisibility(
+            visible = error != null || isRecovering,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            StreamErrorOverlay(
+                error = error,
+                isRecovering = isRecovering,
+                onRetry = onRetry
             )
         }
 
@@ -625,6 +664,104 @@ private fun FullscreenOverlay(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StreamErrorOverlay(
+    error: String?,
+    isRecovering: Boolean,
+    onRetry: () -> Unit
+) {
+    val retryFocusRequester = remember { FocusRequester() }
+
+    // Auto-focus the retry button when showing error
+    LaunchedEffect(error) {
+        if (error != null && !isRecovering) {
+            delay(100)
+            try {
+                retryFocusRequester.requestFocus()
+            } catch (e: Exception) {
+                // Focus not ready
+            }
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            if (isRecovering) {
+                CircularProgressIndicator(
+                    color = Color.White,
+                    modifier = Modifier.size(48.dp)
+                )
+                Text(
+                    text = "Reconnecting...",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White
+                )
+            } else {
+                // Error icon (warning triangle using text)
+                Text(
+                    text = "⚠",
+                    style = MaterialTheme.typography.displayMedium,
+                    color = Color.White
+                )
+                Text(
+                    text = error ?: "Stream error",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                // Focusable retry button
+                RetryButton(
+                    onClick = onRetry,
+                    focusRequester = retryFocusRequester
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RetryButton(
+    onClick: () -> Unit,
+    focusRequester: FocusRequester
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Box(
+        modifier = Modifier
+            .focusRequester(focusRequester)
+            .focusable(interactionSource = interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null
+            ) { onClick() }
+            .background(
+                if (isFocused) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.2f),
+                RoundedCornerShape(8.dp)
+            )
+            .then(
+                if (isFocused) Modifier.border(2.dp, Color.White, RoundedCornerShape(8.dp))
+                else Modifier
+            )
+            .padding(horizontal = 32.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "Retry",
+            style = MaterialTheme.typography.titleMedium,
+            color = Color.White
+        )
     }
 }
 

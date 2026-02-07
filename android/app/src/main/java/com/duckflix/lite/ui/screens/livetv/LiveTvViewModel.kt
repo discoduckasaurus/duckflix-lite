@@ -48,7 +48,9 @@ data class LiveTvUiState(
     val subtitleTracks: List<LiveTvTrackInfo> = emptyList(),
     val showAudioPanel: Boolean = false,
     val showSubtitlePanel: Boolean = false,
-    val focusTrigger: Int = 0  // Increments to trigger focus restoration after fullscreen exit
+    val focusTrigger: Int = 0,  // Increments to trigger focus restoration after fullscreen exit
+    val isRecovering: Boolean = false,  // True during auto-recovery attempts
+    val retryCount: Int = 0             // Track retry attempts for UI feedback
 )
 
 @HiltViewModel
@@ -56,6 +58,11 @@ class LiveTvViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val api: DuckFlixApi
 ) : ViewModel() {
+
+    companion object {
+        private const val MAX_RETRY_ATTEMPTS = 3
+        private const val STALL_TIMEOUT_MS = 10000L  // 10s - gives server time to switch backup streams
+    }
 
     private val _uiState = MutableStateFlow(LiveTvUiState())
     val uiState: StateFlow<LiveTvUiState> = _uiState.asStateFlow()
@@ -66,6 +73,8 @@ class LiveTvViewModel @Inject constructor(
 
     private var epgRefreshJob: Job? = null
     private var timeUpdateJob: Job? = null
+    private var stallDetectionJob: Job? = null
+    private var retryAttempts = 0
 
     // Base URL for constructing stream URLs
     private val baseUrl = "https://lite.duckflix.tv/api"
@@ -129,6 +138,26 @@ class LiveTvViewModel @Inject constructor(
                             else -> "UNKNOWN"
                         }
                         println("[LiveTV] Player state: $stateName")
+
+                        when (playbackState) {
+                            Player.STATE_READY -> {
+                                // Stream recovered successfully
+                                retryAttempts = 0
+                                stallDetectionJob?.cancel()
+                                _uiState.value = _uiState.value.copy(
+                                    isRecovering = false,
+                                    retryCount = 0,
+                                    error = null
+                                )
+                            }
+                            Player.STATE_BUFFERING -> {
+                                // Start stall detection
+                                startStallDetection()
+                            }
+                            Player.STATE_IDLE, Player.STATE_ENDED -> {
+                                stallDetectionJob?.cancel()
+                            }
+                        }
                     }
 
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -141,13 +170,75 @@ class LiveTvViewModel @Inject constructor(
 
                     override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                         println("[LiveTV] Player error: ${error.errorCodeName} - ${error.message}")
-                        _uiState.value = _uiState.value.copy(
-                            error = "Stream error: ${error.message}"
-                        )
+                        handleStreamError()
                     }
                 })
                 playWhenReady = true
             }
+    }
+
+    private fun handleStreamError() {
+        stallDetectionJob?.cancel()
+        val channelId = _uiState.value.selectedChannel?.id ?: return
+
+        if (retryAttempts < MAX_RETRY_ATTEMPTS) {
+            retryAttempts++
+            _uiState.value = _uiState.value.copy(
+                isRecovering = true,
+                retryCount = retryAttempts,
+                error = null
+            )
+            viewModelScope.launch {
+                // Report error to server so it can failover to backup source
+                try {
+                    api.reportLiveTvStreamError(channelId)
+                    println("[LiveTV] Reported stream error to server for channel $channelId")
+                } catch (e: Exception) {
+                    println("[LiveTV] Failed to report stream error: ${e.message}")
+                }
+                // Exponential backoff: 1s, 2s, 4s
+                delay(1000L * (1 shl (retryAttempts - 1)))
+                refreshStream()
+            }
+        } else {
+            _uiState.value = _uiState.value.copy(
+                error = "Stream unavailable. Tap retry to reconnect.",
+                isRecovering = false
+            )
+        }
+    }
+
+    private fun startStallDetection() {
+        stallDetectionJob?.cancel()
+        stallDetectionJob = viewModelScope.launch {
+            delay(STALL_TIMEOUT_MS)
+            // Still buffering after timeout = stall
+            if (_player?.playbackState == Player.STATE_BUFFERING) {
+                println("[LiveTV] Stream stalled, triggering recovery")
+                handleStreamError()
+            }
+        }
+    }
+
+    fun refreshStream() {
+        val channel = _uiState.value.selectedChannel ?: return
+        _uiState.value = _uiState.value.copy(error = null, isRecovering = true)
+
+        // Reset retry counter on manual refresh
+        retryAttempts = 0
+
+        viewModelScope.launch {
+            // Report error to trigger server-side failover before fetching new manifest
+            try {
+                api.reportLiveTvStreamError(channel.id)
+                println("[LiveTV] Reported stream error for manual retry on channel ${channel.id}")
+            } catch (e: Exception) {
+                println("[LiveTV] Failed to report stream error: ${e.message}")
+            }
+
+            val streamUrl = "$baseUrl/livetv/stream/${channel.id}"
+            playStream(streamUrl)
+        }
     }
 
     private fun loadChannels() {
@@ -203,9 +294,16 @@ class LiveTvViewModel @Inject constructor(
         if (_uiState.value.selectedChannel?.id == channel.id) return
 
         println("[LiveTV] Selecting channel: ${channel.effectiveDisplayName}")
+
+        // Reset recovery state when switching channels
+        retryAttempts = 0
+        stallDetectionJob?.cancel()
+
         _uiState.value = _uiState.value.copy(
             selectedChannel = channel,
             error = null,
+            isRecovering = false,
+            retryCount = 0,
             showAudioPanel = false,
             showSubtitlePanel = false
         )
@@ -469,6 +567,7 @@ class LiveTvViewModel @Inject constructor(
         super.onCleared()
         epgRefreshJob?.cancel()
         timeUpdateJob?.cancel()
+        stallDetectionJob?.cancel()
         _player?.release()
         _player = null
     }

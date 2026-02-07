@@ -176,6 +176,13 @@ interface DuckFlixApi {
         @Path("episode") episode: Int
     ): com.duckflix.lite.data.remote.dto.NextEpisodeResponse
 
+    // Prefetch endpoints for seamless auto-play
+    @POST("vod/prefetch-next")
+    suspend fun prefetchNext(@Body request: com.duckflix.lite.data.remote.dto.PrefetchNextRequest): com.duckflix.lite.data.remote.dto.PrefetchNextResponse
+
+    @POST("vod/prefetch-promote/{jobId}")
+    suspend fun promotePrefetch(@Path("jobId") jobId: String): com.duckflix.lite.data.remote.dto.PrefetchPromoteResponse
+
     @GET("content/recommendations/{tmdbId}")
     suspend fun getContentRecommendations(
         @Path("tmdbId") tmdbId: Int,
@@ -216,6 +223,9 @@ interface DuckFlixApi {
     // Live TV
     @GET("livetv/channels")
     suspend fun getLiveTvChannels(): LiveTvChannelsResponse
+
+    @POST("livetv/stream/{channelId}/error")
+    suspend fun reportLiveTvStreamError(@Path("channelId") channelId: String)
 
     // ===============================================
     // COLLECTION ENDPOINTS (VOD Discover Redesign)

@@ -120,6 +120,8 @@ fun LiveTvScreen(
                     subtitleTracks = uiState.subtitleTracks,
                     showAudioPanel = uiState.showAudioPanel,
                     showSubtitlePanel = uiState.showSubtitlePanel,
+                    error = uiState.error,
+                    isRecovering = uiState.isRecovering,
                     onBack = viewModel::exitFullscreen,
                     onChannelUp = viewModel::channelUp,
                     onChannelDown = viewModel::channelDown,
@@ -128,7 +130,8 @@ fun LiveTvScreen(
                     onToggleSubtitlePanel = viewModel::toggleSubtitlePanel,
                     onSelectAudioTrack = viewModel::selectAudioTrack,
                     onSelectSubtitleTrack = viewModel::selectSubtitleTrack,
-                    onDismissPanels = viewModel::dismissPanels
+                    onDismissPanels = viewModel::dismissPanels,
+                    onRetry = viewModel::refreshStream
                 )
             }
 
