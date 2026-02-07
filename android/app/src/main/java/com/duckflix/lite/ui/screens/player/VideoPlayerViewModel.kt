@@ -141,8 +141,13 @@ class VideoPlayerViewModel @Inject constructor(
 
         // Initialize stutter detector with playback settings
         viewModelScope.launch {
-            stutterDetector.initialize()
-            stutterDetector.reset() // Reset for new content
+            try {
+                stutterDetector.initialize()
+                stutterDetector.reset() // Reset for new content
+            } catch (e: Exception) {
+                println("[VideoPlayer] Failed to initialize stutter detector: ${e.message}")
+                // Non-critical - playback will continue without adaptive fallback
+            }
         }
 
         loadAutoPlaySettings()
@@ -1125,24 +1130,44 @@ class VideoPlayerViewModel @Inject constructor(
     }
 
     private fun handleTVEpisodeEndedFallback() {
+        // Try nextEpisodeInfo first, then fall back to prefetchNextEpisode
         val nextEpisode = _uiState.value.nextEpisodeInfo
-        if (nextEpisode == null || !nextEpisode.hasNext) {
-            // In random mode, try to fetch a random episode on-the-fly if prefetch failed
-            if (isRandomPlayback) {
-                fetchRandomEpisodeAndPlay()
+        val prefetchEpisode = _uiState.value.prefetchNextEpisode
+
+        // Determine which source to use for next episode info
+        val season: Int?
+        val episode: Int?
+
+        when {
+            nextEpisode != null && nextEpisode.hasNext && nextEpisode.season != null && nextEpisode.episode != null -> {
+                // Use nextEpisodeInfo
+                season = nextEpisode.season
+                episode = nextEpisode.episode
+                println("[AutoPlay] Using nextEpisodeInfo: S${season}E${episode}")
+            }
+            prefetchEpisode != null -> {
+                // Fall back to prefetchNextEpisode
+                season = prefetchEpisode.season
+                episode = prefetchEpisode.episode
+                println("[AutoPlay] Using prefetchNextEpisode as fallback: S${season}E${episode}")
+            }
+            else -> {
+                // No next episode info available
+                println("[AutoPlay] No next episode info available")
+                // In random mode, try to fetch a random episode on-the-fly
+                if (isRandomPlayback) {
+                    fetchRandomEpisodeAndPlay()
+                    return
+                }
+                // Show series complete only in sequential mode
+                _uiState.value = _uiState.value.copy(showSeriesCompleteOverlay = true)
                 return
             }
-            // Show series complete only in sequential mode
-            _uiState.value = _uiState.value.copy(showSeriesCompleteOverlay = true)
-            return
         }
 
-        // Validate season and episode are not null before invoking
-        val season = nextEpisode.season
-        val episode = nextEpisode.episode
+        // Validate season and episode
         if (season == null || episode == null) {
-            println("[ERROR] Next episode has hasNext=true but season or episode is null: season=$season, episode=$episode")
-            // Don't show series complete in random mode
+            println("[ERROR] Next episode season or episode is null: season=$season, episode=$episode")
             if (!isRandomPlayback) {
                 _uiState.value = _uiState.value.copy(showSeriesCompleteOverlay = true)
             }
@@ -1244,11 +1269,22 @@ class VideoPlayerViewModel @Inject constructor(
                 )
                 val response = api.prefetchNext(request)
 
-                if (response.hasNext && response.jobId != null) {
-                    println("[Prefetch] Started prefetch job ${response.jobId} for S${response.nextEpisode?.season}E${response.nextEpisode?.episode}")
+                if (response.hasNext && response.jobId != null && response.nextEpisode != null) {
+                    println("[Prefetch] Started prefetch job ${response.jobId} for S${response.nextEpisode.season}E${response.nextEpisode.episode}")
+
+                    // Also set nextEpisodeInfo as fallback in case prefetch promote fails
+                    val nextEpisodeInfo = com.duckflix.lite.data.remote.dto.NextEpisodeResponse(
+                        hasNext = true,
+                        season = response.nextEpisode.season,
+                        episode = response.nextEpisode.episode,
+                        title = response.nextEpisode.title,
+                        inCurrentPack = true  // Prefetch means it's available
+                    )
+
                     _uiState.value = _uiState.value.copy(
                         prefetchJobId = response.jobId,
-                        prefetchNextEpisode = response.nextEpisode
+                        prefetchNextEpisode = response.nextEpisode,
+                        nextEpisodeInfo = nextEpisodeInfo  // Set fallback info
                     )
                 } else {
                     println("[Prefetch] No next episode available (series finale or error)")

@@ -4,6 +4,7 @@ import android.app.Application
 import com.duckflix.lite.data.remote.DuckFlixApi
 import com.duckflix.lite.utils.LoadingPhrasesCache
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,10 +17,29 @@ class DuckFlixApplication : Application() {
     @Inject
     lateinit var api: DuckFlixApi
 
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Global exception handler for uncaught coroutine exceptions
+    // This prevents app crashes from network errors during internet outages
+    private val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        println("[DuckFlixApp] Uncaught coroutine exception: ${throwable.javaClass.simpleName} - ${throwable.message}")
+        throwable.printStackTrace()
+        // Don't rethrow - let the app continue running
+    }
+
+    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
 
     override fun onCreate() {
         super.onCreate()
+
+        // Set global uncaught exception handler for non-coroutine threads
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            // Log the error but let the default handler decide if it's fatal
+            println("[DuckFlixApp] Uncaught exception on ${thread.name}: ${throwable.javaClass.simpleName} - ${throwable.message}")
+            throwable.printStackTrace()
+
+            // Let the default handler handle it (may crash for truly fatal errors)
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
 
         // Load cached phrases immediately (synchronous, fast)
         // This runs before Hilt injection completes, so phrases are ready instantly
