@@ -81,7 +81,11 @@ data class PlayerUiState(
     val showAudioPanel: Boolean = false,
     val showSubtitlePanel: Boolean = false,
     val isReportingBadLink: Boolean = false,
-    val displayQuality: String = "" // e.g., "2160p" from server
+    val displayQuality: String = "", // e.g., "2160p" from server
+    // Prefetch state for seamless auto-play
+    val prefetchJobId: String? = null,
+    val prefetchNextEpisode: com.duckflix.lite.data.remote.dto.PrefetchEpisodeInfo? = null,
+    val hasPrefetched: Boolean = false
 )
 
 @HiltViewModel
@@ -157,12 +161,25 @@ class VideoPlayerViewModel @Inject constructor(
                 delay(1000)
                 _player?.let { player ->
                     val currentPos = player.currentPosition
+                    val duration = player.duration.coerceAtLeast(0)
 
                     _uiState.value = _uiState.value.copy(
                         currentPosition = currentPos,
-                        duration = player.duration.coerceAtLeast(0),
+                        duration = duration,
                         bufferedPercentage = player.bufferedPercentage
                     )
+
+                    // Trigger prefetch at 75% for TV episodes
+                    if (contentType == "tv" &&
+                        duration > 0 &&
+                        !_uiState.value.hasPrefetched &&
+                        _uiState.value.autoPlayEnabled &&
+                        season != null && episode != null) {
+                        val progressPercent = (currentPos * 100 / duration).toInt()
+                        if (progressPercent >= 75) {
+                            triggerPrefetch()
+                        }
+                    }
                 }
             }
         }
@@ -734,6 +751,7 @@ class VideoPlayerViewModel @Inject constructor(
                         type = contentType,
                         title = contentTitle,
                         posterPath = posterUrl?.substringAfter("w500"), // Extract just the path
+                        logoPath = _uiState.value.logoUrl?.substringAfter("w500"), // Extract logo path
                         releaseDate = year,
                         position = player.currentPosition,
                         duration = player.duration,
@@ -768,6 +786,14 @@ class VideoPlayerViewModel @Inject constructor(
                 player.play()
             }
         }
+    }
+
+    fun play() {
+        _player?.play()
+    }
+
+    fun pause() {
+        _player?.pause()
     }
 
     fun seekForward() {
@@ -1044,7 +1070,8 @@ class VideoPlayerViewModel @Inject constructor(
                         )
                     } else {
                         // For sequential playback, get next episode
-                        val nextEpisode = api.getNextEpisode(tmdbId, season, episode)
+                        // Pass title for pack-check optimization (prevents server-side error log)
+                        val nextEpisode = api.getNextEpisode(tmdbId, season, episode, contentTitle)
                         _uiState.value = _uiState.value.copy(
                             nextEpisodeInfo = nextEpisode,
                             isLoadingNextContent = false
@@ -1071,6 +1098,33 @@ class VideoPlayerViewModel @Inject constructor(
     }
 
     private fun handleTVEpisodeEnded() {
+        // Check if we have a prefetch job ready
+        val prefetchEpisode = _uiState.value.prefetchNextEpisode
+        val prefetchJobId = _uiState.value.prefetchJobId
+
+        if (prefetchJobId != null && prefetchEpisode != null) {
+            // Try to use prefetched content for seamless playback
+            viewModelScope.launch {
+                val isReady = promotePrefetchJob()
+                if (isReady) {
+                    println("[AutoPlay] Using prefetched content for S${prefetchEpisode.season}E${prefetchEpisode.episode}")
+                    startAutoPlayCountdown {
+                        onAutoPlayNext?.invoke(prefetchEpisode.season, prefetchEpisode.episode)
+                    }
+                } else {
+                    // Prefetch not ready, fall back to normal flow
+                    println("[AutoPlay] Prefetch not ready, using normal auto-play flow")
+                    handleTVEpisodeEndedFallback()
+                }
+            }
+            return
+        }
+
+        // No prefetch available, use normal flow
+        handleTVEpisodeEndedFallback()
+    }
+
+    private fun handleTVEpisodeEndedFallback() {
         val nextEpisode = _uiState.value.nextEpisodeInfo
         if (nextEpisode == null || !nextEpisode.hasNext) {
             // In random mode, try to fetch a random episode on-the-fly if prefetch failed
@@ -1162,6 +1216,162 @@ class VideoPlayerViewModel @Inject constructor(
 
     fun dismissRandomEpisodeError() {
         _uiState.value = _uiState.value.copy(showRandomEpisodeError = false)
+    }
+
+    /**
+     * Trigger prefetch of next episode at 75% playback.
+     * Starts downloading next content in background for seamless auto-play.
+     */
+    private fun triggerPrefetch() {
+        if (_uiState.value.hasPrefetched) return
+        val currentSeason = season ?: return
+        val currentEpisode = episode ?: return
+
+        _uiState.value = _uiState.value.copy(hasPrefetched = true)
+
+        viewModelScope.launch {
+            try {
+                println("[Prefetch] Triggering prefetch for next episode after S${currentSeason}E${currentEpisode}")
+                val mode = if (isRandomPlayback) "random" else "sequential"
+                val request = com.duckflix.lite.data.remote.dto.PrefetchNextRequest(
+                    tmdbId = tmdbId,
+                    title = contentTitle,
+                    year = year,
+                    type = contentType,
+                    currentSeason = currentSeason,
+                    currentEpisode = currentEpisode,
+                    mode = mode
+                )
+                val response = api.prefetchNext(request)
+
+                if (response.hasNext && response.jobId != null) {
+                    println("[Prefetch] Started prefetch job ${response.jobId} for S${response.nextEpisode?.season}E${response.nextEpisode?.episode}")
+                    _uiState.value = _uiState.value.copy(
+                        prefetchJobId = response.jobId,
+                        prefetchNextEpisode = response.nextEpisode
+                    )
+                } else {
+                    println("[Prefetch] No next episode available (series finale or error)")
+                }
+            } catch (e: Exception) {
+                println("[Prefetch] Failed to prefetch: ${e.message}")
+                // Non-critical - auto-play will fall back to regular flow
+            }
+        }
+    }
+
+    /**
+     * Promote prefetch job when ready to play next episode.
+     * Returns true if promotion succeeded and playback can start immediately.
+     * Also re-seeds the autoplay pipeline for the next episode in the chain.
+     */
+    private suspend fun promotePrefetchJob(): Boolean {
+        val jobId = _uiState.value.prefetchJobId ?: return false
+
+        try {
+            println("[Prefetch] Promoting job $jobId")
+            val response = api.promotePrefetch(jobId)
+
+            if (response.success && response.status == "completed" && response.streamUrl != null) {
+                println("[Prefetch] Job ready! Stream URL available")
+
+                // Re-seed autoplay pipeline for the next episode in the chain
+                if (response.hasNext && response.nextEpisode != null) {
+                    println("[Prefetch] Chain continues: next is S${response.nextEpisode.season}E${response.nextEpisode.episode}")
+
+                    // Update nextEpisodeInfo for the autoplay UI ("Up Next: S1E5 - Title")
+                    val nextEpisodeInfo = com.duckflix.lite.data.remote.dto.NextEpisodeResponse(
+                        hasNext = true,
+                        season = response.nextEpisode.season,
+                        episode = response.nextEpisode.episode,
+                        title = response.nextEpisode.title,
+                        inCurrentPack = true  // Prefetched content is always available
+                    )
+
+                    _uiState.value = _uiState.value.copy(
+                        nextEpisodeInfo = nextEpisodeInfo,
+                        // Clear old prefetch state - will be replaced by new prefetch
+                        prefetchJobId = null,
+                        prefetchNextEpisode = null,
+                        hasPrefetched = false  // Allow new prefetch to trigger
+                    )
+
+                    // Trigger prefetch for the NEXT episode (the one after what we're about to play)
+                    // Use contentInfo from promote response to build the prefetch request
+                    val contentInfo = response.contentInfo
+                    if (contentInfo != null) {
+                        triggerChainPrefetch(
+                            tmdbId = contentInfo.tmdbId,
+                            title = contentInfo.title,
+                            year = contentInfo.year,
+                            type = contentInfo.type,
+                            currentSeason = contentInfo.season,
+                            currentEpisode = contentInfo.episode
+                        )
+                    }
+                } else {
+                    println("[Prefetch] No next episode after promoted content (series finale)")
+                    // Clear prefetch state but don't set nextEpisodeInfo - series is ending
+                    _uiState.value = _uiState.value.copy(
+                        nextEpisodeInfo = null,
+                        prefetchJobId = null,
+                        prefetchNextEpisode = null
+                    )
+                }
+
+                return true
+            } else {
+                println("[Prefetch] Job not ready: status=${response.status}, progress=${response.progress}")
+                return false
+            }
+        } catch (e: Exception) {
+            println("[Prefetch] Promote failed: ${e.message}")
+            return false
+        }
+    }
+
+    /**
+     * Trigger prefetch for the next episode in the autoplay chain.
+     * Called after promoting a prefetch job to keep the pipeline filled.
+     */
+    private fun triggerChainPrefetch(
+        tmdbId: Int,
+        title: String,
+        year: String?,
+        type: String,
+        currentSeason: Int,
+        currentEpisode: Int
+    ) {
+        viewModelScope.launch {
+            try {
+                println("[Prefetch] Triggering chain prefetch for next episode after S${currentSeason}E${currentEpisode}")
+                val mode = if (isRandomPlayback) "random" else "sequential"
+                val request = com.duckflix.lite.data.remote.dto.PrefetchNextRequest(
+                    tmdbId = tmdbId,
+                    title = title,
+                    year = year,
+                    type = type,
+                    currentSeason = currentSeason,
+                    currentEpisode = currentEpisode,
+                    mode = mode
+                )
+                val response = api.prefetchNext(request)
+
+                if (response.hasNext && response.jobId != null) {
+                    println("[Prefetch] Chain prefetch started: job ${response.jobId} for S${response.nextEpisode?.season}E${response.nextEpisode?.episode}")
+                    _uiState.value = _uiState.value.copy(
+                        prefetchJobId = response.jobId,
+                        prefetchNextEpisode = response.nextEpisode,
+                        hasPrefetched = true
+                    )
+                } else {
+                    println("[Prefetch] No next episode to prefetch (chain ends)")
+                }
+            } catch (e: Exception) {
+                println("[Prefetch] Chain prefetch failed: ${e.message}")
+                // Non-critical - autoplay will fall back to regular flow
+            }
+        }
     }
 
     fun selectRecommendation(rec: com.duckflix.lite.data.remote.dto.MovieRecommendationItem) {

@@ -187,13 +187,24 @@ fun VideoPlayerScreen(
                     when (keyEvent.key) {
                         Key.Back, Key.Escape -> {
                             // Back button handling priority:
-                            // 1. If a panel is open, let the panel handle it (return false)
+                            // 1. If a panel is open, dismiss the panel
                             // 2. If panel was just dismissed OR controls are visible, hide controls
                             // 3. If controls are hidden (and no recent panel dismissal), exit the player
                             when {
-                                uiState.showVideoIssuesPanel || uiState.showAudioPanel || uiState.showSubtitlePanel -> {
-                                    // Panel is open - let it handle the back press
-                                    false
+                                uiState.showVideoIssuesPanel -> {
+                                    viewModel.setVideoIssuesPanelVisible(false)
+                                    panelJustDismissed = true
+                                    true
+                                }
+                                uiState.showAudioPanel -> {
+                                    viewModel.toggleAudioPanel()
+                                    panelJustDismissed = true
+                                    true
+                                }
+                                uiState.showSubtitlePanel -> {
+                                    viewModel.toggleSubtitlePanel()
+                                    panelJustDismissed = true
+                                    true
                                 }
                                 uiState.showControls || panelJustDismissed -> {
                                     // Controls visible OR panel just closed - hide controls (don't exit)
@@ -224,6 +235,27 @@ fun VideoPlayerScreen(
                             } else {
                                 false // Let controls handle navigation
                             }
+                        }
+                        // Media remote control buttons
+                        Key.MediaPlayPause -> {
+                            viewModel.togglePlayPause()
+                            true
+                        }
+                        Key.MediaPlay -> {
+                            viewModel.play()
+                            true
+                        }
+                        Key.MediaPause -> {
+                            viewModel.pause()
+                            true
+                        }
+                        Key.MediaFastForward -> {
+                            viewModel.seekForward()
+                            true
+                        }
+                        Key.MediaRewind -> {
+                            viewModel.seekBackward()
+                            true
                         }
                         else -> false
                     }
@@ -1253,10 +1285,18 @@ private fun SeriesCompleteOverlay(
     onDismiss: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
+    val focusRequester = remember { FocusRequester() }
+
+    // Request focus when overlay appears
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.9f)),
+            .background(Color.Black.copy(alpha = 0.9f))
+            .focusable(), // Trap focus within overlay
         contentAlignment = Alignment.Center
     ) {
         androidx.compose.material3.Surface(
@@ -1279,7 +1319,10 @@ private fun SeriesCompleteOverlay(
                     style = MaterialTheme.typography.bodyLarge
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    com.duckflix.lite.ui.components.FocusableButton(onClick = onNavigateBack) {
+                    com.duckflix.lite.ui.components.FocusableButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.focusRequester(focusRequester)
+                    ) {
                         Text("Back to Series")
                     }
                     com.duckflix.lite.ui.components.FocusableButton(onClick = onDismiss) {
@@ -1295,10 +1338,18 @@ private fun SeriesCompleteOverlay(
 private fun RandomEpisodeErrorOverlay(
     onNavigateBack: () -> Unit
 ) {
+    val focusRequester = remember { FocusRequester() }
+
+    // Request focus when overlay appears
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.9f)),
+            .background(Color.Black.copy(alpha = 0.9f))
+            .focusable(), // Trap focus within overlay
         contentAlignment = Alignment.Center
     ) {
         androidx.compose.material3.Surface(
@@ -1320,7 +1371,10 @@ private fun RandomEpisodeErrorOverlay(
                     text = "Please try again later",
                     style = MaterialTheme.typography.bodyLarge
                 )
-                com.duckflix.lite.ui.components.FocusableButton(onClick = onNavigateBack) {
+                com.duckflix.lite.ui.components.FocusableButton(
+                    onClick = onNavigateBack,
+                    modifier = Modifier.focusRequester(focusRequester)
+                ) {
                     Text("Home")
                 }
             }

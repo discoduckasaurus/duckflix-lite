@@ -244,6 +244,7 @@ data class WatchProgressSyncRequest(
     val type: String,
     val title: String,
     val posterPath: String?,
+    val logoPath: String? = null,  // Title logo for loading screen
     val releaseDate: String?,
     val position: Long,
     val duration: Long,
@@ -257,6 +258,7 @@ data class WatchlistSyncRequest(
     val type: String,
     val title: String,
     val posterPath: String?,
+    val logoPath: String? = null,  // Title logo for loading screen
     val releaseDate: String?,
     val voteAverage: Double?
 )
@@ -337,3 +339,52 @@ data class PersonCreditItem(
             }
         }
 }
+
+// Prefetch DTOs for seamless auto-play
+@JsonClass(generateAdapter = true)
+data class PrefetchNextRequest(
+    val tmdbId: Int,
+    val title: String,
+    val year: String?,
+    val type: String,
+    val currentSeason: Int,
+    val currentEpisode: Int,
+    val mode: String = "sequential"  // "sequential" or "random"
+)
+
+@JsonClass(generateAdapter = true)
+data class PrefetchNextResponse(
+    val hasNext: Boolean,
+    val jobId: String?,
+    val nextEpisode: PrefetchEpisodeInfo?
+)
+
+@JsonClass(generateAdapter = true)
+data class PrefetchEpisodeInfo(
+    val season: Int,
+    val episode: Int,
+    val title: String?
+)
+
+@JsonClass(generateAdapter = true)
+data class PrefetchPromoteResponse(
+    val success: Boolean,
+    val status: String,  // "searching", "downloading", "completed", "failed"
+    val streamUrl: String?,
+    val progress: Int?,
+    val message: String?,
+    // New fields for autoplay chain continuation
+    val hasNext: Boolean = false,  // Whether there's a next episode after the promoted one
+    val nextEpisode: PrefetchEpisodeInfo? = null,  // Info for the next episode (for autoplay UI)
+    val contentInfo: PromotedContentInfo? = null  // Info about the promoted episode (for next prefetch)
+)
+
+@JsonClass(generateAdapter = true)
+data class PromotedContentInfo(
+    val tmdbId: Int,
+    val title: String,
+    val year: String?,
+    val type: String,
+    val season: Int,
+    val episode: Int
+)

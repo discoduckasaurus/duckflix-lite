@@ -173,7 +173,8 @@ interface DuckFlixApi {
     suspend fun getNextEpisode(
         @Path("tmdbId") tmdbId: Int,
         @Path("season") season: Int,
-        @Path("episode") episode: Int
+        @Path("episode") episode: Int,
+        @Query("title") title: String? = null  // Optional: enables pack-check optimization
     ): com.duckflix.lite.data.remote.dto.NextEpisodeResponse
 
     // Prefetch endpoints for seamless auto-play
