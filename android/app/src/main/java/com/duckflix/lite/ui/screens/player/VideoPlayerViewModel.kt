@@ -154,9 +154,30 @@ class VideoPlayerViewModel @Inject constructor(
         initializePlayer()
         loadVideoUrl()
         startPositionUpdates()
+        retryLoadingPhrasesIfNeeded()
 
         // NEVER fetch from TMDB - ONLY use server-provided logoUrl
         // If logoUrl is null, the loading screen will fallback to posterUrl automatically
+    }
+
+    /**
+     * Retry fetching loading phrases if the initial fetch on app launch failed.
+     * This ensures phrases are available for the loading screen.
+     */
+    private fun retryLoadingPhrasesIfNeeded() {
+        if (!com.duckflix.lite.utils.LoadingPhrasesCache.needsRetry()) return
+
+        viewModelScope.launch {
+            try {
+                println("[VideoPlayer] Retrying loading phrases fetch...")
+                val response = api.getLoadingPhrases()
+                com.duckflix.lite.utils.LoadingPhrasesCache.setPhrases(response.phrasesA, response.phrasesB)
+                println("[VideoPlayer] Loading phrases retry succeeded: ${response.phrasesA.size} A, ${response.phrasesB.size} B")
+            } catch (e: Exception) {
+                println("[VideoPlayer] Loading phrases retry failed: ${e.message}")
+                // Non-critical - will use defaults/cache
+            }
+        }
     }
 
     private fun startPositionUpdates() {

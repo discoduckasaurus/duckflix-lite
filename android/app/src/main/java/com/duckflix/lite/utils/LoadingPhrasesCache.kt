@@ -6,6 +6,7 @@ import android.content.SharedPreferences
 /**
  * Singleton cache for loading phrases with persistent storage.
  * Loads cached phrases synchronously on startup, then refreshes from API in background.
+ * If initial fetch fails, retries on next content load.
  */
 object LoadingPhrasesCache {
     private const val PREFS_NAME = "loading_phrases_cache"
@@ -20,6 +21,11 @@ object LoadingPhrasesCache {
         private set
 
     private var prefs: SharedPreferences? = null
+
+    // Track whether we've successfully fetched from API this session
+    @Volatile
+    var hasFetchedFromApi: Boolean = false
+        private set
 
     /**
      * Initialize cache from persistent storage. Call this early in Application.onCreate()
@@ -48,6 +54,7 @@ object LoadingPhrasesCache {
     fun setPhrases(phrasesA: List<String>, phrasesB: List<String>) {
         this.phrasesA = phrasesA
         this.phrasesB = phrasesB
+        this.hasFetchedFromApi = true
 
         // Persist to SharedPreferences
         prefs?.edit()?.apply {
@@ -57,6 +64,11 @@ object LoadingPhrasesCache {
         }
         println("[LoadingPhrases] Cached ${phrasesA.size} A, ${phrasesB.size} B phrases to storage")
     }
+
+    /**
+     * Check if we need to retry fetching phrases from API
+     */
+    fun needsRetry(): Boolean = !hasFetchedFromApi
 
     fun setDefaults() {
         phrasesA = listOf(
