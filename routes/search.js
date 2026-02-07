@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const { authenticateToken } = require('../middleware/auth');
 const { getSearchCriteria, updateSearchCriteria } = require('../services/zurg-search');
+const { db } = require('../db/init');
 const logger = require('../utils/logger');
 
 const router = express.Router();
@@ -527,14 +528,43 @@ router.get('/collections/providers', async (req, res) => {
       timeout: TMDB_TIMEOUT
     });
 
-    // Format and sort by priority (popularity)
-    const providers = response.data.results
+    // Format providers from TMDB
+    const tmdbProviders = response.data.results
       .map(p => ({
         id: p.provider_id,
         name: p.provider_name,
         logo: p.logo_path ? `https://image.tmdb.org/t/p/w92${p.logo_path}` : null,
         priority: p.display_priority
-      }))
+      }));
+
+    // Apply admin metadata: filter disabled, apply custom names/logos/sort order
+    let metadata = [];
+    try {
+      metadata = db.prepare(`
+        SELECT provider_id, custom_display_name, custom_logo_url, is_enabled, sort_order
+        FROM provider_metadata
+      `).all();
+    } catch (e) {
+      // Table may not exist yet on first run
+    }
+    const metaMap = new Map(metadata.map(m => [m.provider_id, m]));
+
+    const providers = tmdbProviders
+      .filter(p => {
+        const meta = metaMap.get(p.id);
+        // If no metadata row exists, provider is visible (backwards compatible)
+        if (!meta) return true;
+        return !!meta.is_enabled;
+      })
+      .map(p => {
+        const meta = metaMap.get(p.id);
+        return {
+          id: p.id,
+          name: meta?.custom_display_name || p.name,
+          logo: meta?.custom_logo_url || p.logo,
+          priority: meta?.sort_order != null && meta.sort_order !== 999 ? meta.sort_order : p.priority
+        };
+      })
       .sort((a, b) => a.priority - b.priority);
 
     const responseData = { providers, region };

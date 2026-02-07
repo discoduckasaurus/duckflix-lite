@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DuckFlix Lite - Admin Dashboard</title>
-    <link rel="stylesheet" href="/static/admin/styles.css?v=13">
+    <link rel="stylesheet" href="/static/admin/styles.css?v=15">
 </head>
 <body>
     <!-- Login Screen -->
@@ -40,6 +40,7 @@
                 <li><a href="#" data-view="health">Service Health</a></li>
                 <li><a href="#" data-view="loading-phrases">Loading Phrases</a></li>
                 <li><a href="#" data-view="livetv">Live TV</a></li>
+                <li><a href="#" data-view="providers">Providers</a></li>
             </ul>
             <button id="logout-btn" class="btn btn-secondary">Logout</button>
         </nav>
@@ -108,7 +109,7 @@
                     <h1>Live TV Channels</h1>
                     <div class="view-header-actions">
                         <button class="btn btn-secondary" id="seed-logos-btn">Auto-Match Logos</button>
-                        <button class="btn btn-secondary" id="reset-sources-btn" title="Reset all channels back to DaddyLive primary">Reset Sources</button>
+                        <button class="btn btn-secondary" id="reset-sources-btn" title="Reset all channels back to primary (NTV/DaddyLive)">Reset Sources</button>
                         <button class="btn btn-primary" id="save-channels-btn">Save All Changes</button>
                     </div>
                 </div>
@@ -119,8 +120,9 @@
                             <option value="all">All Sources</option>
                             <option value="tvpass">TVPass</option>
                             <option value="cabernet">DaddyLive-only</option>
+                            <option value="has-ntv">Has NTV</option>
                             <option value="has-daddylive">Has DaddyLive</option>
-                            <option value="failover">On Failover (not DL)</option>
+                            <option value="failover">On Failover (not primary)</option>
                             <option value="special">Special</option>
                         </select>
                         <select id="channel-status-filter">
@@ -135,6 +137,37 @@
                     </div>
                 </div>
                 <div id="channels-table-container"></div>
+            </div>
+
+            <!-- Providers View -->
+            <div id="view-providers" class="view">
+                <div id="new-providers-banner" class="alert-banner" style="display:none">
+                    <div class="alert-banner-content">
+                        <strong>New providers detected!</strong>
+                        <span id="new-providers-message"></span>
+                    </div>
+                    <button class="alert-banner-dismiss" onclick="dismissProviderBanner()">&times;</button>
+                </div>
+                <div class="view-header">
+                    <h1>Streaming Providers</h1>
+                    <div class="view-header-actions">
+                        <button class="btn btn-primary" id="save-providers-btn">Save All Changes</button>
+                    </div>
+                </div>
+                <div class="providers-toolbar">
+                    <input type="text" id="provider-search" placeholder="Search providers..." class="provider-search-input">
+                    <div class="providers-filters">
+                        <select id="provider-status-filter">
+                            <option value="all">All Status</option>
+                            <option value="enabled">Enabled</option>
+                            <option value="disabled">Disabled</option>
+                        </select>
+                    </div>
+                    <div class="providers-stats">
+                        <span id="provider-stats"></span>
+                    </div>
+                </div>
+                <div id="providers-table-container"></div>
             </div>
         </main>
     </div>
@@ -184,9 +217,10 @@
         </div>
     </div>
 
-    <!-- Hidden file input for logo uploads -->
+    <!-- Hidden file inputs for logo uploads -->
     <input type="file" id="logo-upload-input" accept="image/*" style="display:none">
+    <input type="file" id="provider-logo-upload-input" accept="image/*" style="display:none">
 
-    <script src="/static/admin/app.js?v=13"></script>
+    <script src="/static/admin/app.js?v=15"></script>
 </body>
 </html>

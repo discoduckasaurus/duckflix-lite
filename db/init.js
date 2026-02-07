@@ -335,6 +335,19 @@ function initDatabase() {
     logger.warn('Failed to pre-seed channel_metadata:', e.message);
   }
 
+  // TMDB Provider metadata (admin-managed display name, enabled, sort order)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS provider_metadata (
+      provider_id INTEGER PRIMARY KEY,
+      custom_display_name TEXT,
+      custom_logo_url TEXT,
+      is_enabled BOOLEAN DEFAULT 1,
+      sort_order INTEGER DEFAULT 999,
+      notes TEXT,
+      updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
   // Live TV: DVR recordings (FUTURE - Phase 5)
   db.exec(`
     CREATE TABLE IF NOT EXISTS dvr_recordings (

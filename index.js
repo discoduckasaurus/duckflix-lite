@@ -12,6 +12,7 @@ const authRoutes = require('./routes/auth');
 const adminRoutes = require('./routes/admin');
 const adminDashboardRoutes = require('./routes/admin-dashboard');
 const adminChannelRoutes = require('./routes/admin-channels');
+const adminProviderRoutes = require('./routes/admin-providers');
 const epgRoutes = require('./routes/epg');
 const searchRoutes = require('./routes/search');
 const publicRoutes = require('./routes/public-routes');
@@ -62,6 +63,7 @@ app.use('/api/public', publicRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin', adminDashboardRoutes);
 app.use('/api/admin', adminChannelRoutes);
+app.use('/api/admin', adminProviderRoutes);
 app.use('/api/epg', epgRoutes);
 app.use('/api/m3u', epgRoutes); // M3U uses same routes as EPG
 app.use('/api/search', searchRoutes);

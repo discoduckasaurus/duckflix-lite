@@ -440,10 +440,12 @@ function getFilteredChannels() {
         }
 
         // Source filter
-        if (sourceFilter === 'has-daddylive') {
+        if (sourceFilter === 'has-ntv') {
+            if (!ch.hasNTV) return false;
+        } else if (sourceFilter === 'has-daddylive') {
             if (!ch.hasDaddyLive) return false;
         } else if (sourceFilter === 'failover') {
-            if (!ch.hasDaddyLive || ch.activeSource === 'daddylive' || !ch.activeSource) return false;
+            if (!(ch.hasNTV || ch.hasDaddyLive) || ch.activeSource === 'ntv' || ch.activeSource === 'daddylive' || !ch.activeSource) return false;
         } else if (sourceFilter !== 'all' && ch.source !== sourceFilter) {
             return false;
         }
@@ -516,16 +518,20 @@ function renderChannelList() {
 
         // Active source (what's actually streaming right now)
         const activeSource = ch.activeSource;
-        const activeLabel = activeSource === 'daddylive' ? 'DL'
+        const activeLabel = activeSource === 'ntv' ? 'NTV'
+            : activeSource === 'daddylive' ? 'DL'
             : activeSource === 'tvpass' ? 'TVP'
             : activeSource === 'backup' ? 'BKP'
             : null;
-        const isFailover = ch.hasDaddyLive && activeSource && activeSource !== 'daddylive';
+        // Determine the expected primary source for this channel
+        const expectedPrimary = ch.hasNTV ? 'ntv' : ch.hasDaddyLive ? 'daddylive' : null;
+        const isFailover = expectedPrimary && activeSource && activeSource !== expectedPrimary;
 
-        // Primary source config: DaddyLive if matched, otherwise original source
-        const primarySource = ch.hasDaddyLive ? 'daddylive' : ch.source;
+        // Primary source config: NTV > DaddyLive > original source
+        const primarySource = ch.hasNTV ? 'ntv' : ch.hasDaddyLive ? 'daddylive' : ch.source;
         const primaryClass = `source-${primarySource}`;
-        const primaryLabel = primarySource === 'daddylive' ? 'DaddyLive'
+        const primaryLabel = primarySource === 'ntv' ? 'NTV'
+            : primarySource === 'daddylive' ? 'DaddyLive'
             : primarySource === 'cabernet' ? 'DaddyLive'
             : primarySource;
 
@@ -535,6 +541,7 @@ function renderChannelList() {
             const activeClass = isFailover ? 'stream-badge-failover' : 'stream-badge-active';
             badges.push(`<span class="stream-badge ${activeClass}" title="Currently streaming via ${activeSource}">${activeLabel}</span>`);
         }
+        if (ch.hasNTV) badges.push('<span class="stream-badge stream-badge-ntv" title="Has NTV stream">NTV</span>');
         if (ch.hasDaddyLive && ch.source === 'tvpass') {
             badges.push('<span class="stream-badge stream-badge-tvpass" title="TVPass fallback">TVPass</span>');
         }
@@ -601,12 +608,13 @@ function updateChannelStats() {
     }).length;
     const tvpass = allAdminChannels.filter(ch => ch.source === 'tvpass').length;
     const daddyliveOnly = allAdminChannels.filter(ch => ch.source === 'cabernet').length;
+    const withNTV = allAdminChannels.filter(ch => ch.hasNTV).length;
     const withDL = allAdminChannels.filter(ch => ch.hasDaddyLive).length;
     const newCount = allAdminChannels.filter(ch => !ch.hasMetadata).length;
 
     const statsEl = document.getElementById('channel-stats');
     if (statsEl) {
-        statsEl.innerHTML = `${enabled}/${total} enabled | ${tvpass} TVPass | ${daddyliveOnly} DaddyLive-only | ${withDL} with DL primary` +
+        statsEl.innerHTML = `${enabled}/${total} enabled | ${withNTV} NTV | ${withDL} DL | ${tvpass} TVPass | ${daddyliveOnly} DL-only` +
             (newCount > 0 ? ` | <strong style="color:var(--warning-color)">${newCount} new</strong>` : '') +
             (channelChanges.size > 0 ? ` | <strong style="color:var(--primary-color)">${channelChanges.size} unsaved</strong>` : '');
     }
@@ -848,6 +856,364 @@ async function resetAllSources() {
     }
 }
 
+// =========================================
+// Provider Management
+// =========================================
+let allProviders = [];
+let providerChanges = new Map(); // providerId -> { displayName, isEnabled, sortOrder }
+let providerLogoUploadTarget = null;
+let draggedProviderId = null;
+let providerBannerDismissed = false;
+
+async function loadProviders() {
+    try {
+        const data = await apiRequest('/api/admin/providers');
+        allProviders = data.providers || [];
+        providerChanges.clear();
+        renderProviderList();
+        updateProviderStats();
+
+        // Show banner if new providers were auto-disabled
+        if (data.newCount > 0 && !providerBannerDismissed) {
+            const banner = document.getElementById('new-providers-banner');
+            const msg = document.getElementById('new-providers-message');
+            msg.textContent = `${data.newCount} new provider(s) were added and auto-disabled. Review and enable them below.`;
+            banner.style.display = 'flex';
+        }
+    } catch (error) {
+        console.error('Failed to load providers:', error);
+        document.getElementById('providers-table-container').innerHTML =
+            `<p class="error">Failed to load providers: ${error.message}</p>`;
+    }
+}
+
+function dismissProviderBanner() {
+    document.getElementById('new-providers-banner').style.display = 'none';
+    providerBannerDismissed = true;
+}
+
+function getFilteredProviders() {
+    const search = (document.getElementById('provider-search')?.value || '').toLowerCase();
+    const statusFilter = document.getElementById('provider-status-filter')?.value || 'all';
+
+    return allProviders.filter(p => {
+        if (search) {
+            const haystack = `${p.displayName} ${p.name} ${p.id}`.toLowerCase();
+            if (!haystack.includes(search)) return false;
+        }
+
+        const change = providerChanges.get(p.id);
+        const isEnabled = change?.isEnabled !== undefined ? change.isEnabled : p.isEnabled;
+        if (statusFilter === 'enabled' && !isEnabled) return false;
+        if (statusFilter === 'disabled' && isEnabled) return false;
+
+        return true;
+    }).sort((a, b) => {
+        const aChange = providerChanges.get(a.id);
+        const bChange = providerChanges.get(b.id);
+        const aEnabled = aChange?.isEnabled !== undefined ? aChange.isEnabled : a.isEnabled;
+        const bEnabled = bChange?.isEnabled !== undefined ? bChange.isEnabled : b.isEnabled;
+        if (aEnabled && !bEnabled) return -1;
+        if (!aEnabled && bEnabled) return 1;
+        const aOrder = aChange?.sortOrder ?? a.sortOrder;
+        const bOrder = bChange?.sortOrder ?? b.sortOrder;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.displayName || '').localeCompare(b.displayName || '');
+    });
+}
+
+function renderProviderList() {
+    const filtered = getFilteredProviders();
+    const container = document.getElementById('providers-table-container');
+
+    if (filtered.length === 0) {
+        container.innerHTML = '<p style="padding:2rem;color:var(--text-secondary);">No providers match your filters.</p>';
+        return;
+    }
+
+    // Build overall position map from ALL enabled providers
+    const allEnabled = allProviders.filter(p => {
+        const change = providerChanges.get(p.id);
+        return change?.isEnabled !== undefined ? change.isEnabled : p.isEnabled;
+    }).sort((a, b) => {
+        const aOrder = providerChanges.get(a.id)?.sortOrder ?? a.sortOrder;
+        const bOrder = providerChanges.get(b.id)?.sortOrder ?? b.sortOrder;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.displayName || '').localeCompare(b.displayName || '');
+    });
+    const overallPositionMap = new Map();
+    allEnabled.forEach((p, i) => overallPositionMap.set(p.id, i + 1));
+
+    const headerHtml = `
+        <div class="provider-header-row">
+            <span></span>
+            <span>On</span>
+            <span>Logo</span>
+            <span>Provider</span>
+            <span>#</span>
+        </div>
+    `;
+
+    const rowsHtml = filtered.map((p) => {
+        const change = providerChanges.get(p.id);
+        const isEnabled = change?.isEnabled !== undefined ? change.isEnabled : p.isEnabled;
+        const position = isEnabled ? overallPositionMap.get(p.id) : null;
+        const displayName = change?.displayName !== undefined ? change.displayName : p.displayName;
+        const disabledClass = !isEnabled ? 'disabled-row' : '';
+        const newClass = p.isNew ? 'new-row' : '';
+
+        const logoSrc = p.logo || p.tmdbLogo;
+        const logoHtml = logoSrc
+            ? `<img class="provider-logo" src="${logoSrc}" alt="" title="Click to change logo" onclick="triggerProviderLogoUpload(${p.id})" onerror="this.outerHTML='<div class=\\'provider-logo-placeholder\\' onclick=\\'triggerProviderLogoUpload(${p.id})\\'>+</div>'">`
+            : `<div class="provider-logo-placeholder" onclick="triggerProviderLogoUpload(${p.id})" title="Click to upload logo">+</div>`;
+
+        const positionHtml = isEnabled
+            ? `<input type="number" class="provider-order-input" value="${position}" min="1" onchange="onProviderReorder(${p.id}, parseInt(this.value))">`
+            : `<span class="provider-order-disabled">-</span>`;
+
+        return `
+            <div class="provider-row ${disabledClass} ${newClass}" draggable="true"
+                data-provider-id="${p.id}"
+                ondragstart="onProviderDragStart(event, ${p.id})"
+                ondragover="onProviderDragOver(event)"
+                ondrop="onProviderDrop(event, ${p.id})"
+                ondragend="onProviderDragEnd(event)">
+                <div class="drag-handle" title="Drag to reorder">&#x2630;</div>
+                <input type="checkbox" class="provider-enable-toggle"
+                    ${isEnabled ? 'checked' : ''}
+                    onchange="onProviderToggle(${p.id}, this.checked)">
+                <div class="provider-logo-cell">${logoHtml}</div>
+                <div class="provider-info">
+                    <input type="text" class="provider-display-name"
+                        value="${escapeHtml(displayName)}"
+                        data-original="${escapeHtml(p.name)}"
+                        onchange="onProviderRename(${p.id}, this.value)">
+                    <div class="provider-meta">
+                        <span style="color:#94a3b8">ID: ${p.id}</span>
+                    </div>
+                </div>
+                ${positionHtml}
+            </div>
+        `;
+    }).join('');
+
+    const scrollEl = container.querySelector('.provider-list-container');
+    const scrollTop = scrollEl ? scrollEl.scrollTop : 0;
+    container.innerHTML = `<div class="provider-list-container">${headerHtml}${rowsHtml}</div>`;
+    const newScrollEl = container.querySelector('.provider-list-container');
+    if (newScrollEl) newScrollEl.scrollTop = scrollTop;
+}
+
+function updateProviderStats() {
+    const total = allProviders.length;
+    const enabled = allProviders.filter(p => {
+        const change = providerChanges.get(p.id);
+        return change?.isEnabled !== undefined ? change.isEnabled : p.isEnabled;
+    }).length;
+    const newCount = allProviders.filter(p => p.isNew).length;
+
+    const statsEl = document.getElementById('provider-stats');
+    if (statsEl) {
+        statsEl.innerHTML = `${enabled}/${total} enabled` +
+            (newCount > 0 ? ` | <strong style="color:var(--warning-color)">${newCount} new</strong>` : '') +
+            (providerChanges.size > 0 ? ` | <strong style="color:var(--primary-color)">${providerChanges.size} unsaved</strong>` : '');
+    }
+}
+
+function onProviderToggle(providerId, enabled) {
+    const existing = providerChanges.get(providerId) || {};
+    providerChanges.set(providerId, { ...existing, isEnabled: enabled });
+    renderProviderList();
+    updateProviderStats();
+}
+
+function onProviderRename(providerId, newName) {
+    const existing = providerChanges.get(providerId) || {};
+    providerChanges.set(providerId, { ...existing, displayName: newName });
+    updateProviderStats();
+}
+
+function getAllEnabledProvidersSorted() {
+    return allProviders.filter(p => {
+        const change = providerChanges.get(p.id);
+        return change?.isEnabled !== undefined ? change.isEnabled : p.isEnabled;
+    }).sort((a, b) => {
+        const aOrder = providerChanges.get(a.id)?.sortOrder ?? a.sortOrder;
+        const bOrder = providerChanges.get(b.id)?.sortOrder ?? b.sortOrder;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return (a.displayName || '').localeCompare(b.displayName || '');
+    });
+}
+
+function moveProviderToPosition(providerId, targetPos) {
+    const allEnabled = getAllEnabledProvidersSorted();
+    const fromIdx = allEnabled.findIndex(p => p.id === providerId);
+    if (fromIdx === -1) return;
+
+    const toIdx = Math.max(0, Math.min(allEnabled.length - 1, targetPos - 1));
+    if (fromIdx === toIdx) return;
+
+    const [moved] = allEnabled.splice(fromIdx, 1);
+    allEnabled.splice(toIdx, 0, moved);
+
+    allEnabled.forEach((p, i) => {
+        const newOrder = i + 1;
+        const orig = allProviders.find(op => op.id === p.id);
+        if (orig && orig.sortOrder !== newOrder) {
+            const existing = providerChanges.get(p.id) || {};
+            providerChanges.set(p.id, { ...existing, sortOrder: newOrder });
+            orig.sortOrder = newOrder;
+        }
+    });
+
+    renderProviderList();
+    updateProviderStats();
+}
+
+function onProviderReorder(providerId, newPosition) {
+    moveProviderToPosition(providerId, newPosition);
+}
+
+// Provider Drag and Drop
+function onProviderDragStart(e, providerId) {
+    draggedProviderId = providerId;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(providerId));
+    setTimeout(() => {
+        const row = e.target.closest('.provider-row');
+        if (row) row.classList.add('dragging');
+    }, 0);
+}
+
+function onProviderDragOver(e) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+
+    const scrollEl = document.querySelector('.provider-list-container');
+    if (scrollEl) {
+        const rect = scrollEl.getBoundingClientRect();
+        const edgeZone = 60;
+        const scrollSpeed = 12;
+        if (e.clientY < rect.top + edgeZone) {
+            scrollEl.scrollTop -= scrollSpeed;
+        } else if (e.clientY > rect.bottom - edgeZone) {
+            scrollEl.scrollTop += scrollSpeed;
+        }
+    }
+
+    const row = e.target.closest('.provider-row');
+    if (!row || parseInt(row.dataset.providerId) === draggedProviderId) return;
+
+    document.querySelectorAll('.provider-row.drag-over-above, .provider-row.drag-over-below')
+        .forEach(el => el.classList.remove('drag-over-above', 'drag-over-below'));
+
+    const rect = row.getBoundingClientRect();
+    if (e.clientY < rect.top + rect.height / 2) {
+        row.classList.add('drag-over-above');
+    } else {
+        row.classList.add('drag-over-below');
+    }
+}
+
+function onProviderDrop(e, targetProviderId) {
+    e.preventDefault();
+    if (!draggedProviderId || draggedProviderId === targetProviderId) {
+        onProviderDragEnd(e);
+        return;
+    }
+
+    const allEnabled = getAllEnabledProvidersSorted();
+    const fromIdx = allEnabled.findIndex(p => p.id === draggedProviderId);
+    const toIdx = allEnabled.findIndex(p => p.id === targetProviderId);
+
+    if (fromIdx === -1 || toIdx === -1) {
+        onProviderDragEnd(e);
+        return;
+    }
+
+    const row = e.target.closest('.provider-row');
+    const rect = row.getBoundingClientRect();
+    const insertBelow = e.clientY > rect.top + rect.height / 2;
+    let targetPosition = insertBelow ? toIdx + 2 : toIdx + 1;
+    if (fromIdx < toIdx) targetPosition--;
+
+    moveProviderToPosition(draggedProviderId, targetPosition);
+    onProviderDragEnd(e);
+}
+
+function onProviderDragEnd(e) {
+    draggedProviderId = null;
+    document.querySelectorAll('.provider-row.dragging, .provider-row.drag-over-above, .provider-row.drag-over-below')
+        .forEach(el => el.classList.remove('dragging', 'drag-over-above', 'drag-over-below'));
+}
+
+function triggerProviderLogoUpload(providerId) {
+    providerLogoUploadTarget = providerId;
+    document.getElementById('provider-logo-upload-input').click();
+}
+
+async function handleProviderLogoUpload(file) {
+    if (!providerLogoUploadTarget || !file) return;
+
+    const providerId = providerLogoUploadTarget;
+    providerLogoUploadTarget = null;
+
+    try {
+        const formData = new FormData();
+        formData.append('logo', file);
+
+        const token = localStorage.getItem(TOKEN_KEY);
+        const response = await fetch(`${API_BASE}/api/admin/providers/${encodeURIComponent(providerId)}/logo`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+        });
+
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: 'Upload failed' }));
+            throw new Error(err.error);
+        }
+
+        const data = await response.json();
+        const p = allProviders.find(pr => pr.id === providerId);
+        if (p) p.logo = data.logoUrl + '?t=' + Date.now();
+        renderProviderList();
+        showToast('Provider logo uploaded!', 'success');
+    } catch (error) {
+        showToast('Logo upload failed: ' + error.message, 'error');
+    }
+}
+
+async function saveAllProviderChanges() {
+    if (providerChanges.size === 0) {
+        showToast('No changes to save', 'success');
+        return;
+    }
+
+    try {
+        const providers = [];
+        for (const [id, changes] of providerChanges) {
+            const original = allProviders.find(p => p.id === id) || {};
+            providers.push({
+                id,
+                displayName: changes.displayName !== undefined ? changes.displayName : original.displayName,
+                isEnabled: changes.isEnabled !== undefined ? changes.isEnabled : original.isEnabled,
+                sortOrder: changes.sortOrder !== undefined ? changes.sortOrder : original.sortOrder
+            });
+        }
+
+        await apiRequest('/api/admin/providers/batch', {
+            method: 'PUT',
+            body: JSON.stringify({ providers })
+        });
+
+        showToast(`Saved ${providers.length} provider changes!`, 'success');
+        await loadProviders();
+    } catch (error) {
+        showToast('Save failed: ' + error.message, 'error');
+    }
+}
+
 function showToast(message, type = 'success') {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
@@ -913,6 +1279,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
                 case 'livetv':
                     loadLiveTVChannels();
+                    break;
+                case 'providers':
+                    loadProviders();
                     break;
             }
         });
@@ -1031,7 +1400,31 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('logo-upload-input').addEventListener('change', (e) => {
         if (e.target.files[0]) {
             handleLogoUpload(e.target.files[0]);
-            e.target.value = ''; // Reset so same file can be re-selected
+            e.target.value = '';
+        }
+    });
+
+    // Provider handlers
+    document.getElementById('save-providers-btn').addEventListener('click', saveAllProviderChanges);
+
+    let providerSearchTimeout;
+    document.getElementById('provider-search').addEventListener('input', () => {
+        clearTimeout(providerSearchTimeout);
+        providerSearchTimeout = setTimeout(() => {
+            renderProviderList();
+            updateProviderStats();
+        }, 200);
+    });
+
+    document.getElementById('provider-status-filter').addEventListener('change', () => {
+        renderProviderList();
+        updateProviderStats();
+    });
+
+    document.getElementById('provider-logo-upload-input').addEventListener('change', (e) => {
+        if (e.target.files[0]) {
+            handleProviderLogoUpload(e.target.files[0]);
+            e.target.value = '';
         }
     });
 
@@ -1054,3 +1447,12 @@ window.onRowDragStart = onRowDragStart;
 window.onRowDragOver = onRowDragOver;
 window.onRowDrop = onRowDrop;
 window.onRowDragEnd = onRowDragEnd;
+window.onProviderToggle = onProviderToggle;
+window.onProviderRename = onProviderRename;
+window.onProviderReorder = onProviderReorder;
+window.triggerProviderLogoUpload = triggerProviderLogoUpload;
+window.onProviderDragStart = onProviderDragStart;
+window.onProviderDragOver = onProviderDragOver;
+window.onProviderDrop = onProviderDrop;
+window.onProviderDragEnd = onProviderDragEnd;
+window.dismissProviderBanner = dismissProviderBanner;
