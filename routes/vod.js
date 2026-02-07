@@ -45,16 +45,16 @@ router.get("/stream/:streamId", async (req, res) => {
 
   const fs = require("fs");
 
-  // Verify file exists and get stats - wrap in try-catch for Zurg mount errors
+  // Verify file exists and get stats - async to avoid blocking event loop on FUSE mounts
   let fileSize;
   try {
-    if (!fs.existsSync(filePath)) {
+    const stat = await fs.promises.stat(filePath);
+    fileSize = stat.size;
+  } catch (err) {
+    if (err.code === 'ENOENT') {
       logger.error(`[Stream Proxy] File not found: ${filePath}`);
       return res.status(404).json({ error: "File not found" });
     }
-    const stat = fs.statSync(filePath);
-    fileSize = stat.size;
-  } catch (err) {
     logger.error(`[Stream Proxy] Filesystem error: ${err.code || err.message}`);
     return res.status(503).json({ error: "Filesystem temporarily unavailable" });
   }
@@ -137,12 +137,12 @@ router.get("/stream-processed/:jobId", async (req, res) => {
 
   let fileSize;
   try {
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: "File not found" });
-    }
-    const stat = fs.statSync(filePath);
+    const stat = await fs.promises.stat(filePath);
     fileSize = stat.size;
   } catch (err) {
+    if (err.code === 'ENOENT') {
+      return res.status(404).json({ error: "File not found" });
+    }
     logger.error(`[Stream Processed] Filesystem error: ${err.code || err.message}`);
     return res.status(503).json({ error: "Filesystem temporarily unavailable" });
   }
@@ -320,6 +320,193 @@ router.delete('/stream-url/cancel/:jobId', (req, res) => {
   } catch (error) {
     logger.error('Cancel job error:', error);
     res.status(500).json({ error: 'Cancel failed' });
+  }
+});
+
+/**
+ * Find an existing active prefetch job for the same content+user (deduplication)
+ */
+function findExistingPrefetchJob(userId, tmdbId, type, season, episode) {
+  const allJobs = downloadJobManager.getAllJobs();
+  return allJobs.find(job =>
+    job.isPrefetch &&
+    job.userInfo?.userId === userId &&
+    job.contentInfo?.tmdbId == tmdbId &&
+    job.contentInfo?.type === type &&
+    job.contentInfo?.season == season &&
+    job.contentInfo?.episode == episode &&
+    (job.status === 'searching' || job.status === 'downloading' || job.status === 'completed')
+  ) || null;
+}
+
+/**
+ * POST /api/vod/prefetch-next
+ * Pre-resolve sources for the next episode/movie while user is still watching current content
+ */
+router.post('/prefetch-next', async (req, res) => {
+  try {
+    const { tmdbId, title, year, type, currentSeason, currentEpisode, mode } = req.body;
+    const userId = req.user.sub;
+
+    logger.info(`[Prefetch] Request for next after ${title} S${currentSeason}E${currentEpisode} (mode: ${mode || 'sequential'})`);
+
+    const { getNextEpisode, getRandomEpisode, getMovieRecommendations } = require('../services/tmdb-service');
+
+    let nextContent = null;
+
+    if (type === 'tv') {
+      if (mode === 'random') {
+        const randomEp = await getRandomEpisode(parseInt(tmdbId));
+        if (randomEp) {
+          nextContent = {
+            tmdbId: parseInt(tmdbId),
+            title,
+            year,
+            type: 'tv',
+            season: randomEp.season,
+            episode: randomEp.episode,
+            episodeTitle: randomEp.title
+          };
+        }
+      } else {
+        // sequential (default)
+        const nextEp = await getNextEpisode(parseInt(tmdbId), parseInt(currentSeason), parseInt(currentEpisode));
+        if (nextEp) {
+          nextContent = {
+            tmdbId: parseInt(tmdbId),
+            title,
+            year,
+            type: 'tv',
+            season: nextEp.season,
+            episode: nextEp.episode,
+            episodeTitle: nextEp.title
+          };
+        }
+      }
+    } else if (type === 'movie') {
+      const recommendations = await getMovieRecommendations(parseInt(tmdbId));
+      if (recommendations.length > 0) {
+        const rec = recommendations[0];
+        nextContent = {
+          tmdbId: rec.tmdbId,
+          title: rec.title,
+          year: rec.year,
+          type: 'movie',
+          season: null,
+          episode: null,
+          episodeTitle: null
+        };
+      }
+    }
+
+    if (!nextContent) {
+      return res.json({ hasNext: false });
+    }
+
+    // Check for existing prefetch job (dedup)
+    const existing = findExistingPrefetchJob(userId, nextContent.tmdbId, nextContent.type, nextContent.season, nextContent.episode);
+    if (existing) {
+      logger.info(`[Prefetch] Reusing existing job ${existing.jobId} for ${nextContent.title} S${nextContent.season}E${nextContent.episode}`);
+      return res.json({
+        hasNext: true,
+        jobId: existing.jobId,
+        nextEpisode: {
+          tmdbId: nextContent.tmdbId,
+          title: nextContent.title,
+          season: nextContent.season,
+          episode: nextContent.episode,
+          episodeTitle: nextContent.episodeTitle
+        }
+      });
+    }
+
+    // Create prefetch job
+    const jobId = uuidv4();
+    const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+    const rdApiKey = getUserRdApiKey(userId);
+    const userInfo = {
+      username: user?.username || 'unknown',
+      userId,
+      ip: req.ip || req.connection.remoteAddress || 'unknown',
+      rdApiKey
+    };
+
+    downloadJobManager.createJob(jobId, {
+      tmdbId: nextContent.tmdbId,
+      title: nextContent.title,
+      year: nextContent.year,
+      type: nextContent.type,
+      season: nextContent.season,
+      episode: nextContent.episode
+    }, userInfo, { isPrefetch: true });
+
+    logger.info(`[Prefetch] Created job ${jobId} for ${nextContent.title} S${nextContent.season}E${nextContent.episode}`);
+
+    // Start download in background
+    const serverHost = req.get('host');
+    processRdDownload(jobId, {
+      tmdbId: nextContent.tmdbId,
+      title: nextContent.title,
+      year: nextContent.year,
+      type: nextContent.type,
+      season: nextContent.season,
+      episode: nextContent.episode,
+      userId,
+      serverHost
+    });
+
+    res.json({
+      hasNext: true,
+      jobId,
+      nextEpisode: {
+        tmdbId: nextContent.tmdbId,
+        title: nextContent.title,
+        season: nextContent.season,
+        episode: nextContent.episode,
+        episodeTitle: nextContent.episodeTitle
+      }
+    });
+  } catch (error) {
+    logger.error('[Prefetch] Error:', error);
+    res.status(500).json({ error: 'Prefetch failed', message: error.message });
+  }
+});
+
+/**
+ * POST /api/vod/prefetch-promote/:jobId
+ * Promote a prefetch job to a real playback job (user wants to play the prefetched content)
+ */
+router.post('/prefetch-promote/:jobId', (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const userId = req.user.sub;
+
+    const job = downloadJobManager.getJob(jobId);
+
+    if (!job) {
+      return res.status(404).json({ error: 'Job not found' });
+    }
+
+    if (job.userInfo?.userId !== userId) {
+      return res.status(403).json({ error: 'Job does not belong to you' });
+    }
+
+    // Promote: remove prefetch flag so it appears in Continue Watching etc.
+    job.isPrefetch = false;
+
+    logger.info(`[Prefetch] Promoted job ${jobId} (status: ${job.status})`);
+
+    res.json({
+      status: job.status,
+      streamUrl: job.streamUrl || null,
+      jobId: job.jobId,
+      fileName: job.fileName || null,
+      quality: job.quality || null,
+      contentInfo: job.contentInfo
+    });
+  } catch (error) {
+    logger.error('[Prefetch Promote] Error:', error);
+    res.status(500).json({ error: 'Promote failed', message: error.message });
   }
 });
 
@@ -675,7 +862,18 @@ async function processRdDownload(jobId, contentInfo) {
       tmdbId,
       rdApiKey,
       maxBitrateMbps
-    }, onSourcesReady).catch(err => {
+    }, onSourcesReady).then(() => {
+      // getAllSources returned — mark search complete so the while loop can exit
+      // (Prowlarr callbacks may have already set this, but ensure it's set)
+      if (!searchComplete) {
+        logger.info('getAllSources returned, marking search complete');
+        searchComplete = true;
+        if (sourcesAvailableResolve) {
+          sourcesAvailableResolve();
+          sourcesAvailableResolve = null;
+        }
+      }
+    }).catch(err => {
       logger.warn('Source search error:', err.message);
       searchComplete = true;
       if (sourcesAvailableResolve) sourcesAvailableResolve();
@@ -684,7 +882,7 @@ async function processRdDownload(jobId, contentInfo) {
     // Wait for first batch of sources (or search completion)
     await Promise.race([
       sourcesAvailablePromise,
-      new Promise(resolve => setTimeout(resolve, 10000)) // Max 10s wait for first sources
+      new Promise(resolve => setTimeout(resolve, 15000)) // Max 15s wait for first sources
     ]);
 
     if (sourceQueue.length === 0 && !searchComplete) {
@@ -693,7 +891,7 @@ async function processRdDownload(jobId, contentInfo) {
       sourcesAvailablePromise = new Promise(resolve => { sourcesAvailableResolve = resolve; });
       await Promise.race([
         sourcesAvailablePromise,
-        new Promise(resolve => setTimeout(resolve, 20000)) // 20s for slow Prowlarr (total max: 30s)
+        new Promise(resolve => setTimeout(resolve, 35000)) // 35s for slow Prowlarr (total max: 50s)
       ]);
     }
 
@@ -703,8 +901,17 @@ async function processRdDownload(jobId, contentInfo) {
 
     logger.info(`⚡ Starting with ${sourceQueue.length} sources (search ${searchComplete ? 'complete' : 'ongoing'})`);
 
+    // Global safety timeout: prevent the entire source selection loop from hanging forever
+    const JOB_MAX_DURATION = 5 * 60 * 1000; // 5 minutes max for entire job
+    const jobStartTime = Date.now();
+
     // Try sources from queue until one works
     while (sourceQueue.length > 0 || !searchComplete) {
+      // Safety: abort if job has been running too long
+      if (Date.now() - jobStartTime > JOB_MAX_DURATION) {
+        logger.error(`⏱️  Job ${jobId} hit global timeout (${JOB_MAX_DURATION/1000}s) after ${attemptNum} attempts`);
+        throw new Error(`Timed out after ${attemptNum} source attempts`);
+      }
       // Wait for sources if queue is empty but search is ongoing
       if (sourceQueue.length === 0 && !searchComplete) {
         sourcesAvailablePromise = new Promise(resolve => { sourcesAvailableResolve = resolve; });
@@ -776,17 +983,29 @@ async function processRdDownload(jobId, contentInfo) {
           // Prowlarr source - download from RD with timeout for slow downloads
           let lastProgress = 0;
           let lastProgressTime = Date.now();
-          const SLOW_DOWNLOAD_TIMEOUT = 20000; // 20 seconds at <1%
+          let lastRdStatus = null;
+          let lastRdSeeders = null;
+          let lastRdSpeed = null;
+          const SLOW_START_TIMEOUT = 12000; // 12s to get past 0% (was 20s)
+          const DEAD_TORRENT_TIMEOUT = 8000; // 8s for 0-seeder/0-speed detection
+          const STALL_TIMEOUT = 60000; // 60s stall at any progress level
 
           const downloadPromise = downloadFromRD(
             source.magnet,
             rdApiKey,
             season,
             episode,
-            (rdProgress, rdMessage) => {
+            (rdProgress, rdMessage, rdMeta) => {
               // Don't update if job already completed (another source succeeded)
               const currentJob = downloadJobManager.getJob(jobId);
               if (currentJob?.status === 'completed') return;
+
+              // Track RD metadata for faster dead torrent detection
+              if (rdMeta) {
+                lastRdStatus = rdMeta.status;
+                lastRdSeeders = rdMeta.seeders;
+                lastRdSpeed = rdMeta.speed;
+              }
 
               const rdMatch = rdMessage.match(/Downloading:\s*(\d+)%/);
               if (rdMatch) {
@@ -807,15 +1026,32 @@ async function processRdDownload(jobId, contentInfo) {
             }
           );
 
-          // Timeout checker - abort if stuck at <1% for >60s
+          // Timeout checker - abort dead torrents fast, general stall detection as fallback
           const timeoutPromise = new Promise((_, reject) => {
             const checkInterval = setInterval(() => {
               const stuckTime = Date.now() - lastProgressTime;
-              if (lastProgress < 1 && stuckTime > SLOW_DOWNLOAD_TIMEOUT) {
+
+              // Fast-fail: RD reports 0 seeders and 0 speed while downloading → dead torrent
+              if (lastRdStatus === 'downloading' && lastRdSeeders === 0 && lastRdSpeed === 0 && stuckTime > DEAD_TORRENT_TIMEOUT) {
+                clearInterval(checkInterval);
+                reject(new Error(`TIMEOUT: Dead torrent (0 seeders, 0 speed) at ${lastProgress}% for ${Math.round(stuckTime/1000)}s`));
+                return;
+              }
+
+              // Fast-fail: stuck in magnet conversion (can't find peers for metadata)
+              if (lastRdStatus === 'magnet_conversion' && stuckTime > DEAD_TORRENT_TIMEOUT) {
+                clearInterval(checkInterval);
+                reject(new Error(`TIMEOUT: Magnet conversion stuck for ${Math.round(stuckTime/1000)}s (no peers)`));
+                return;
+              }
+
+              // General timeout: 12s at 0%, 60s at any other progress
+              const timeout = lastProgress < 1 ? SLOW_START_TIMEOUT : STALL_TIMEOUT;
+              if (stuckTime > timeout) {
                 clearInterval(checkInterval);
                 reject(new Error(`TIMEOUT: Stuck at ${lastProgress}% for ${Math.round(stuckTime/1000)}s - trying next source`));
               }
-            }, 5000); // Check every 5 seconds
+            }, 3000); // Check every 3s (matches RD poll interval)
 
             // Clean up interval when download completes
             downloadPromise.finally(() => clearInterval(checkInterval));
