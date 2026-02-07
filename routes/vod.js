@@ -476,7 +476,7 @@ router.post('/prefetch-next', async (req, res) => {
  * POST /api/vod/prefetch-promote/:jobId
  * Promote a prefetch job to a real playback job (user wants to play the prefetched content)
  */
-router.post('/prefetch-promote/:jobId', (req, res) => {
+router.post('/prefetch-promote/:jobId', async (req, res) => {
   try {
     const { jobId } = req.params;
     const userId = req.user.sub;
@@ -496,13 +496,38 @@ router.post('/prefetch-promote/:jobId', (req, res) => {
 
     logger.info(`[Prefetch] Promoted job ${jobId} (status: ${job.status})`);
 
+    // Look up next episode so client can continue the autoplay chain
+    let nextEpisode = null;
+    if (job.contentInfo?.type === 'tv') {
+      try {
+        const { getNextEpisode } = require('../services/tmdb-service');
+        const next = await getNextEpisode(
+          job.contentInfo.tmdbId,
+          job.contentInfo.season,
+          job.contentInfo.episode
+        );
+        if (next) {
+          nextEpisode = {
+            season: next.season,
+            episode: next.episode,
+            title: next.title,
+            overview: next.overview
+          };
+        }
+      } catch (err) {
+        logger.warn('[Prefetch Promote] Failed to get next episode:', err.message);
+      }
+    }
+
     res.json({
       status: job.status,
       streamUrl: job.streamUrl || null,
       jobId: job.jobId,
       fileName: job.fileName || null,
       quality: job.quality || null,
-      contentInfo: job.contentInfo
+      contentInfo: job.contentInfo,
+      hasNext: !!nextEpisode,
+      nextEpisode
     });
   } catch (error) {
     logger.error('[Prefetch Promote] Error:', error);
@@ -1907,6 +1932,7 @@ router.post('/report-bad', async (req, res) => {
 router.get('/next-episode/:tmdbId/:season/:episode', async (req, res) => {
   try {
     const { tmdbId, season, episode } = req.params;
+    const { title } = req.query; // Optional: show title for Zurg pack check
     const currentSeason = parseInt(season);
     const currentEpisode = parseInt(episode);
 
@@ -1929,35 +1955,36 @@ router.get('/next-episode/:tmdbId/:season/:episode', async (req, res) => {
     }
 
     // Check if next episode is in same pack as current episode (Zurg search)
+    // Requires title — skip if not provided (pack check is an optimization, not required)
     let inCurrentPack = false;
-    try {
-      // Search for next episode in Zurg
-      const nextZurgResult = await searchZurg({
-        type: 'tv',
-        season: nextEpisode.season,
-        episode: nextEpisode.episode
-      });
-
-      // If both current and next episode are in Zurg, check if same pack
-      if (nextZurgResult.match) {
-        const currentZurgResult = await searchZurg({
+    if (title) {
+      try {
+        const nextZurgResult = await searchZurg({
+          title,
           type: 'tv',
-          season: currentSeason,
-          episode: currentEpisode
+          season: nextEpisode.season,
+          episode: nextEpisode.episode
         });
 
-        if (currentZurgResult.match) {
-          // Extract pack directory (everything except filename)
-          const currentPack = currentZurgResult.match.filePath.substring(0, currentZurgResult.match.filePath.lastIndexOf('/'));
-          const nextPack = nextZurgResult.match.filePath.substring(0, nextZurgResult.match.filePath.lastIndexOf('/'));
+        if (nextZurgResult.match) {
+          const currentZurgResult = await searchZurg({
+            title,
+            type: 'tv',
+            season: currentSeason,
+            episode: currentEpisode
+          });
 
-          inCurrentPack = currentPack === nextPack;
-          logger.info(`Pack check: ${inCurrentPack ? 'SAME' : 'DIFFERENT'} pack (current: ${currentPack}, next: ${nextPack})`);
+          if (currentZurgResult.match) {
+            const currentPack = currentZurgResult.match.filePath.substring(0, currentZurgResult.match.filePath.lastIndexOf('/'));
+            const nextPack = nextZurgResult.match.filePath.substring(0, nextZurgResult.match.filePath.lastIndexOf('/'));
+
+            inCurrentPack = currentPack === nextPack;
+            logger.info(`Pack check: ${inCurrentPack ? 'SAME' : 'DIFFERENT'} pack (current: ${currentPack}, next: ${nextPack})`);
+          }
         }
+      } catch (err) {
+        logger.warn('Failed to check pack status:', err.message);
       }
-    } catch (err) {
-      logger.warn('Failed to check pack status:', err.message);
-      // Not critical - continue without pack info
     }
 
     res.json({

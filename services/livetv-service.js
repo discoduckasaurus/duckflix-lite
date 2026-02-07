@@ -244,10 +244,40 @@ async function getChannelsForUser(userId) {
   }
 }
 
+// Cached NTV stream map (tvpassId -> { channel_id, channel_name, channel_code, channel_url })
+let ntvStreamMap = null;
+let ntvStreamMapLoadedAt = 0;
+const NTV_MAP_CACHE_TTL = 60000; // 1 minute
+
 // Cached DaddyLive stream map (tvpassId -> daddylive URL)
 let daddyliveStreamMap = null;
 let daddyliveStreamMapLoadedAt = 0;
 const DL_MAP_CACHE_TTL = 60000; // 1 minute
+
+/**
+ * Load the NTV stream map from epg_cache (lazy-load + TTL cache).
+ * Returns {channelId: {channel_id, channel_name, channel_code, channel_url}} or empty object.
+ */
+function getNTVStreamMap() {
+  const now = Date.now();
+  if (ntvStreamMap && (now - ntvStreamMapLoadedAt) < NTV_MAP_CACHE_TTL) {
+    return ntvStreamMap;
+  }
+
+  try {
+    const row = db.prepare(`
+      SELECT epg_data FROM epg_cache WHERE channel_id = 'ntv_stream_map'
+    `).get();
+
+    ntvStreamMap = row ? JSON.parse(row.epg_data) : {};
+  } catch (err) {
+    logger.debug(`Error loading ntv_stream_map: ${err.message}`);
+    ntvStreamMap = {};
+  }
+
+  ntvStreamMapLoadedAt = now;
+  return ntvStreamMap;
+}
 
 /**
  * Load the DaddyLive stream map from epg_cache (lazy-load + TTL cache).
@@ -276,10 +306,11 @@ function getDaddyLiveStreamMap() {
 
 /**
  * Get stream URLs for a channel, ordered by priority:
- * 1. DaddyLive URL (if matched via daddylive_stream_map)
- * 2. backup-streams.json primary (if exists)
- * 3. M3U/special channel original URL
- * 4. backup-streams.json backups[]
+ * 1. NTV (ntv://{channel_id} marker — resolved on-demand in livetv.js)
+ * 2. DaddyLive URL (if matched via daddylive_stream_map)
+ * 3. backup-streams.json primary (if exists)
+ * 4. M3U/special channel original URL
+ * 5. backup-streams.json backups[]
  *
  * @param {string} channelId - Channel ID
  * @returns {string[]} Array of stream URLs to try in order
@@ -287,9 +318,15 @@ function getDaddyLiveStreamMap() {
 function getStreamUrls(channelId) {
   const urls = [];
   const backup = backupStreams[channelId];
+  const ntvMap = getNTVStreamMap();
   const dlMap = getDaddyLiveStreamMap();
 
-  // 1. DaddyLive primary URL (for matched TVPass channels)
+  // 1. NTV primary (marker URL — resolved on-demand since tokens are ephemeral)
+  if (ntvMap[channelId]) {
+    urls.push(`ntv://${ntvMap[channelId].channel_id}`);
+  }
+
+  // 2. DaddyLive primary URL (for matched TVPass channels)
   if (dlMap[channelId]) {
     urls.push(dlMap[channelId]);
   }
@@ -348,6 +385,25 @@ function getStreamUrls(channelId) {
 
   if (urls.length === 0) {
     throw new Error(`Channel ${channelId} not found`);
+  }
+
+  // Per-channel source deprioritization (e.g., move NTV to last for channels with bad NTV feeds)
+  const chConf = channelConfig[channelId];
+  if (chConf?.deprioritize?.length && urls.length > 1) {
+    const depri = new Set(chConf.deprioritize.map(s => s.toUpperCase()));
+    const labelUrl = (url) => {
+      if (url.startsWith('ntv://') || /cdn-live\.|cdn-google\./.test(url)) return 'NTV';
+      if (url.includes('localhost:9191') || url.includes('dlhd')) return 'DADDYLIVE';
+      if (url.includes('tvpass.org')) return 'TVPASS';
+      return 'OTHER';
+    };
+    const keep = urls.filter(u => !depri.has(labelUrl(u)));
+    const demoted = urls.filter(u => depri.has(labelUrl(u)));
+    if (keep.length > 0 && demoted.length > 0) {
+      urls.length = 0;
+      urls.push(...keep, ...demoted);
+      logger.debug(`[StreamUrls] ${channelId}: deprioritized ${chConf.deprioritize.join(',')} (${keep.length} primary, ${demoted.length} demoted)`);
+    }
   }
 
   return urls;
@@ -464,6 +520,7 @@ module.exports = {
   getChannelsForUser,
   getStreamUrl,
   getStreamUrls,
+  getNTVStreamMap,
   toggleChannel,
   toggleFavorite,
   reorderChannels

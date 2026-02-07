@@ -928,7 +928,8 @@
   "travel-us-east": {
     "dvrEnabled": true,
     "displayName": "Travel Channel",
-    "logoFile": "travel-us-east.png"
+    "logoFile": "travel-us-east.png",
+    "deprioritize": ["NTV"]
   },
   "trutv-usa-eastern": {
     "dvrEnabled": true,
