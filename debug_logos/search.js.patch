@@ -1,0 +1,48 @@
+--- routes/search.js.original
++++ routes/search.js.fixed
+@@ -293,7 +293,7 @@
+     const response = await axios.get(url, {
+       params: {
+         api_key: tmdbApiKey,
+-        append_to_response: type === 'tv' ? 'credits,videos,external_ids,seasons' : 'credits,videos,external_ids'
++        append_to_response: type === 'tv' ? 'credits,videos,external_ids,seasons,images' : 'credits,videos,external_ids,images'
+       }
+     });
+
+@@ -301,6 +301,13 @@
+     const result = {
+       id: data.id,
+       title: data.title || data.name,
++
++      // Extract English logo (transparent PNG for loading screen overlays)
++      logoPath: (() => {
++        if (data.images?.logos?.length > 0) {
++          const englishLogo = data.images.logos.find(logo => logo.iso_639_1 === 'en');
++          return (englishLogo || data.images.logos[0]).file_path;
++        }
++        return null;
++      })(),
++
+       overview: data.overview,
+       posterPath: data.poster_path,
+       backdropPath: data.backdrop_path,
+@@ -308,6 +315,12 @@
+       voteAverage: data.vote_average,
+       runtime: data.runtime || (data.episode_run_time && data.episode_run_time[0]),
+       genres: data.genres,
++
++      // Add these fields for audio track selection and actor navigation
++      originalLanguage: data.original_language,
++      spokenLanguages: data.spoken_languages?.map(lang => ({
++        iso6391: lang.iso_639_1,
++        name: lang.name
++      })),
++
+       cast: data.credits?.cast?.slice(0, 10).map(c => ({
+         name: c.name,
+         character: c.character,
+-        profilePath: c.profile_path
++        profilePath: c.profile_path,
++        id: c.id  // Add actor ID for navigation to filmography
+       })) || [],
+       externalIds: data.external_ids,

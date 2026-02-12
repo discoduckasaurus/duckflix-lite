@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HI MOM!!</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            overflow: hidden;
+        }
+
+        .container {
+            position: relative;
+            text-align: center;
+        }
+
+        h1 {
+            font-family: 'Arial Black', Gadget, sans-serif;
+            font-size: 8rem;
+            font-weight: 900;
+            background: linear-gradient(
+                90deg,
+                #ff0000,
+                #ff7f00,
+                #ffff00,
+                #00ff00,
+                #0000ff,
+                #4b0082,
+                #9400d3,
+                #ff0000
+            );
+            background-size: 400% 100%;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: rainbow 3s linear infinite, pulse 0.5s ease-in-out infinite alternate;
+            cursor: pointer;
+            transition: transform 0.3s ease, filter 0.3s ease;
+            text-shadow: 0 0 10px rgba(255,255,255,0.3);
+            position: relative;
+            z-index: 1;
+        }
+
+        h1:hover {
+            transform: scale(1.2) rotate(-3deg);
+            filter: brightness(1.3);
+            animation: rainbow 1s linear infinite, shake 0.1s ease-in-out infinite;
+        }
+
+        @keyframes rainbow {
+            0% { background-position: 0% 50%; }
+            100% { background-position: 400% 50%; }
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.05); }
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: scale(1.2) rotate(-3deg) translateX(0); }
+            25% { transform: scale(1.2) rotate(-3deg) translateX(-5px); }
+            75% { transform: scale(1.2) rotate(-3deg) translateX(5px); }
+        }
+
+        /* Glitter particles */
+        .glitter {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        .sparkle {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: white;
+            border-radius: 50%;
+            animation: sparkle 2s ease-in-out infinite;
+            box-shadow: 0 0 10px 2px white, 0 0 20px 5px rgba(255,255,255,0.5);
+        }
+
+        @keyframes sparkle {
+            0%, 100% { opacity: 0; transform: scale(0) rotate(0deg); }
+            50% { opacity: 1; transform: scale(1) rotate(180deg); }
+        }
+
+        /* Star shapes for some sparkles */
+        .sparkle.star {
+            background: transparent;
+            box-shadow: none;
+            width: 0;
+            height: 0;
+        }
+
+        .sparkle.star::before,
+        .sparkle.star::after {
+            content: '✦';
+            position: absolute;
+            font-size: 20px;
+            color: gold;
+            text-shadow: 0 0 10px gold, 0 0 20px orange;
+            animation: twinkle 1s ease-in-out infinite alternate;
+        }
+
+        @keyframes twinkle {
+            0% { opacity: 0.5; transform: scale(0.8); }
+            100% { opacity: 1; transform: scale(1.2); }
+        }
+
+        /* Rainbow border glow */
+        .glow-border {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 120%;
+            height: 200%;
+            background: conic-gradient(
+                from 0deg,
+                #ff0000,
+                #ff7f00,
+                #ffff00,
+                #00ff00,
+                #0000ff,
+                #4b0082,
+                #9400d3,
+                #ff0000
+            );
+            filter: blur(40px);
+            opacity: 0.5;
+            animation: spin 4s linear infinite;
+            z-index: 0;
+        }
+
+        @keyframes spin {
+            0% { transform: translate(-50%, -50%) rotate(0deg); }
+            100% { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="glow-border"></div>
+        <h1>HI MOM!!</h1>
+        <div class="glitter" id="glitter"></div>
+    </div>
+
+    <script>
+        // Create glitter particles
+        const glitterContainer = document.getElementById('glitter');
+        const numSparkles = 50;
+
+        for (let i = 0; i < numSparkles; i++) {
+            const sparkle = document.createElement('div');
+            sparkle.className = Math.random() > 0.5 ? 'sparkle' : 'sparkle star';
+
+            // Random position around the text
+            sparkle.style.left = `${Math.random() * 100}%`;
+            sparkle.style.top = `${Math.random() * 100}%`;
+
+            // Random animation delay and duration
+            sparkle.style.animationDelay = `${Math.random() * 2}s`;
+            sparkle.style.animationDuration = `${1 + Math.random() * 2}s`;
+
+            // Random colors for some sparkles
+            const colors = ['#fff', '#ffd700', '#ff69b4', '#00ffff', '#ff6b6b', '#98fb98'];
+            const color = colors[Math.floor(Math.random() * colors.length)];
+            sparkle.style.background = sparkle.className.includes('star') ? 'transparent' : color;
+            sparkle.style.boxShadow = sparkle.className.includes('star') ? 'none' : `0 0 10px 2px ${color}`;
+
+            glitterContainer.appendChild(sparkle);
+        }
+
+        // Add extra sparkles on hover
+        document.querySelector('h1').addEventListener('mouseenter', () => {
+            for (let i = 0; i < 20; i++) {
+                setTimeout(() => {
+                    const sparkle = document.createElement('div');
+                    sparkle.className = 'sparkle';
+                    sparkle.style.left = `${Math.random() * 100}%`;
+                    sparkle.style.top = `${Math.random() * 100}%`;
+                    sparkle.style.background = `hsl(${Math.random() * 360}, 100%, 70%)`;
+                    sparkle.style.animationDuration = '0.5s';
+                    glitterContainer.appendChild(sparkle);
+
+                    setTimeout(() => sparkle.remove(), 500);
+                }, i * 50);
+            }
+        });
+    </script>
+</body>
+</html>

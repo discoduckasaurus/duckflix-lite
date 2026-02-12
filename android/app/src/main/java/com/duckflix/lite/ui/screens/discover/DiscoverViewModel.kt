@@ -153,6 +153,7 @@ class DiscoverViewModel @Inject constructor(
                     .distinctBy { it.id }
                     .sortedBy { it.name }
 
+                println("[DiscoverViewModel] Loaded ${combinedGenres.size} genres: ${combinedGenres.map { "${it.name}(${it.id})" }.joinToString(", ")}")
                 _uiState.value = _uiState.value.copy(
                     availableGenres = combinedGenres,
                     isLoadingGenres = false
@@ -249,6 +250,8 @@ class DiscoverViewModel @Inject constructor(
                 }
 
                 val sortValue = state.sortBy.getApiValue(state.mediaTypeFilter)
+
+                println("[DiscoverViewModel] Calling discover: type=$type, genre=${state.selectedGenre}, minYear=${state.selectedDecade?.startYear}, maxYear=${state.selectedDecade?.endYear}, sortBy=$sortValue, page=$page")
 
                 val response = api.discover(
                     type = type,

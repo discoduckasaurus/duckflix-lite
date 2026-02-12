@@ -316,7 +316,7 @@ private fun AdvancedFilterRow(
                     val genre = selected.firstOrNull()
                     onGenreChange(if (genre is GenreDto) genre.id else null)
                 },
-                optionLabel = { if (it == null) "All Genres" else (it as GenreDto).name },
+                optionLabel = { if (it == null) "All Genres" else (it as? GenreDto)?.name ?: "Unknown" },
                 multiSelect = false
             )
         }
@@ -330,7 +330,7 @@ private fun AdvancedFilterRow(
                 onSelectionChange = { selected ->
                     onDecadeChange(selected.firstOrNull() as? Decade)
                 },
-                optionLabel = { if (it == null) "All Time" else (it as Decade).displayName },
+                optionLabel = { if (it == null) "All Time" else (it as? Decade)?.displayName ?: "Unknown" },
                 multiSelect = false
             )
         }
@@ -345,8 +345,10 @@ private fun AdvancedFilterRow(
                     selected.firstOrNull()?.let { onSortChange(it) }
                 },
                 optionLabel = { option ->
-                    val sort = option as SortOption
-                    if (sort.movieOnly) "${sort.displayName} (Movie)" else sort.displayName
+                    val sort = option as? SortOption
+                    if (sort == null) "Unknown"
+                    else if (sort.movieOnly) "${sort.displayName} (Movie)"
+                    else sort.displayName
                 },
                 multiSelect = false
             )
