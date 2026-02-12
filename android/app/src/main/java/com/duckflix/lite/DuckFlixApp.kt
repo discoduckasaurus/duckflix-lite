@@ -39,7 +39,7 @@ sealed class Screen(val route: String) {
     object ActorFilmography : Screen("actor/{personId}") {
         fun createRoute(personId: Int) = "actor/$personId"
     }
-    object Player : Screen("player/{tmdbId}/{title}?year={year}&type={type}&season={season}&episode={episode}&resumePosition={resumePosition}&posterUrl={posterUrl}&logoUrl={logoUrl}&originalLanguage={originalLanguage}&isRandom={isRandom}") {
+    object Player : Screen("player/{tmdbId}/{title}?year={year}&type={type}&season={season}&episode={episode}&resumePosition={resumePosition}&posterUrl={posterUrl}&logoUrl={logoUrl}&originalLanguage={originalLanguage}&isRandom={isRandom}&episodeTitle={episodeTitle}&isAutoplay={isAutoplay}") {
         fun createRoute(
             tmdbId: Int,
             title: String,
@@ -51,7 +51,9 @@ sealed class Screen(val route: String) {
             posterUrl: String? = null,
             logoUrl: String? = null,
             originalLanguage: String? = null,
-            isRandom: Boolean = false
+            isRandom: Boolean = false,
+            episodeTitle: String? = null,
+            isAutoplay: Boolean = false
         ) = "player/$tmdbId/${java.net.URLEncoder.encode(title, "UTF-8")}?" +
                 "year=${year ?: ""}&type=$type" +
                 "&season=${season ?: -1}" +
@@ -60,7 +62,9 @@ sealed class Screen(val route: String) {
                 (if (posterUrl != null) "&posterUrl=${java.net.URLEncoder.encode(posterUrl, "UTF-8")}" else "") +
                 (if (logoUrl != null) "&logoUrl=${java.net.URLEncoder.encode(logoUrl, "UTF-8")}" else "") +
                 (if (originalLanguage != null) "&originalLanguage=$originalLanguage" else "") +
-                "&isRandom=$isRandom"
+                "&isRandom=$isRandom" +
+                (if (episodeTitle != null) "&episodeTitle=${java.net.URLEncoder.encode(episodeTitle, "UTF-8")}" else "") +
+                "&isAutoplay=$isAutoplay"
     }
     object Vod : Screen("vod")
     object LiveTV : Screen("livetv")
@@ -190,13 +194,14 @@ fun DuckFlixApp(
             )
         ) {
             DetailScreen(
-                onPlayClick = { tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage, isRandom ->
+                onPlayClick = { tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage, isRandom, episodeTitle ->
                     println("[LOGO-DEBUG-NAV] Navigation to player:")
                     println("[LOGO-DEBUG-NAV]   title: $title")
                     println("[LOGO-DEBUG-NAV]   posterUrl: $posterUrl")
                     println("[LOGO-DEBUG-NAV]   logoUrl: $logoUrl")
                     println("[LOGO-DEBUG-NAV]   isRandom: $isRandom")
-                    val route = Screen.Player.createRoute(tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage, isRandom)
+                    println("[LOGO-DEBUG-NAV]   episodeTitle: $episodeTitle")
+                    val route = Screen.Player.createRoute(tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage, isRandom, episodeTitle)
                     println("[LOGO-DEBUG-NAV]   route: $route")
                     navController.navigate(route)
                 },
@@ -272,13 +277,22 @@ fun DuckFlixApp(
                 navArgument("isRandom") {
                     type = NavType.BoolType
                     defaultValue = false
+                },
+                navArgument("episodeTitle") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                },
+                navArgument("isAutoplay") {
+                    type = NavType.BoolType
+                    defaultValue = false
                 }
             )
         ) {
             val playerViewModel: com.duckflix.lite.ui.screens.player.VideoPlayerViewModel = androidx.hilt.navigation.compose.hiltViewModel()
 
             // Setup auto-play navigation callbacks
-            playerViewModel.onAutoPlayNext = onAutoPlayNext@{ season, episode ->
+            playerViewModel.onAutoPlayNext = onAutoPlayNext@{ season, episode, episodeTitle ->
                 val currentEntry = navController.currentBackStackEntry ?: return@onAutoPlayNext
                 val tmdbId = currentEntry.arguments?.getInt("tmdbId") ?: return@onAutoPlayNext
                 val title = currentEntry.arguments?.getString("title") ?: return@onAutoPlayNext
@@ -289,7 +303,7 @@ fun DuckFlixApp(
                 val isRandom = currentEntry.arguments?.getBoolean("isRandom") ?: false
 
                 navController.navigate(
-                    Screen.Player.createRoute(tmdbId, title, year, "tv", season, episode, null, posterUrl, logoUrl, originalLanguage, isRandom)
+                    Screen.Player.createRoute(tmdbId, title, year, "tv", season, episode, null, posterUrl, logoUrl, originalLanguage, isRandom, episodeTitle, isAutoplay = true)
                 ) {
                     popUpTo(Screen.Player.route) { inclusive = true }
                 }

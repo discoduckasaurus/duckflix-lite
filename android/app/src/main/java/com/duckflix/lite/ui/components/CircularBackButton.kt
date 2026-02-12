@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.duckflix.lite.R
+import com.duckflix.lite.ui.theme.tvOsFocusEffects
 
 /**
  * Circular back button with custom DuckFlix icon
@@ -37,6 +38,10 @@ fun CircularBackButton(
         contentDescription = "Back",
         modifier = modifier
             .height(48.dp)
+            .tvOsFocusEffects(
+                isFocused = isFocused,
+                respectTransparency = true
+            )
             .then(
                 if (focusRequester != null) {
                     Modifier.focusRequester(focusRequester)
@@ -51,7 +56,7 @@ fun CircularBackButton(
             ) { onClick() }
             .then(
                 if (isFocused) {
-                    Modifier.border(3.dp, Color.White, RoundedCornerShape(12.dp))
+                    Modifier.border(2.dp, Color.White, RoundedCornerShape(12.dp))
                 } else {
                     Modifier
                 }

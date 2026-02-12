@@ -3,6 +3,8 @@ package com.duckflix.lite.ui.screens.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.duckflix.lite.BuildConfig
+import com.duckflix.lite.data.local.dao.AutoPlaySettingsDao
+import com.duckflix.lite.data.local.entity.AutoPlaySettingsEntity
 import com.duckflix.lite.data.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,12 +19,14 @@ data class SettingsUiState(
     val serverUrl: String = "https://lite.duckflix.tv",
     val appVersion: String = "1.0.0",
     val isLoggingOut: Boolean = false,
-    val logoutMessage: String? = null
+    val logoutMessage: String? = null,
+    val autoplaySeriesDefault: Boolean = true
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
-    private val authRepository: AuthRepository
+    private val authRepository: AuthRepository,
+    private val autoPlaySettingsDao: AutoPlaySettingsDao
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
@@ -30,16 +34,39 @@ class SettingsViewModel @Inject constructor(
 
     init {
         loadUserInfo()
+        loadAutoPlaySettings()
     }
 
     private fun loadUserInfo() {
         viewModelScope.launch {
             // TODO: Load user info from repository
-            _uiState.value = SettingsUiState(
+            _uiState.value = _uiState.value.copy(
                 username = "admin", // TODO: Get from user session
                 rdExpiryDate = null,
                 serverUrl = "https://lite.duckflix.tv",
                 appVersion = "1.0.0"
+            )
+        }
+    }
+
+    private fun loadAutoPlaySettings() {
+        viewModelScope.launch {
+            val settings = autoPlaySettingsDao.getSettingsOnce()
+            _uiState.value = _uiState.value.copy(
+                autoplaySeriesDefault = settings?.autoplaySeriesDefault ?: true
+            )
+        }
+    }
+
+    fun toggleAutoplaySeriesDefault() {
+        viewModelScope.launch {
+            val newValue = !_uiState.value.autoplaySeriesDefault
+            _uiState.value = _uiState.value.copy(autoplaySeriesDefault = newValue)
+
+            // Save to database
+            val currentSettings = autoPlaySettingsDao.getSettingsOnce() ?: AutoPlaySettingsEntity()
+            autoPlaySettingsDao.saveSettings(
+                currentSettings.copy(autoplaySeriesDefault = newValue)
             )
         }
     }

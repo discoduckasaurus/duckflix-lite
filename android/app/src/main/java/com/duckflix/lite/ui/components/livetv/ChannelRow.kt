@@ -57,7 +57,8 @@ fun ChannelRow(
     modifier: Modifier = Modifier,
     focusRequester: FocusRequester? = null,
     displayNumber: Int? = null,  // Position in list (1-based), overrides channel.channelNumber
-    requestInitialFocus: Boolean = false  // If true, this row will request focus on compose
+    requestInitialFocus: Boolean = false,  // If true, this row will request focus on compose
+    focusTrigger: Int = 0  // Changes when returning from fullscreen to re-trigger focus
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -75,12 +76,13 @@ fun ChannelRow(
     }
 
     // Request focus when this row should have initial focus
-    LaunchedEffect(requestInitialFocus) {
+    // Use focusTrigger as key to re-trigger focus when returning from fullscreen
+    LaunchedEffect(requestInitialFocus, focusTrigger) {
         if (requestInitialFocus) {
             kotlinx.coroutines.delay(100)
             try {
                 effectiveFocusRequester.requestFocus()
-                println("[ChannelRow] Requested initial focus for ${channel.effectiveDisplayName}")
+                println("[ChannelRow] Requested focus for ${channel.effectiveDisplayName} (trigger=$focusTrigger)")
             } catch (e: Exception) {
                 println("[ChannelRow] Focus request failed: ${e.message}")
             }

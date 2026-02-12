@@ -252,8 +252,17 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun removeFromWatchlist(tmdbId: Int) {
+    fun removeFromWatchlist(tmdbId: Int, type: String) {
         viewModelScope.launch {
+            try {
+                // Remove from server first
+                api.removeFromWatchlist(tmdbId, type)
+                println("[HomeViewModel] Removed from server watchlist: $tmdbId ($type)")
+            } catch (e: Exception) {
+                println("[HomeViewModel] Failed to remove from server watchlist: ${e.message}")
+                // Continue to remove locally even if server fails
+            }
+            // Remove from local database
             watchlistDao.remove(tmdbId)
         }
     }

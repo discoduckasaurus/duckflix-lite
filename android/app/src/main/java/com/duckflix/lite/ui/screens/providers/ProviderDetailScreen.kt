@@ -1,8 +1,9 @@
 package com.duckflix.lite.ui.screens.providers
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -11,9 +12,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -25,7 +28,11 @@ import com.duckflix.lite.data.remote.dto.CollectionItem
 import com.duckflix.lite.ui.components.FocusableButton
 import com.duckflix.lite.ui.components.FocusableSearchBar
 import com.duckflix.lite.ui.components.MediaCard
+import com.duckflix.lite.ui.theme.Dimens
+import com.duckflix.lite.ui.theme.TvOsGradientLazyRow
+import com.duckflix.lite.ui.theme.rememberGlowColor
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Provider Detail Screen - Full-screen page for browsing content from a specific streaming provider.
@@ -51,15 +58,12 @@ fun ProviderDetailScreen(
     }
 
     // Request focus on first discover item when content loads
-    // Using a small delay to ensure the composable is fully composed
     LaunchedEffect(uiState.discover) {
         if (uiState.discover.isNotEmpty()) {
-            delay(100) // Small delay to ensure MediaCard is attached
+            delay(100)
             try {
                 discoverFocusRequester.requestFocus()
-            } catch (_: IllegalStateException) {
-                // FocusRequester not yet attached
-            }
+            } catch (_: IllegalStateException) {}
         }
     }
 
@@ -69,9 +73,9 @@ fun ProviderDetailScreen(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(scrollState),
-        verticalArrangement = Arrangement.spacedBy(24.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Header Row
+        // Header Row with edge padding
         HeaderRow(
             providerName = providerName,
             providerLogoUrl = providerLogoUrl,
@@ -79,7 +83,7 @@ fun ProviderDetailScreen(
             backButtonFocusRequester = backButtonFocusRequester
         )
 
-        // Search Bar Row
+        // Search Bar Row with edge padding
         SearchBarRow(
             query = uiState.query,
             onQueryChange = { viewModel.setQuery(it) },
@@ -149,7 +153,9 @@ private fun HeaderRow(
     backButtonFocusRequester: FocusRequester? = null
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Dimens.edgePadding),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -204,11 +210,12 @@ private fun SearchBarRow(
     onNavigateDown: () -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Dimens.edgePadding),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Search Text Field - click to activate
         FocusableSearchBar(
             value = query,
             onValueChange = onQueryChange,
@@ -220,7 +227,6 @@ private fun SearchBarRow(
             onNavigateDown = onNavigateDown
         )
 
-        // Search Button
         FocusableButton(
             onClick = onSearch,
             modifier = Modifier
@@ -232,18 +238,32 @@ private fun SearchBarRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ContentSection(
     title: String,
     content: @Composable () -> Unit
 ) {
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
     Column(
+        modifier = Modifier
+            .bringIntoViewRequester(bringIntoViewRequester)
+            .onFocusChanged { focusState ->
+                if (focusState.hasFocus) {
+                    coroutineScope.launch {
+                        bringIntoViewRequester.bringIntoView()
+                    }
+                }
+            },
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
             text = title,
             style = MaterialTheme.typography.headlineSmall,
-            color = Color.White
+            color = Color.White,
+            modifier = Modifier.padding(horizontal = Dimens.edgePadding)
         )
         content()
     }
@@ -252,6 +272,7 @@ private fun ContentSection(
 @Composable
 private fun LoadingRow() {
     Row(
+        modifier = Modifier.padding(horizontal = Dimens.edgePadding),
         horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         repeat(4) {
@@ -283,7 +304,7 @@ private fun ErrorText(error: String) {
         text = "Error: $error",
         style = MaterialTheme.typography.bodyMedium,
         color = Color.Red,
-        modifier = Modifier.padding(16.dp)
+        modifier = Modifier.padding(horizontal = Dimens.edgePadding, vertical = 16.dp)
     )
 }
 
@@ -293,7 +314,7 @@ private fun EmptyText(message: String) {
         text = message,
         style = MaterialTheme.typography.bodyMedium,
         color = Color.Gray,
-        modifier = Modifier.padding(16.dp)
+        modifier = Modifier.padding(horizontal = Dimens.edgePadding, vertical = 16.dp)
     )
 }
 
@@ -303,17 +324,22 @@ private fun CollectionRow(
     onItemClick: (CollectionItem) -> Unit,
     firstItemFocusRequester: FocusRequester? = null
 ) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    TvOsGradientLazyRow(
+        gradientAlpha = 0.5f,
+        verticalPadding = 20.dp
     ) {
-        items(items, key = { "${it.id}_${it.mediaType}" }) { item ->
-            val isFirstItem = items.indexOf(item) == 0
+        items(items.size, key = { items[it].let { item -> "${item.id}_${item.mediaType}" } }) { index ->
+            val item = items[index]
+            val glowColor = rememberGlowColor(index, items.size)
+            val isFirstItem = index == 0
+
             MediaCard(
                 onClick = { onItemClick(item) },
                 modifier = Modifier
                     .width(128.dp)
                     .height(240.dp),
-                focusRequester = if (isFirstItem) firstItemFocusRequester else null
+                focusRequester = if (isFirstItem) firstItemFocusRequester else null,
+                borderColor = glowColor
             ) {
                 Column {
                     AsyncImage(

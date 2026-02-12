@@ -368,15 +368,17 @@ data class PrefetchEpisodeInfo(
 
 @JsonClass(generateAdapter = true)
 data class PrefetchPromoteResponse(
-    val success: Boolean,
-    val status: String,  // "searching", "downloading", "completed", "failed"
-    val streamUrl: String?,
-    val progress: Int?,
-    val message: String?,
+    val success: Boolean = false,  // Default to false for error responses
+    val status: String = "failed",  // "searching", "downloading", "completed", "failed"
+    val streamUrl: String? = null,
+    val progress: Int? = null,
+    val message: String? = null,
+    val error: String? = null,  // Server error message
     // New fields for autoplay chain continuation
     val hasNext: Boolean = false,  // Whether there's a next episode after the promoted one
     val nextEpisode: PrefetchEpisodeInfo? = null,  // Info for the next episode (for autoplay UI)
-    val contentInfo: PromotedContentInfo? = null  // Info about the promoted episode (for next prefetch)
+    val contentInfo: PromotedContentInfo? = null,  // Info about the promoted episode (for next prefetch)
+    val skipMarkers: com.duckflix.lite.data.remote.dto.SkipMarkers? = null  // Intro/recap/credits skip timestamps
 )
 
 @JsonClass(generateAdapter = true)

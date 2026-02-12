@@ -103,7 +103,9 @@ fun LogoutConfirmationDialog(
                                 .focusRequester(backButtonFocusRequester)
                                 .focusProperties {
                                     left = logoutButtonFocusRequester
-                                }
+                                },
+                            index = 0,
+                            totalItems = 2
                         ) {
                             Text("Back")
                         }
@@ -115,7 +117,9 @@ fun LogoutConfirmationDialog(
                                 .focusRequester(logoutButtonFocusRequester)
                                 .focusProperties {
                                     right = backButtonFocusRequester
-                                }
+                                },
+                            index = 1,
+                            totalItems = 2
                         ) {
                             Text("Logout")
                         }

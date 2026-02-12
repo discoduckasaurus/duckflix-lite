@@ -5,7 +5,9 @@ import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
 data class BandwidthReportRequest(
-    @Json(name = "measuredMbps") val measuredMbps: Double
+    @Json(name = "measuredMbps") val measuredMbps: Double,
+    @Json(name = "durationMs") val durationMs: Long? = null,
+    @Json(name = "trigger") val trigger: String? = null // "startup", "episode-end", "bandwidth-retest", "manual"
 )
 
 @JsonClass(generateAdapter = true)
@@ -13,7 +15,20 @@ data class BandwidthStatusResponse(
     @Json(name = "measuredBandwidthMbps") val measuredBandwidthMbps: Double?,
     @Json(name = "safetyMargin") val safetyMargin: Double?,
     @Json(name = "effectiveBandwidthMbps") val effectiveBandwidthMbps: Double?,
-    @Json(name = "measuredAt") val measuredAt: String?
+    @Json(name = "measuredAt") val measuredAt: String?,
+    @Json(name = "hasMeasurement") val hasMeasurement: Boolean? = null,
+    @Json(name = "maxBitrateMbps") val maxBitrateMbps: Double? = null,
+    @Json(name = "isStale") val isStale: Boolean? = null,
+    @Json(name = "needsTest") val needsTest: Boolean? = null,
+    @Json(name = "suggestRetest") val suggestRetest: Boolean? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class BandwidthReportResponse(
+    @Json(name = "success") val success: Boolean,
+    @Json(name = "recorded") val recorded: Double?,
+    @Json(name = "reliable") val reliable: Boolean?,
+    @Json(name = "maxBitrate") val maxBitrate: Double?
 )
 
 @JsonClass(generateAdapter = true)

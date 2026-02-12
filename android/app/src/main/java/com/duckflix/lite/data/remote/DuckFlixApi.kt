@@ -1,6 +1,7 @@
 package com.duckflix.lite.data.remote
 
 import com.duckflix.lite.data.remote.dto.BandwidthReportRequest
+import com.duckflix.lite.data.remote.dto.BandwidthReportResponse
 import com.duckflix.lite.data.remote.dto.BandwidthStatusResponse
 import com.duckflix.lite.data.remote.dto.CollectionResponse
 import com.duckflix.lite.data.remote.dto.GenresResponse
@@ -104,8 +105,14 @@ interface DuckFlixApi {
     @GET("bandwidth/test")
     suspend fun downloadBandwidthTest(): ResponseBody
 
+    @Streaming
+    @GET("bandwidth/test-stream")
+    suspend fun downloadBandwidthTestStream(
+        @Query("duration") duration: Int = 5
+    ): ResponseBody
+
     @POST("bandwidth/report")
-    suspend fun reportBandwidth(@Body request: BandwidthReportRequest): BandwidthStatusResponse
+    suspend fun reportBandwidth(@Body request: BandwidthReportRequest): BandwidthReportResponse
 
     @GET("bandwidth/status")
     suspend fun getBandwidthStatus(): BandwidthStatusResponse
@@ -258,6 +265,8 @@ interface DuckFlixApi {
         @Query("type") type: String? = null, // "movie" or "tv"
         @Query("genre") genre: Int? = null,
         @Query("year") year: Int? = null,
+        @Query("minYear") minYear: Int? = null,
+        @Query("maxYear") maxYear: Int? = null,
         @Query("minRating") minRating: Float? = null,
         @Query("maxRating") maxRating: Float? = null,
         @Query("minRuntime") minRuntime: Int? = null,

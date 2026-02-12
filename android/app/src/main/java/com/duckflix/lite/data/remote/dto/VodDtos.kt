@@ -53,6 +53,7 @@ data class ContinueWatchingItem(
     val type: String,
     val title: String,
     val posterPath: String?,
+    val logoPath: String? = null,  // Title logo for loading screen
     val season: Int? = null,
     val episode: Int? = null,
 
@@ -77,6 +78,15 @@ data class ContinueWatchingItem(
                 it  // Already a full URL, use as-is
             } else {
                 "https://image.tmdb.org/t/p/w500$it"  // TMDB path, prepend base URL
+            }
+        }
+
+    val logoUrl: String?
+        get() = logoPath?.let {
+            if (it.startsWith("http://") || it.startsWith("https://")) {
+                it
+            } else {
+                "https://image.tmdb.org/t/p/w500$it"
             }
         }
 

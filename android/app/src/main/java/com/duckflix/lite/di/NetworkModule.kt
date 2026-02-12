@@ -41,6 +41,7 @@ object NetworkModule {
         val cacheSize = 10 * 1024 * 1024L // 10 MB
         val cache = Cache(File(context.cacheDir, "http_cache"), cacheSize)
 
+        // Use HEADERS level to avoid OOM on large streaming responses (bandwidth test)
         val logging = HttpLoggingInterceptor { message ->
             // Add marker for logo-related responses
             if (message.contains("logoPath") || message.contains("/search/tmdb/")) {
@@ -49,7 +50,7 @@ object NetworkModule {
                 println(message)
             }
         }.apply {
-            level = HttpLoggingInterceptor.Level.BODY
+            level = HttpLoggingInterceptor.Level.HEADERS
         }
 
         val authInterceptor = AuthInterceptor(context)

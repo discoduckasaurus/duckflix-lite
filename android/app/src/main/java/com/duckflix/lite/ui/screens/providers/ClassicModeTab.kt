@@ -14,6 +14,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.duckflix.lite.data.remote.dto.WatchProvider
 import com.duckflix.lite.ui.components.LoadingIndicator
 import com.duckflix.lite.ui.components.ProviderTile
+import com.duckflix.lite.ui.theme.Dimens
 
 /**
  * Classic Mode Tab - Provider-based browsing interface.
@@ -31,10 +32,12 @@ fun ClassicModeTab(
     val uiState by viewModel.uiState.collectAsState()
 
     Column(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = Dimens.edgePadding),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Optional title
+        // Section title
         Text(
             text = "Browse by Provider",
             style = MaterialTheme.typography.headlineSmall,
@@ -88,19 +91,23 @@ fun ClassicModeTab(
 
             else -> {
                 // Provider grid - 3 columns like episode layout
+                val totalProviders = uiState.providers.size
                 Column(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    uiState.providers.chunked(3).forEach { rowProviders ->
+                    uiState.providers.chunked(3).forEachIndexed { rowIndex, rowProviders ->
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            rowProviders.forEach { provider ->
+                            rowProviders.forEachIndexed { colIndex, provider ->
+                                val flatIndex = rowIndex * 3 + colIndex
                                 Box(modifier = Modifier.weight(1f)) {
                                     ProviderTile(
                                         provider = provider,
-                                        onClick = { onProviderClick(provider) }
+                                        onClick = { onProviderClick(provider) },
+                                        index = flatIndex,
+                                        totalItems = totalProviders
                                     )
                                 }
                             }

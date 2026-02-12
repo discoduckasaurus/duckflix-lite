@@ -274,13 +274,20 @@ fun VideoPlayerScreen(
             }
 
             viewModel.player != null -> {
-                // ExoPlayer view
+                // ExoPlayer view with HDR support
+                // SurfaceView is required for HDR passthrough (TextureView cannot pass HDR metadata)
+                // System automatically handles HDR-to-SDR tone mapping on non-HDR displays
                 AndroidView(
                     factory = { ctx ->
                         PlayerView(ctx).apply {
                             player = viewModel.player
                             useController = false // Use custom controls
                             keepScreenOn = true
+                            // Use SurfaceView for HDR passthrough (default, but be explicit)
+                            // This ensures HDR10/HDR10+/Dolby Vision content displays correctly
+                            // On non-HDR displays, Android handles tone mapping automatically
+                            setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER) // We handle buffering UI
+                            resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                         }
                     },
                     update = { view ->
@@ -345,7 +352,15 @@ fun VideoPlayerScreen(
                         onDismissVideoIssuesPanel = { viewModel.setVideoIssuesPanelVisible(false) },
                         onDismissAudioPanel = { viewModel.toggleAudioPanel() },
                         onDismissSubtitlePanel = { viewModel.toggleSubtitlePanel() },
-                        onUserActivity = { activityCounter++ }
+                        hasNextEpisode = uiState.nextEpisodeInfo?.hasNext == true,
+                        onNextEpisode = viewModel::playNextNow,
+                        onUserActivity = { activityCounter++ },
+                        contentType = uiState.contentType,
+                        currentSeason = uiState.currentSeason,
+                        currentEpisode = uiState.currentEpisode,
+                        episodeTitle = uiState.episodeTitle,
+                        onSeekStart = viewModel::onSeekStart,
+                        onSeekEnd = viewModel::onSeekEnd
                     )
                 }
 
@@ -383,7 +398,7 @@ fun VideoPlayerScreen(
                     )
                 }
 
-                // Next Episode Countdown
+                // Next Episode Countdown (full screen)
                 if (uiState.autoPlayCountdown > 0 && uiState.nextEpisodeInfo != null) {
                     NextEpisodeOverlay(
                         nextEpisode = uiState.nextEpisodeInfo!!,
@@ -391,6 +406,29 @@ fun VideoPlayerScreen(
                         onCancel = viewModel::cancelAutoPlay
                     )
                 }
+
+                // Up Next overlay (shows at 95% when no skip credits data)
+                // Don't show when skip credits button is visible (skip credits replaces this)
+                if (uiState.showUpNextOverlay &&
+                    uiState.nextEpisodeInfo != null &&
+                    !uiState.showSkipCredits) {
+                    UpNextOverlay(
+                        nextEpisode = uiState.nextEpisodeInfo!!,
+                        onPlayNow = viewModel::playNextNow,
+                        onDismiss = viewModel::dismissUpNextOverlay
+                    )
+                }
+
+                // Skip buttons (intro/recap/credits)
+                // Always render but visibility is controlled by AnimatedVisibility inside
+                SkipButtonsOverlay(
+                    showIntro = uiState.showSkipIntro,
+                    showRecap = uiState.showSkipRecap,
+                    showCredits = uiState.showSkipCredits,
+                    onSkipIntro = viewModel::skipIntro,
+                    onSkipRecap = viewModel::skipRecap,
+                    onSkipCredits = viewModel::skipCredits
+                )
             }
         }
 
@@ -452,13 +490,22 @@ private fun PlayerControls(
     onDismissVideoIssuesPanel: () -> Unit,
     onDismissAudioPanel: () -> Unit,
     onDismissSubtitlePanel: () -> Unit,
-    onUserActivity: () -> Unit = {}
+    onUserActivity: () -> Unit = {},
+    hasNextEpisode: Boolean = false,
+    onNextEpisode: () -> Unit = {},
+    contentType: String = "movie",
+    currentSeason: Int? = null,
+    currentEpisode: Int? = null,
+    episodeTitle: String? = null,
+    onSeekStart: () -> Unit = {},
+    onSeekEnd: () -> Unit = {}
 ) {
     val playPauseFocusRequester = remember { FocusRequester() }
     val autoplayButtonFocusRequester = remember { FocusRequester() }
     val audioButtonFocusRequester = remember { FocusRequester() }
     val ccButtonFocusRequester = remember { FocusRequester() }
     val issuesButtonFocusRequester = remember { FocusRequester() }
+    val nextEpisodeFocusRequester = remember { FocusRequester() }
     val backButtonFocusRequester = remember { FocusRequester() }
     val sliderFocusRequester = remember { FocusRequester() }
     val coroutineScope = rememberCoroutineScope()
@@ -515,7 +562,7 @@ private fun PlayerControls(
                 focusRequester = backButtonFocusRequester
             )
 
-            // Logo + quality - centered
+            // Logo + episode info + quality - centered
             Column(
                 modifier = Modifier.align(Alignment.TopCenter),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -529,6 +576,22 @@ private fun PlayerControls(
                             .widthIn(max = 300.dp),
                         contentScale = androidx.compose.ui.layout.ContentScale.Fit
                     )
+                }
+                // Episode info for TV shows: S##E## on first line, title on second line
+                if (contentType == "tv" && currentSeason != null && currentEpisode != null) {
+                    Text(
+                        text = "S${currentSeason.toString().padStart(2, '0')}E${currentEpisode.toString().padStart(2, '0')}",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color.White.copy(alpha = 0.9f),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    if (!episodeTitle.isNullOrBlank()) {
+                        Text(
+                            text = episodeTitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.7f)
+                        )
+                    }
                 }
                 if (displayQuality.isNotEmpty()) {
                     Text(
@@ -625,8 +688,21 @@ private fun PlayerControls(
                 onClick = onToggleVideoIssuesPanel,
                 focusRequester = issuesButtonFocusRequester,
                 focusUp = ccButtonFocusRequester,
+                focusDown = if (hasNextEpisode) nextEpisodeFocusRequester else null,
                 onFocusChanged = { if (it) onUserActivity() }
             )
+            // Next Episode button - only shown for TV shows with a next episode
+            if (hasNextEpisode) {
+                PlayerIconButton(
+                    iconRes = com.duckflix.lite.R.drawable.df_next_episode,
+                    label = "Next Episode",
+                    onClick = onNextEpisode,
+                    focusRequester = nextEpisodeFocusRequester,
+                    focusUp = issuesButtonFocusRequester,
+                    focusLeft = playPauseFocusRequester,
+                    onFocusChanged = { if (it) onUserActivity() }
+                )
+            }
         }
 
         // Bottom bar with timeline and info
@@ -677,11 +753,13 @@ private fun PlayerControls(
                     when (interaction) {
                         is DragInteraction.Start -> {
                             isDragging = true
+                            onSeekStart()
                         }
                         is DragInteraction.Stop, is DragInteraction.Cancel -> {
                             if (isDragging) {
                                 onSeekTo(previewPosition)
                                 isDragging = false
+                                onSeekEnd()
                             }
                         }
                     }
@@ -716,6 +794,7 @@ private fun PlayerControls(
                                         isKeyboardSeeking = true
                                         wasPlayingBeforeSeek = isPlaying
                                         if (isPlaying) onPlayPauseClick() // Pause
+                                        onSeekStart() // Hide skip buttons during seek
                                         // Only reset previewPosition if this is a fresh seek (not rapid continuation)
                                         val timeSinceLastSeek = currentTime - lastSliderSeekTime
                                         if (timeSinceLastSeek > sliderSeekTimeoutMs) {
@@ -733,6 +812,7 @@ private fun PlayerControls(
                                         isKeyboardSeeking = true
                                         wasPlayingBeforeSeek = isPlaying
                                         if (isPlaying) onPlayPauseClick() // Pause
+                                        onSeekStart() // Hide skip buttons during seek
                                         // Only reset previewPosition if this is a fresh seek (not rapid continuation)
                                         val timeSinceLastSeek = currentTime - lastSliderSeekTime
                                         if (timeSinceLastSeek > sliderSeekTimeoutMs) {
@@ -757,6 +837,7 @@ private fun PlayerControls(
                                             // Apply the seek
                                             onSeekTo(previewPosition)
                                             isKeyboardSeeking = false
+                                            onSeekEnd() // Allow skip buttons to show again
                                             // Resume playback if it was playing before
                                             if (wasPlayingBeforeSeek && !isPlaying) {
                                                 onPlayPauseClick()
@@ -1509,6 +1590,242 @@ private fun RecommendationsOverlay(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Up Next overlay that shows in the last 5% of video playback.
+ * Non-blocking overlay with auto-focused "Play Now" button.
+ * Does not auto-hide, user must interact or wait for video to end.
+ */
+@Composable
+private fun UpNextOverlay(
+    nextEpisode: com.duckflix.lite.data.remote.dto.NextEpisodeResponse,
+    onPlayNow: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val playNowFocusRequester = remember { FocusRequester() }
+
+    // Auto-focus the Play Now button when overlay appears
+    LaunchedEffect(Unit) {
+        playNowFocusRequester.requestFocus()
+    }
+
+    // Handle back button to dismiss
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    onDismiss()
+                    true
+                } else if (event.type == KeyEventType.KeyDown && event.key == Key.Back) {
+                    onDismiss()
+                    true
+                } else {
+                    false
+                }
+            },
+        contentAlignment = Alignment.BottomEnd
+    ) {
+        // Positioned at bottom-right with padding
+        androidx.compose.material3.Surface(
+            modifier = Modifier
+                .padding(32.dp)
+                .widthIn(max = 400.dp),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            color = Color.Black.copy(alpha = 0.9f),
+            border = androidx.compose.foundation.BorderStroke(
+                1.dp,
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Header
+                Text(
+                    text = "Up Next",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+
+                // Episode info
+                Text(
+                    text = "S${nextEpisode.season}E${nextEpisode.episode}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White
+                )
+                if (!nextEpisode.title.isNullOrBlank()) {
+                    Text(
+                        text = nextEpisode.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.8f),
+                        maxLines = 2,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+
+                // Buttons
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(top = 4.dp)
+                ) {
+                    com.duckflix.lite.ui.components.FocusableButton(
+                        onClick = onPlayNow,
+                        modifier = Modifier.focusRequester(playNowFocusRequester)
+                    ) {
+                        Text("Play Now")
+                    }
+                    com.duckflix.lite.ui.components.FocusableButton(
+                        onClick = onDismiss
+                    ) {
+                        Text("Dismiss")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Skip buttons overlay for intro, recap, and credits.
+ * Positioned at bottom-right but left of the timestamp, above transport controls.
+ */
+@Composable
+private fun SkipButtonsOverlay(
+    showIntro: Boolean,
+    showRecap: Boolean,
+    showCredits: Boolean,
+    onSkipIntro: () -> Unit,
+    onSkipRecap: () -> Unit,
+    onSkipCredits: () -> Unit
+) {
+    // Focus requesters for each button
+    val introFocusRequester = remember { FocusRequester() }
+    val recapFocusRequester = remember { FocusRequester() }
+    val creditsFocusRequester = remember { FocusRequester() }
+
+    // Request focus when buttons become visible (with small delay to ensure composable is ready)
+    LaunchedEffect(showIntro) {
+        if (showIntro) {
+            delay(100)
+            try {
+                introFocusRequester.requestFocus()
+            } catch (e: IllegalStateException) {
+                // Focus requester not attached yet
+            }
+        }
+    }
+
+    LaunchedEffect(showRecap) {
+        if (showRecap) {
+            delay(100)
+            try {
+                recapFocusRequester.requestFocus()
+            } catch (e: IllegalStateException) {
+                // Focus requester not attached yet
+            }
+        }
+    }
+
+    LaunchedEffect(showCredits) {
+        if (showCredits) {
+            delay(100)
+            try {
+                creditsFocusRequester.requestFocus()
+            } catch (e: IllegalStateException) {
+                // Focus requester not attached yet
+            }
+        }
+    }
+
+    // Position: bottom of screen, right side but with enough margin to not overlap timestamp
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = 110.dp, end = 180.dp), // Above controls, left of timestamp
+        contentAlignment = Alignment.BottomEnd
+    ) {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            // Intro skip button
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showIntro,
+                enter = androidx.compose.animation.fadeIn(
+                    animationSpec = androidx.compose.animation.core.tween(200)
+                ),
+                exit = androidx.compose.animation.fadeOut(
+                    animationSpec = androidx.compose.animation.core.tween(200)
+                )
+            ) {
+                SkipButton(
+                    text = "Skip Intro",
+                    onClick = onSkipIntro,
+                    focusRequester = introFocusRequester
+                )
+            }
+
+            // Recap skip button
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showRecap,
+                enter = androidx.compose.animation.fadeIn(
+                    animationSpec = androidx.compose.animation.core.tween(200)
+                ),
+                exit = androidx.compose.animation.fadeOut(
+                    animationSpec = androidx.compose.animation.core.tween(200)
+                )
+            ) {
+                SkipButton(
+                    text = "Skip Recap",
+                    onClick = onSkipRecap,
+                    focusRequester = recapFocusRequester
+                )
+            }
+
+            // Credits skip button
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showCredits,
+                enter = androidx.compose.animation.fadeIn(
+                    animationSpec = androidx.compose.animation.core.tween(200)
+                ),
+                exit = androidx.compose.animation.fadeOut(
+                    animationSpec = androidx.compose.animation.core.tween(200)
+                )
+            ) {
+                SkipButton(
+                    text = "Skip Credits",
+                    onClick = onSkipCredits,
+                    focusRequester = creditsFocusRequester
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Individual skip button using FocusableButton for consistent TV behavior.
+ */
+@Composable
+private fun SkipButton(
+    text: String,
+    onClick: () -> Unit,
+    focusRequester: FocusRequester
+) {
+    com.duckflix.lite.ui.components.FocusableButton(
+        onClick = onClick,
+        focusRequester = focusRequester
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(text)
+            Text("»", style = MaterialTheme.typography.titleMedium)
         }
     }
 }

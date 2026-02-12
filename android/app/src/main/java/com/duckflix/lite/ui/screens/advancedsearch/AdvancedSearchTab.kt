@@ -1,14 +1,11 @@
 package com.duckflix.lite.ui.screens.advancedsearch
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
@@ -18,18 +15,17 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import com.duckflix.lite.data.remote.dto.CollectionItem
-import com.duckflix.lite.data.remote.dto.GenreDto
-import com.duckflix.lite.ui.components.FilterDropdown
-import com.duckflix.lite.ui.components.FilterSlider
 import com.duckflix.lite.ui.components.FilterToggleButton
-import com.duckflix.lite.ui.components.FocusableButton
 import com.duckflix.lite.ui.components.FocusableSearchBar
 import com.duckflix.lite.ui.components.LoadingIndicator
 import com.duckflix.lite.ui.components.MediaCard
+import com.duckflix.lite.ui.theme.Dimens
+import com.duckflix.lite.ui.theme.TvOsGradientLazyRow
+import com.duckflix.lite.ui.theme.rememberGlowColor
 
 /**
  * Advanced Search Tab - Browse and filter content with multiple criteria.
- * Supports text search, genre/year/rating/runtime filters, and sorting.
+ * Features inline TV/Movie toggles next to search bar and collapsible advanced filters.
  */
 @Composable
 fun AdvancedSearchTab(
@@ -40,45 +36,31 @@ fun AdvancedSearchTab(
     val uiState by viewModel.uiState.collectAsState()
     val focusManager = LocalFocusManager.current
     val searchFocusRequester = remember { FocusRequester() }
-    val filterRowFocusRequester = remember { FocusRequester() }
     val resultsFocusRequester = remember { FocusRequester() }
-
-    // Year options: 2026 down to 1970
-    val yearOptions = remember { (2026 downTo 1970).toList() }
 
     // Note: verticalScroll removed - parent VodContainerScreen handles scrolling
     Column(
         modifier = modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Search Bar Row
+        // Search Bar Row with inline toggles (simplified - no advanced filters)
         SearchBarRow(
             query = uiState.query,
             onQueryChange = viewModel::setQuery,
             onSearch = viewModel::search,
+            tvSelected = uiState.tvSelected,
+            movieSelected = uiState.movieSelected,
+            onToggleTv = viewModel::toggleTv,
+            onToggleMovie = viewModel::toggleMovie,
             searchFocusRequester = searchFocusRequester,
             onNavigateDown = {
                 focusManager.clearFocus()
                 try {
-                    filterRowFocusRequester.requestFocus()
+                    resultsFocusRequester.requestFocus()
                 } catch (_: IllegalStateException) {
                     // FocusRequester not attached yet
                 }
             }
-        )
-
-        // Filter Row (horizontally scrollable)
-        FilterRow(
-            uiState = uiState,
-            yearOptions = yearOptions,
-            onToggleTv = viewModel::toggleTv,
-            onToggleMovie = viewModel::toggleMovie,
-            onGenresChange = viewModel::setSelectedGenres,
-            onYearChange = viewModel::setSelectedYear,
-            onRatingChange = viewModel::setRatingRange,
-            onRuntimeChange = { range -> viewModel.setRuntimeRange(range) },
-            onSortChange = viewModel::setSortBy,
-            filterRowFocusRequester = filterRowFocusRequester
         )
 
         // Results Count
@@ -86,7 +68,8 @@ fun AdvancedSearchTab(
             Text(
                 text = "${uiState.totalResults} results",
                 style = MaterialTheme.typography.bodyMedium,
-                color = Color.White.copy(alpha = 0.7f)
+                color = Color.White.copy(alpha = 0.7f),
+                modifier = Modifier.padding(horizontal = Dimens.edgePadding)
             )
         }
 
@@ -128,7 +111,7 @@ fun AdvancedSearchTab(
             )
         }
 
-        // Empty state
+        // Empty state - show prompt to search
         if (!uiState.isLoading && uiState.results.isEmpty() && uiState.error == null) {
             Box(
                 modifier = Modifier
@@ -137,7 +120,7 @@ fun AdvancedSearchTab(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "No results found. Try adjusting your filters.",
+                    text = if (uiState.query.isBlank()) "Enter a search term to find content" else "No results found",
                     style = MaterialTheme.typography.bodyLarge,
                     color = Color.White.copy(alpha = 0.6f)
                 )
@@ -154,229 +137,45 @@ private fun SearchBarRow(
     query: String,
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
+    tvSelected: Boolean,
+    movieSelected: Boolean,
+    onToggleTv: () -> Unit,
+    onToggleMovie: () -> Unit,
     searchFocusRequester: FocusRequester,
     onNavigateDown: () -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Dimens.edgePadding),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Search Input - click to activate
+        // Search Input
         FocusableSearchBar(
             value = query,
             onValueChange = onQueryChange,
-            placeholder = "Search movies and TV shows...",
+            placeholder = "Search...",
             onSearch = onSearch,
             modifier = Modifier.weight(1f),
-            height = 56.dp,
+            height = 48.dp,
             focusRequester = searchFocusRequester,
             onNavigateDown = onNavigateDown
         )
 
-        // Search Button
-        FocusableButton(
-            onClick = onSearch,
-            modifier = Modifier
-                .width(120.dp)
-                .height(56.dp)
-        ) {
-            Text("Search")
-        }
-    }
-}
-
-@Composable
-private fun FilterRow(
-    uiState: AdvancedSearchUiState,
-    yearOptions: List<Int>,
-    onToggleTv: () -> Unit,
-    onToggleMovie: () -> Unit,
-    onGenresChange: (List<Int>) -> Unit,
-    onYearChange: (Int?) -> Unit,
-    onRatingChange: (ClosedFloatingPointRange<Float>) -> Unit,
-    onRuntimeChange: (IntRange) -> Unit,
-    onSortChange: (String) -> Unit,
-    filterRowFocusRequester: FocusRequester
-) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(vertical = 4.dp)
-    ) {
-        // TV Toggle
-        item {
-            FilterToggleButton(
-                label = "TV",
-                isSelected = uiState.tvSelected,
-                onToggle = onToggleTv,
-                modifier = Modifier.focusRequester(filterRowFocusRequester)
-            )
-        }
-
-        // Movie Toggle
-        item {
-            FilterToggleButton(
-                label = "Movie",
-                isSelected = uiState.movieSelected,
-                onToggle = onToggleMovie
-            )
-        }
-
-        // Genre Dropdown (multi-select)
-        item {
-            FilterDropdown(
-                label = "Genre",
-                options = uiState.availableGenres,
-                selectedOptions = uiState.availableGenres.filter {
-                    uiState.selectedGenres.contains(it.id)
-                },
-                onSelectionChange = { selectedGenres ->
-                    onGenresChange(selectedGenres.map { it.id })
-                },
-                optionLabel = { it.name },
-                multiSelect = true
-            )
-        }
-
-        // Year Dropdown (single-select)
-        item {
-            FilterDropdown(
-                label = "Year",
-                options = yearOptions,
-                selectedOptions = uiState.selectedYear?.let { listOf(it) } ?: emptyList(),
-                onSelectionChange = { selected ->
-                    onYearChange(selected.firstOrNull())
-                },
-                optionLabel = { it.toString() },
-                multiSelect = false
-            )
-        }
-
-        // Rating Slider
-        item {
-            RatingFilterChip(
-                ratingRange = uiState.ratingRange,
-                onRatingChange = onRatingChange
-            )
-        }
-
-        // Runtime Slider
-        item {
-            RuntimeFilterChip(
-                runtimeRange = uiState.runtimeRange,
-                onRuntimeChange = onRuntimeChange
-            )
-        }
-
-        // Sort Dropdown
-        item {
-            FilterDropdown(
-                label = "Sort",
-                options = SortOption.entries.toList(),
-                selectedOptions = SortOption.entries.filter { it.apiValue == uiState.sortBy },
-                onSelectionChange = { selected ->
-                    selected.firstOrNull()?.let { onSortChange(it.apiValue) }
-                },
-                optionLabel = { it.displayName },
-                multiSelect = false
-            )
-        }
-    }
-}
-
-/**
- * Chip-style rating filter that expands to show a slider when clicked
- */
-@Composable
-private fun RatingFilterChip(
-    ratingRange: ClosedFloatingPointRange<Float>,
-    onRatingChange: (ClosedFloatingPointRange<Float>) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    val hasFilter = ratingRange.start > 0f || ratingRange.endInclusive < 10f
-    val displayText = if (hasFilter) {
-        "${String.format("%.1f", ratingRange.start)} - ${String.format("%.1f", ratingRange.endInclusive)}"
-    } else {
-        "Rating"
-    }
-
-    Column {
+        // TV Toggle (inline)
         FilterToggleButton(
-            label = displayText,
-            isSelected = hasFilter,
-            onToggle = { expanded = !expanded }
+            label = "TV",
+            isSelected = tvSelected,
+            onToggle = onToggleTv
         )
 
-        if (expanded) {
-            Surface(
-                modifier = Modifier
-                    .width(280.dp)
-                    .padding(top = 8.dp),
-                color = MaterialTheme.colorScheme.surface,
-                shape = MaterialTheme.shapes.medium,
-                tonalElevation = 8.dp
-            ) {
-                FilterSlider(
-                    label = "Rating",
-                    value = ratingRange,
-                    valueRange = 0f..10f,
-                    onValueChange = onRatingChange,
-                    steps = 19, // 0.5 increments
-                    valueFormatter = { String.format("%.1f", it) },
-                    modifier = Modifier.padding(8.dp)
-                )
-            }
-        }
-    }
-}
-
-/**
- * Chip-style runtime filter that expands to show a slider when clicked
- */
-@Composable
-private fun RuntimeFilterChip(
-    runtimeRange: IntRange,
-    onRuntimeChange: (IntRange) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    val hasFilter = runtimeRange.first > 0 || runtimeRange.last < 300
-    val displayText = if (hasFilter) {
-        "${runtimeRange.first} - ${runtimeRange.last} min"
-    } else {
-        "Runtime"
-    }
-
-    Column {
+        // Movie Toggle (inline)
         FilterToggleButton(
-            label = displayText,
-            isSelected = hasFilter,
-            onToggle = { expanded = !expanded }
+            label = "Movie",
+            isSelected = movieSelected,
+            onToggle = onToggleMovie
         )
-
-        if (expanded) {
-            Surface(
-                modifier = Modifier
-                    .width(280.dp)
-                    .padding(top = 8.dp),
-                color = MaterialTheme.colorScheme.surface,
-                shape = MaterialTheme.shapes.medium,
-                tonalElevation = 8.dp
-            ) {
-                FilterSlider(
-                    label = "Runtime",
-                    value = runtimeRange.first.toFloat()..runtimeRange.last.toFloat(),
-                    valueRange = 0f..300f,
-                    onValueChange = { range ->
-                        onRuntimeChange(range.start.toInt()..range.endInclusive.toInt())
-                    },
-                    steps = 9, // 30 minute increments
-                    valueFormatter = { "${it.toInt()} min" },
-                    modifier = Modifier.padding(8.dp)
-                )
-            }
-        }
     }
 }
 
@@ -386,15 +185,18 @@ private fun ResultsGrid(
     onContentClick: (tmdbId: Int, mediaType: String) -> Unit,
     resultsFocusRequester: FocusRequester
 ) {
-    // Display results in a horizontal LazyRow carousel (matches My Stuff style)
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    // Display results in a horizontal carousel with gradient glow (matches My Stuff style)
+    TvOsGradientLazyRow(
+        verticalPadding = 20.dp
     ) {
-        items(results, key = { "${it.id}_${it.mediaType}" }) { item ->
+        items(results.size, key = { results[it].let { item -> "${item.id}_${item.mediaType}" } }) { index ->
+            val item = results[index]
+            val glowColor = rememberGlowColor(index, results.size)
             ResultCard(
                 item = item,
                 onClick = { onContentClick(item.id, item.mediaType) },
-                focusRequester = if (results.indexOf(item) == 0) resultsFocusRequester else null
+                focusRequester = if (index == 0) resultsFocusRequester else null,
+                borderColor = glowColor
             )
         }
     }
@@ -405,14 +207,16 @@ private fun ResultCard(
     item: CollectionItem,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    borderColor: Color = Color.White
 ) {
     MediaCard(
         onClick = onClick,
         modifier = modifier
             .width(128.dp)
             .height(240.dp),
-        focusRequester = focusRequester
+        focusRequester = focusRequester,
+        borderColor = borderColor
     ) {
         Column {
             AsyncImage(

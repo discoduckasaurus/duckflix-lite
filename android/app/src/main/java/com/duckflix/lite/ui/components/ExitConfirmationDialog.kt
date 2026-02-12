@@ -79,7 +79,9 @@ fun ExitConfirmationDialog(
                                 .focusProperties {
                                     // Trap focus within dialog - wrap to exit button
                                     left = exitButtonFocusRequester
-                                }
+                                },
+                            index = 0,
+                            totalItems = 2
                         ) {
                             Text("Cancel")
                         }
@@ -92,7 +94,9 @@ fun ExitConfirmationDialog(
                                 .focusProperties {
                                     // Trap focus within dialog - wrap to cancel button
                                     right = cancelButtonFocusRequester
-                                }
+                                },
+                            index = 1,
+                            totalItems = 2
                         ) {
                             Text("Yes, Exit")
                         }

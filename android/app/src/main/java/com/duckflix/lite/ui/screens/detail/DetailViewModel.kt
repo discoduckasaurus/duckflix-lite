@@ -292,6 +292,7 @@ class DetailViewModel @Inject constructor(
                             type = contentType,
                             title = content.title,
                             posterPath = content.posterPath,
+                            logoPath = content.logoPath,
                             releaseDate = content.releaseDate,
                             voteAverage = content.voteAverage
                         )

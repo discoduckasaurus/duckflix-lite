@@ -3,10 +3,13 @@ package com.duckflix.lite.ui.screens.home
 import android.app.Activity
 import java.net.URLDecoder
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,7 +51,10 @@ import com.duckflix.lite.ui.components.ContinueWatchingActionDialog
 import com.duckflix.lite.ui.components.ExitConfirmationDialog
 import com.duckflix.lite.ui.components.FocusableCard
 import com.duckflix.lite.ui.components.MediaCard
+import com.duckflix.lite.ui.theme.TvOsGradientLazyRow
+import com.duckflix.lite.ui.theme.rememberGlowColor
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun HomeScreen(
     navController: NavController,
@@ -67,59 +73,74 @@ fun HomeScreen(
         showExitDialog = true
     }
 
+    val headerBringIntoView = remember { BringIntoViewRequester() }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(start = 32.dp, end = 32.dp, top = 32.dp, bottom = 24.dp),
+                .padding(start = 32.dp, end = 32.dp, top = 32.dp, bottom = 0.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-        // Header with title
-        Text(
-            text = "DuckFlix Lite",
-            style = MaterialTheme.typography.displayLarge
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Compact Main Menu - smaller tiles in a row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        // Header section - brought into view when menu is focused
+        Column(
+            modifier = Modifier
+                .bringIntoViewRequester(headerBringIntoView)
+                .onFocusChanged { focusState ->
+                    if (focusState.hasFocus) {
+                        coroutineScope.launch {
+                            headerBringIntoView.bringIntoView()
+                        }
+                    }
+                },
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            CompactMenuTile(
-                title = "Search",
-                onClick = { navController.navigate(Screen.Search.route) },
-                coroutineScope = coroutineScope,
-                scrollState = scrollState
+            Text(
+                text = "DuckFlix Lite",
+                style = MaterialTheme.typography.displayLarge
             )
-            CompactMenuTile(
-                title = "Live TV",
-                onClick = { navController.navigate(Screen.LiveTV.route) },
-                coroutineScope = coroutineScope,
-                scrollState = scrollState
-            )
-            CompactMenuTile(
-                title = "DVR",
-                onClick = { /* TODO: navController.navigate(Screen.Dvr.route) */ },
-                coroutineScope = coroutineScope,
-                scrollState = scrollState
-            )
-            if (uiState.isAdmin) {
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Compact Main Menu - smaller tiles in a row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 CompactMenuTile(
-                    title = "Admin",
-                    onClick = { navController.navigate(Screen.Admin.route) },
+                    title = "Search",
+                    onClick = { navController.navigate(Screen.Search.route) },
+                    coroutineScope = coroutineScope,
+                    scrollState = scrollState
+                )
+                CompactMenuTile(
+                    title = "Live TV",
+                    onClick = { navController.navigate(Screen.LiveTV.route) },
+                    coroutineScope = coroutineScope,
+                    scrollState = scrollState
+                )
+                CompactMenuTile(
+                    title = "DVR",
+                    onClick = { /* TODO: navController.navigate(Screen.Dvr.route) */ },
+                    coroutineScope = coroutineScope,
+                    scrollState = scrollState
+                )
+                if (uiState.isAdmin) {
+                    CompactMenuTile(
+                        title = "Admin",
+                        onClick = { navController.navigate(Screen.Admin.route) },
+                        coroutineScope = coroutineScope,
+                        scrollState = scrollState
+                    )
+                }
+                CompactMenuTile(
+                    title = "Settings",
+                    onClick = { navController.navigate(Screen.Settings.route) },
                     coroutineScope = coroutineScope,
                     scrollState = scrollState
                 )
             }
-            CompactMenuTile(
-                title = "Settings",
-                onClick = { navController.navigate(Screen.Settings.route) },
-                coroutineScope = coroutineScope,
-                scrollState = scrollState
-            )
         }
 
         // Continue Watching Section
@@ -144,7 +165,7 @@ fun HomeScreen(
                         navController.navigate(Screen.Detail.createRoute(item.tmdbId, item.type))
                     },
                     onItemLongPress = { item ->
-                        viewModel.removeFromWatchlist(item.tmdbId)
+                        viewModel.removeFromWatchlist(item.tmdbId, item.type)
                     }
                 )
             }
@@ -310,7 +331,7 @@ private fun CompactMenuTile(
             .width(140.dp)
             .height(80.dp)
             .onFocusChanged { focusState ->
-                if (focusState.isFocused && coroutineScope != null && scrollState != null) {
+                if (focusState.hasFocus && coroutineScope != null && scrollState != null) {
                     coroutineScope.launch {
                         scrollState.animateScrollTo(0)
                     }
@@ -330,12 +351,25 @@ private fun CompactMenuTile(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ContentSection(
     title: String,
     content: @Composable () -> Unit
 ) {
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
     Column(
+        modifier = Modifier
+            .bringIntoViewRequester(bringIntoViewRequester)
+            .onFocusChanged { focusState ->
+                if (focusState.hasFocus) {
+                    coroutineScope.launch {
+                        bringIntoViewRequester.bringIntoView()
+                    }
+                }
+            },
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
@@ -382,15 +416,19 @@ private fun WatchlistRow(
     onItemClick: (WatchlistEntity) -> Unit,
     onItemLongPress: (WatchlistEntity) -> Unit
 ) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    TvOsGradientLazyRow(
+        gradientAlpha = 0.5f,
+        verticalPadding = 20.dp,
     ) {
-        items(items) { item ->
+        items(items.size) { index ->
+            val item = items[index]
+            val glowColor = rememberGlowColor(index, items.size)
             MediaCard(
                 onClick = { onItemClick(item) },
                 modifier = Modifier
                     .width(128.dp)
-                    .height(240.dp)
+                    .height(240.dp),
+                borderColor = glowColor
             ) {
                 Column {
                     AsyncImage(
@@ -425,15 +463,19 @@ private fun RecommendationsRow(
     items: List<RecommendationItem>,
     onItemClick: (RecommendationItem) -> Unit
 ) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    TvOsGradientLazyRow(
+        gradientAlpha = 0.5f,
+        verticalPadding = 20.dp,
     ) {
-        items(items) { item ->
+        items(items.size) { index ->
+            val item = items[index]
+            val glowColor = rememberGlowColor(index, items.size)
             MediaCard(
                 onClick = { onItemClick(item) },
                 modifier = Modifier
                     .width(128.dp)
-                    .height(240.dp)
+                    .height(240.dp),
+                borderColor = glowColor
             ) {
                 Column {
                     AsyncImage(
@@ -475,15 +517,19 @@ private fun TrendingRow(
     items: List<TrendingResult>,
     onItemClick: (TrendingResult) -> Unit
 ) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    TvOsGradientLazyRow(
+        gradientAlpha = 0.5f,
+        verticalPadding = 20.dp,
     ) {
-        items(items) { item ->
+        items(items.size) { index ->
+            val item = items[index]
+            val glowColor = rememberGlowColor(index, items.size)
             MediaCard(
                 onClick = { onItemClick(item) },
                 modifier = Modifier
                     .width(128.dp)
-                    .height(240.dp)
+                    .height(240.dp),
+                borderColor = glowColor
             ) {
                 Column {
                     AsyncImage(
@@ -525,15 +571,19 @@ private fun ContinueWatchingRow(
     items: List<ContinueWatchingItem>,
     onItemClick: (ContinueWatchingItem) -> Unit
 ) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    TvOsGradientLazyRow(
+        gradientAlpha = 0.5f,
+        verticalPadding = 20.dp,
     ) {
-        items(items) { item ->
+        items(items.size) { index ->
+            val item = items[index]
+            val glowColor = rememberGlowColor(index, items.size)
             MediaCard(
                 onClick = { onItemClick(item) },
                 modifier = Modifier
                     .width(128.dp)
-                    .height(240.dp)
+                    .height(240.dp),
+                borderColor = glowColor
             ) {
                 Box {
                     Column {

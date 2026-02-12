@@ -123,6 +123,16 @@ fun SettingsScreen(
             }
         }
 
+        // Playback Settings
+        SettingsSection(title = "Playback") {
+            SettingsToggleCard(
+                title = "Autoplay for Series",
+                description = "Automatically play next episode when one ends",
+                isChecked = uiState.autoplaySeriesDefault,
+                onToggle = { viewModel.toggleAutoplaySeriesDefault() }
+            )
+        }
+
         // Display Settings
         SettingsSection(title = "Display") {
             UiScaleSelector()
@@ -234,6 +244,78 @@ private fun SettingsInfoCard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             content = content
         )
+    }
+}
+
+/**
+ * Focusable toggle card for settings with on/off switch
+ */
+@Composable
+private fun SettingsToggleCard(
+    title: String,
+    description: String,
+    isChecked: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .focusable(interactionSource = interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onToggle
+            ),
+        border = if (isFocused) {
+            androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isFocused) {
+                MaterialTheme.colorScheme.surfaceVariant
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Switch(
+                checked = isChecked,
+                onCheckedChange = null, // Handled by card click
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.primary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
+                    uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            )
+        }
     }
 }
 

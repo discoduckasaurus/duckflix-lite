@@ -265,8 +265,12 @@ class LiveTvViewModel @Inject constructor(
                 println("[LiveTV] Computed EPG window: start=$epgStart, end=$epgEnd, now=$now")
                 println("[LiveTV] EPG duration: ${(epgEnd - epgStart) / 60} minutes")
 
+                // Filter out deactivated channels
+                val activeChannels = response.channels.filter { it.isActive }
+                println("[LiveTV] Filtered to ${activeChannels.size} active channels (${response.channels.size - activeChannels.size} deactivated)")
+
                 _uiState.value = _uiState.value.copy(
-                    channels = response.channels,
+                    channels = activeChannels,
                     isLoading = false,
                     epgStartTime = epgStart,
                     epgEndTime = epgEnd,
@@ -274,8 +278,8 @@ class LiveTvViewModel @Inject constructor(
                 )
 
                 // Auto-select first channel if none selected
-                if (_uiState.value.selectedChannel == null && response.channels.isNotEmpty()) {
-                    selectChannel(response.channels.first())
+                if (_uiState.value.selectedChannel == null && activeChannels.isNotEmpty()) {
+                    selectChannel(activeChannels.first())
                 }
 
                 println("[LiveTV] State updated: ${_uiState.value.channels.size} channels, showFavoritesOnly=${_uiState.value.showFavoritesOnly}")
@@ -357,18 +361,20 @@ class LiveTvViewModel @Inject constructor(
 
     fun channelUp() {
         val channels = getFilteredChannels()
+        if (channels.isEmpty()) return
         val currentIndex = channels.indexOfFirst { it.id == _uiState.value.selectedChannel?.id }
-        if (currentIndex > 0) {
-            selectChannel(channels[currentIndex - 1])
-        }
+        // Loop: if at first channel, go to last; otherwise go to previous
+        val newIndex = if (currentIndex <= 0) channels.size - 1 else currentIndex - 1
+        selectChannel(channels[newIndex])
     }
 
     fun channelDown() {
         val channels = getFilteredChannels()
+        if (channels.isEmpty()) return
         val currentIndex = channels.indexOfFirst { it.id == _uiState.value.selectedChannel?.id }
-        if (currentIndex < channels.size - 1) {
-            selectChannel(channels[currentIndex + 1])
-        }
+        // Loop: if at last channel, go to first; otherwise go to next
+        val newIndex = if (currentIndex >= channels.size - 1 || currentIndex < 0) 0 else currentIndex + 1
+        selectChannel(channels[newIndex])
     }
 
     fun toggleFavorites() {

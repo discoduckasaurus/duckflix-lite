@@ -8,5 +8,6 @@ data class AutoPlaySettingsEntity(
     @PrimaryKey val id: Int = 1,
     val enabled: Boolean = false,
     val lastSeriesTmdbId: Int? = null,
-    val sessionEnabled: Boolean = false
+    val sessionEnabled: Boolean = false,
+    val autoplaySeriesDefault: Boolean = true // Global default for series autoplay
 )

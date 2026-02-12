@@ -124,10 +124,10 @@ fun EpgGrid(
                         )
                 ) {
                     // Channel info (sticky left column)
-                    // Request initial focus on first channel, or on selected channel when returning from fullscreen
+                    // Request focus on selected channel, or first channel during initial load if no channel is selected
                     val shouldFocus = when {
-                        isSelected -> true  // Focus selected channel (when returning from fullscreen)
-                        index == 0 && shouldRequestInitialFocus.value && selectedChannel == null -> true  // Focus first channel on initial load
+                        isSelected -> true  // Focus selected channel (initial load after auto-select, or returning from fullscreen)
+                        index == 0 && shouldRequestInitialFocus.value && selectedChannel == null -> true  // Focus first channel on initial load before auto-select
                         else -> false
                     }
                     ChannelRow(
@@ -137,7 +137,8 @@ fun EpgGrid(
                         width = channelColumnWidth,
                         height = rowHeight,
                         displayNumber = index + 1,  // 1-based position in list
-                        requestInitialFocus = shouldFocus
+                        requestInitialFocus = shouldFocus,
+                        focusTrigger = focusTrigger  // Pass trigger to re-focus on return from fullscreen
                     )
 
                     // Program cells (horizontally scrollable)

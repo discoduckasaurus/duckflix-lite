@@ -49,7 +49,7 @@ import com.duckflix.lite.ui.theme.getGlowColorForPosition
 
 @Composable
 fun DetailScreen(
-    onPlayClick: (Int, String, String?, String, Int?, Int?, Long?, String?, String?, String?, Boolean) -> Unit, // tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage, isRandom
+    onPlayClick: (Int, String, String?, String, Int?, Int?, Long?, String?, String?, String?, Boolean, String?) -> Unit, // tmdbId, title, year, type, season, episode, resumePosition, posterUrl, logoUrl, originalLanguage, isRandom, episodeTitle
     onSearchTorrents: (Int, String) -> Unit,
     onNavigateBack: () -> Unit,
     onActorClick: (Int) -> Unit,
@@ -127,12 +127,12 @@ fun DetailScreen(
                     isLoadingRandomEpisode = uiState.isLoadingRandomEpisode,
                     randomEpisodeError = uiState.randomEpisodeError,
                     primaryActionFocusRequester = primaryActionFocusRequester,
-                    onPlayClick = { content, type, season, episode, resumePosition, posterUrl, logoUrl ->
+                    onPlayClick = { content, type, season, episode, resumePosition, posterUrl, logoUrl, episodeTitle ->
                         println("[LOGO-DEBUG-DETAIL] Preparing to play: ${content.title}")
                         println("[LOGO-DEBUG-DETAIL] logoUrl from content: ${content.logoUrl}")
                         println("[LOGO-DEBUG-DETAIL] logoUrl parameter: $logoUrl")
                         println("[LOGO-DEBUG-DETAIL] posterUrl: $posterUrl")
-                        onPlayClick(content.id, content.title, content.year, type, season, episode, resumePosition, posterUrl, logoUrl, content.originalLanguage, false)
+                        onPlayClick(content.id, content.title, content.year, type, season, episode, resumePosition, posterUrl, logoUrl, content.originalLanguage, false, episodeTitle)
                     },
                     onSearchTorrents = { onSearchTorrents(it.id, it.title) },
                     onNavigateBack = onNavigateBack,
@@ -140,7 +140,7 @@ fun DetailScreen(
                     onToggleWatchlist = viewModel::toggleWatchlist,
                     onPlayRandomEpisode = {
                         viewModel.playRandomEpisode { season, episode ->
-                            onPlayClick(uiState.content!!.id, uiState.content!!.title, uiState.content!!.year, "tv", season, episode, null, uiState.content!!.posterUrl, uiState.content!!.logoUrl, uiState.content!!.originalLanguage, true)
+                            onPlayClick(uiState.content!!.id, uiState.content!!.title, uiState.content!!.year, "tv", season, episode, null, uiState.content!!.posterUrl, uiState.content!!.logoUrl, uiState.content!!.originalLanguage, true, null)
                         }
                     },
                     onActorClick = onActorClick
@@ -164,7 +164,7 @@ private fun ContentDetailView(
     isLoadingRandomEpisode: Boolean,
     randomEpisodeError: String?,
     primaryActionFocusRequester: FocusRequester,
-    onPlayClick: (TmdbDetailResponse, String, Int?, Int?, Long?, String?, String?) -> Unit, // Added logoUrl param (originalLanguage extracted from TmdbDetailResponse)
+    onPlayClick: (TmdbDetailResponse, String, Int?, Int?, Long?, String?, String?, String?) -> Unit, // content, type, season, episode, resumePos, posterUrl, logoUrl, episodeTitle
     onSearchTorrents: (TmdbDetailResponse) -> Unit,
     onNavigateBack: () -> Unit,
     onSelectSeason: (Int) -> Unit,
@@ -390,7 +390,7 @@ private fun ContentDetailView(
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     FocusableButton(
-                                        onClick = { onPlayClick(content, contentType, null, null, watchProgress.position, content.posterUrl, content.logoUrl) },
+                                        onClick = { onPlayClick(content, contentType, null, null, watchProgress.position, content.posterUrl, content.logoUrl, null) },
                                         modifier = Modifier.width(140.dp).height(48.dp),
                                         focusRequester = primaryActionFocusRequester,
                                         index = 0,
@@ -399,7 +399,7 @@ private fun ContentDetailView(
                                         Text("\u25B6 Resume ($progressPercent%)", style = MaterialTheme.typography.bodyLarge)
                                     }
                                     FocusableButton(
-                                        onClick = { onPlayClick(content, contentType, null, null, 0L, content.posterUrl, content.logoUrl) },
+                                        onClick = { onPlayClick(content, contentType, null, null, 0L, content.posterUrl, content.logoUrl, null) },
                                         modifier = Modifier.width(120.dp).height(48.dp),
                                         index = 1,
                                         totalItems = 2
@@ -421,7 +421,7 @@ private fun ContentDetailView(
                             // Movie without progress - show Play
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 FocusableButton(
-                                    onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl, content.logoUrl) },
+                                    onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl, content.logoUrl, null) },
                                     modifier = Modifier.width(140.dp).height(48.dp),
                                     focusRequester = primaryActionFocusRequester
                                 ) {
@@ -444,7 +444,7 @@ private fun ContentDetailView(
                             // Movie not in library
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 FocusableButton(
-                                    onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl, content.logoUrl) },
+                                    onClick = { onPlayClick(content, contentType, null, null, null, content.posterUrl, content.logoUrl, null) },
                                     modifier = Modifier.width(140.dp).height(48.dp),
                                     focusRequester = primaryActionFocusRequester
                                 ) {
@@ -500,8 +500,8 @@ private fun ContentDetailView(
                     selectedSeason = selectedSeason,
                     isLoadingSeasons = isLoadingSeasons,
                     seriesPosterUrl = content.posterUrl,
-                    onEpisodeClick = { season, episode, resumePos, posterUrl ->
-                        onPlayClick(content, contentType, season, episode, resumePos, posterUrl, content.logoUrl)
+                    onEpisodeClick = { season, episode, resumePos, posterUrl, episodeTitle ->
+                        onPlayClick(content, contentType, season, episode, resumePos, posterUrl, content.logoUrl, episodeTitle)
                     }
                 )
             }
@@ -665,7 +665,7 @@ private fun SeasonEpisodes(
     selectedSeason: Int,
     isLoadingSeasons: Boolean,
     seriesPosterUrl: String?,
-    onEpisodeClick: (Int, Int, Long?, String?) -> Unit
+    onEpisodeClick: (Int, Int, Long?, String?, String?) -> Unit // season, episode, resumePos, posterUrl, episodeTitle
 ) {
     val loadedSeason = loadedSeasons[selectedSeason]
 
@@ -705,7 +705,7 @@ private fun EpisodeGrid(
     episodes: List<com.duckflix.lite.data.remote.dto.EpisodeDto>,
     seasonNumber: Int,
     seriesPosterUrl: String?, // Series poster for Continue Watching
-    onEpisodeClick: (Int, Int, Long?, String?) -> Unit
+    onEpisodeClick: (Int, Int, Long?, String?, String?) -> Unit // season, episode, resumePos, posterUrl, episodeTitle
 ) {
     val totalEpisodes = episodes.size
     Column(
@@ -724,8 +724,8 @@ private fun EpisodeGrid(
                             seriesPosterUrl = seriesPosterUrl,
                             index = episodeIndex,
                             totalItems = totalEpisodes,
-                            onEpisodeClick = { resumePos, posterUrl ->
-                                onEpisodeClick(seasonNumber, episode.episodeNumber, resumePos, posterUrl)
+                            onEpisodeClick = { resumePos, posterUrl, episodeTitle ->
+                                onEpisodeClick(seasonNumber, episode.episodeNumber, resumePos, posterUrl, episodeTitle)
                             }
                         )
                     }
@@ -746,7 +746,7 @@ private fun EpisodeCard(
     seriesPosterUrl: String?, // Series poster for Continue Watching (not episode still)
     index: Int = 0,
     totalItems: Int = 1,
-    onEpisodeClick: (Long?, String?) -> Unit
+    onEpisodeClick: (Long?, String?, String?) -> Unit // resumePos, posterUrl, episodeTitle
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
@@ -756,7 +756,7 @@ private fun EpisodeCard(
     val gradientColor = getGlowColorForPosition(normalizedPosition)
 
     MediaCard(
-        onClick = { onEpisodeClick(null, seriesPosterUrl) },
+        onClick = { onEpisodeClick(null, seriesPosterUrl, episode.name) },
         modifier = Modifier
             .fillMaxWidth()
             .height(190.dp),

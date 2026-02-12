@@ -42,6 +42,7 @@ data class LiveTvChannel(
     @Json(name = "sort_order") val sortOrder: Int = 0,
     @Json(name = "channel_number") val channelNumber: Int? = null,
     @Json(name = "is_favorite") val isFavorite: Boolean = false,
+    @Json(name = "is_active") val isActive: Boolean = true,  // Filter out deactivated channels
     @Json(name = "current_program") val currentProgram: LiveTvProgram? = null,
     @Json(name = "upcoming_programs") val upcomingPrograms: List<LiveTvProgram> = emptyList()
 ) {

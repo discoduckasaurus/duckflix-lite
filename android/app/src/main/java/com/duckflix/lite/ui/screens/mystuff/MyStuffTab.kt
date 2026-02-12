@@ -1,23 +1,28 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.duckflix.lite.ui.screens.mystuff
 
 import java.net.URLDecoder
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.onFocusChanged
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -29,7 +34,11 @@ import com.duckflix.lite.data.local.entity.WatchlistEntity
 import com.duckflix.lite.data.remote.dto.ContinueWatchingItem
 import com.duckflix.lite.data.remote.dto.DisplayState
 import com.duckflix.lite.data.remote.dto.RecommendationItem
+import com.duckflix.lite.ui.components.ContinueWatchingActionDialog
 import com.duckflix.lite.ui.components.MediaCard
+import com.duckflix.lite.ui.components.WatchlistActionDialog
+import com.duckflix.lite.ui.theme.TvOsGradientLazyRow
+import com.duckflix.lite.ui.theme.rememberGlowColor
 
 /**
  * My Stuff tab content - displays user's personal content:
@@ -46,14 +55,59 @@ fun MyStuffTab(
     recommendations: List<RecommendationItem>,
     isLoadingRecommendations: Boolean,
     recommendationsError: String?,
-    onContinueWatchingClick: (ContinueWatchingItem) -> Unit,
-    onContinueWatchingDismiss: (ContinueWatchingItem) -> Unit,
+    onContinueWatchingResume: (ContinueWatchingItem) -> Unit,
     onContinueWatchingRetry: (ContinueWatchingItem) -> Unit,
-    onWatchlistClick: (WatchlistEntity) -> Unit,
-    onWatchlistLongPress: (WatchlistEntity) -> Unit,
+    onContinueWatchingDetails: (ContinueWatchingItem) -> Unit,
+    onContinueWatchingRemove: (ContinueWatchingItem) -> Unit,
+    onWatchlistDetails: (WatchlistEntity) -> Unit,
+    onWatchlistRemove: (WatchlistEntity) -> Unit,
     onRecommendationClick: (RecommendationItem) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Dialog state
+    var selectedContinueWatchingItem by remember { mutableStateOf<ContinueWatchingItem?>(null) }
+    var selectedWatchlistItem by remember { mutableStateOf<WatchlistEntity?>(null) }
+
+    // Continue Watching Action Dialog
+    selectedContinueWatchingItem?.let { item ->
+        ContinueWatchingActionDialog(
+            item = item,
+            onResume = {
+                selectedContinueWatchingItem = null
+                onContinueWatchingResume(it)
+            },
+            onRetry = {
+                selectedContinueWatchingItem = null
+                onContinueWatchingRetry(it)
+            },
+            onDetails = {
+                selectedContinueWatchingItem = null
+                onContinueWatchingDetails(it)
+            },
+            onRemove = {
+                selectedContinueWatchingItem = null
+                onContinueWatchingRemove(it)
+            },
+            onDismiss = { selectedContinueWatchingItem = null }
+        )
+    }
+
+    // Watchlist Action Dialog
+    selectedWatchlistItem?.let { item ->
+        WatchlistActionDialog(
+            item = item,
+            onDetails = {
+                selectedWatchlistItem = null
+                onWatchlistDetails(it)
+            },
+            onRemove = {
+                selectedWatchlistItem = null
+                onWatchlistRemove(it)
+            },
+            onDismiss = { selectedWatchlistItem = null }
+        )
+    }
+
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -63,9 +117,7 @@ fun MyStuffTab(
             ContentSection(title = "Continue Watching") {
                 ContinueWatchingRow(
                     items = continueWatching,
-                    onItemClick = onContinueWatchingClick,
-                    onDismiss = onContinueWatchingDismiss,
-                    onRetry = onContinueWatchingRetry
+                    onItemClick = { item -> selectedContinueWatchingItem = item }
                 )
             }
         }
@@ -75,8 +127,7 @@ fun MyStuffTab(
             ContentSection(title = "My Watchlist") {
                 WatchlistRow(
                     items = watchlist,
-                    onItemClick = onWatchlistClick,
-                    onItemLongPress = onWatchlistLongPress
+                    onItemClick = { item -> selectedWatchlistItem = item }
                 )
             }
         }
@@ -109,7 +160,8 @@ fun MyStuffTab(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp),
+                    .height(200.dp)
+                    .padding(horizontal = 32.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
@@ -128,13 +180,27 @@ private fun ContentSection(
     title: String,
     content: @Composable () -> Unit
 ) {
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
     Column(
+        modifier = Modifier
+            .bringIntoViewRequester(bringIntoViewRequester)
+            .onFocusChanged { focusState ->
+                if (focusState.hasFocus) {
+                    coroutineScope.launch {
+                        bringIntoViewRequester.bringIntoView()
+                    }
+                }
+            },
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // Title has horizontal padding, row content extends edge-to-edge
         Text(
             text = title,
             style = MaterialTheme.typography.headlineSmall,
-            color = Color.White
+            color = Color.White,
+            modifier = Modifier.padding(horizontal = 32.dp)
         )
         content()
     }
@@ -171,19 +237,17 @@ private fun LoadingRow() {
 @Composable
 private fun ContinueWatchingRow(
     items: List<ContinueWatchingItem>,
-    onItemClick: (ContinueWatchingItem) -> Unit,
-    onDismiss: (ContinueWatchingItem) -> Unit,
-    onRetry: (ContinueWatchingItem) -> Unit
+    onItemClick: (ContinueWatchingItem) -> Unit
 ) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    TvOsGradientLazyRow(
+        verticalPadding = 20.dp,
     ) {
-        items(items) { item ->
+        items(items.size) { index ->
+            val item = items[index]
             ContinueWatchingCard(
                 item = item,
                 onClick = { onItemClick(item) },
-                onDismiss = { onDismiss(item) },
-                onRetry = { onRetry(item) }
+                glowColor = rememberGlowColor(index, items.size)
             )
         }
     }
@@ -193,25 +257,14 @@ private fun ContinueWatchingRow(
 private fun ContinueWatchingCard(
     item: ContinueWatchingItem,
     onClick: () -> Unit,
-    onDismiss: () -> Unit,
-    onRetry: () -> Unit
+    glowColor: Color = Color.White
 ) {
-    var showContextMenu by remember { mutableStateOf(false) }
-
     MediaCard(
         onClick = onClick,
         modifier = Modifier
             .width(Dimens.posterCardWidth)
-            .height(Dimens.posterCardHeight)
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onLongPress = {
-                        if (item.isFailed) {
-                            showContextMenu = true
-                        }
-                    }
-                )
-            }
+            .height(Dimens.posterCardHeight),
+        borderColor = glowColor
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             // Poster image - uses series poster for TV shows (not episode still)
@@ -341,69 +394,25 @@ private fun ContinueWatchingCard(
             }
         }
     }
-
-    // Context menu for failed downloads
-    if (showContextMenu) {
-        AlertDialog(
-            onDismissRequest = { showContextMenu = false },
-            title = { Text("Download Failed") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(text = item.title)
-                    if (item.errorMessage != null) {
-                        Text(
-                            text = "Error: ${item.errorMessage}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Red
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = {
-                        showContextMenu = false
-                        onRetry()
-                    }) {
-                        Text("Retry")
-                    }
-                    TextButton(onClick = {
-                        showContextMenu = false
-                        onDismiss()
-                    }) {
-                        Text("Dismiss")
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showContextMenu = false }) {
-                    Text("Cancel")
-                }
-            }
-        )
-    }
 }
 
 @Composable
 private fun WatchlistRow(
     items: List<WatchlistEntity>,
-    onItemClick: (WatchlistEntity) -> Unit,
-    onItemLongPress: (WatchlistEntity) -> Unit
+    onItemClick: (WatchlistEntity) -> Unit
 ) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    TvOsGradientLazyRow(
+        verticalPadding = 20.dp,
     ) {
-        items(items) { item ->
+        items(items.size) { index ->
+            val item = items[index]
+            val glowColor = rememberGlowColor(index, items.size)
             MediaCard(
                 onClick = { onItemClick(item) },
                 modifier = Modifier
                     .width(Dimens.posterCardWidth)
-                    .height(Dimens.posterCardHeight)
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onLongPress = { onItemLongPress(item) }
-                        )
-                    }
+                    .height(Dimens.posterCardHeight),
+                borderColor = glowColor
             ) {
                 Column {
                     AsyncImage(
@@ -446,15 +455,18 @@ private fun RecommendationsRow(
     items: List<RecommendationItem>,
     onItemClick: (RecommendationItem) -> Unit
 ) {
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    TvOsGradientLazyRow(
+        verticalPadding = 20.dp,
     ) {
-        items(items) { item ->
+        items(items.size) { index ->
+            val item = items[index]
+            val glowColor = rememberGlowColor(index, items.size)
             MediaCard(
                 onClick = { onItemClick(item) },
                 modifier = Modifier
                     .width(Dimens.posterCardWidth)
-                    .height(Dimens.posterCardHeight)
+                    .height(Dimens.posterCardHeight),
+                borderColor = glowColor
             ) {
                 Column {
                     AsyncImage(

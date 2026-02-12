@@ -42,6 +42,40 @@ data class StreamUrlStartResponse(
     val subtitles: List<SubtitleDto>? = null
 )
 
+/**
+ * Next episode info returned in progress response (for TV episodes)
+ */
+@JsonClass(generateAdapter = true)
+data class ProgressNextEpisode(
+    val season: Int,
+    val episode: Int,
+    val title: String? = null,
+    val overview: String? = null
+)
+
+/**
+ * Skip marker for intro, recap, or credits segments
+ */
+@JsonClass(generateAdapter = true)
+data class SkipMarker(
+    val start: Double,  // Start time in seconds
+    val end: Double,    // End time in seconds
+    val source: String? = null,  // "introdb", "chapters", or "chapters-heuristic"
+    val label: String? = null,   // Optional label from chapters
+    val confidence: Double? = null,  // Confidence score for introdb matches
+    val hasPostCredits: Boolean? = null  // Only for credits - true if post-credits scene exists
+)
+
+/**
+ * Container for all skip markers (intro, recap, credits)
+ */
+@JsonClass(generateAdapter = true)
+data class SkipMarkers(
+    val intro: SkipMarker? = null,
+    val recap: SkipMarker? = null,
+    val credits: SkipMarker? = null
+)
+
 @JsonClass(generateAdapter = true)
 data class StreamProgressResponse(
     val status: String, // 'searching' | 'downloading' | 'completed' | 'error'
@@ -52,7 +86,11 @@ data class StreamProgressResponse(
     val source: String? = null,
     val error: String? = null,
     val quality: String? = null, // e.g., "2160p", "1080p"
-    val subtitles: List<SubtitleDto>? = null
+    val subtitles: List<SubtitleDto>? = null,
+    val suggestBandwidthRetest: Boolean? = null, // True when bandwidth measurement may be stale or inaccurate
+    val hasNextEpisode: Boolean? = null, // True if there's a next episode, false if series finale
+    val nextEpisode: ProgressNextEpisode? = null, // Next episode info (resolved async from TMDB)
+    val skipMarkers: SkipMarkers? = null // Intro/recap/credits skip timestamps
 )
 
 @JsonClass(generateAdapter = true)

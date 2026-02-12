@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.duckflix.lite.data.bandwidth.BandwidthTester
 import com.duckflix.lite.data.bandwidth.StutterDetector
 import com.duckflix.lite.data.local.dao.PlaybackErrorDao
 import com.duckflix.lite.data.local.dao.WatchProgressDao
@@ -29,6 +30,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+/** Decode URL-encoded titles from server (server sometimes sends + instead of spaces) */
+private fun decodeTitle(title: String?): String? {
+    return title?.replace("+", " ")
+}
 
 data class TrackInfo(
     val id: String,
@@ -68,6 +74,10 @@ data class PlayerUiState(
     val bufferedPercentage: Int = 0,
     val posterUrl: String? = null,
     val logoUrl: String? = null, // English logo (transparent PNG) for loading screens
+    val contentType: String = "movie", // "movie" or "tv"
+    val currentSeason: Int? = null,
+    val currentEpisode: Int? = null,
+    val episodeTitle: String? = null,
     val autoPlayEnabled: Boolean = false,
     val nextEpisodeInfo: com.duckflix.lite.data.remote.dto.NextEpisodeResponse? = null,
     val movieRecommendations: List<com.duckflix.lite.data.remote.dto.MovieRecommendationItem>? = null,
@@ -79,13 +89,23 @@ data class PlayerUiState(
     val autoPlayCountdown: Int = 0,
     val showVideoIssuesPanel: Boolean = false,
     val showAudioPanel: Boolean = false,
+    val showUpNextOverlay: Boolean = false, // Shows in last 5% of video
     val showSubtitlePanel: Boolean = false,
     val isReportingBadLink: Boolean = false,
     val displayQuality: String = "", // e.g., "2160p" from server
     // Prefetch state for seamless auto-play
     val prefetchJobId: String? = null,
     val prefetchNextEpisode: com.duckflix.lite.data.remote.dto.PrefetchEpisodeInfo? = null,
-    val hasPrefetched: Boolean = false
+    val hasPrefetched: Boolean = false,
+    // Skip markers state (intro/recap/credits)
+    val skipMarkers: com.duckflix.lite.data.remote.dto.SkipMarkers? = null,
+    val showSkipIntro: Boolean = false,
+    val showSkipRecap: Boolean = false,
+    val showSkipCredits: Boolean = false,
+    val introDismissed: Boolean = false,
+    val recapDismissed: Boolean = false,
+    val creditsDismissed: Boolean = false,
+    val isSeeking: Boolean = false // Track if user is actively seeking (hide skip buttons during seek)
 )
 
 @HiltViewModel
@@ -98,11 +118,14 @@ class VideoPlayerViewModel @Inject constructor(
     private val autoPlaySettingsDao: com.duckflix.lite.data.local.dao.AutoPlaySettingsDao,
     private val okHttpClient: okhttp3.OkHttpClient,
     private val stutterDetector: StutterDetector,
+    private val bandwidthTester: BandwidthTester,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
     private val tmdbId: Int = checkNotNull(savedStateHandle["tmdbId"])
-    private val contentTitle: String = savedStateHandle["title"] ?: "Video"
+    private val contentTitle: String = (savedStateHandle.get<String>("title") ?: "Video").let { rawTitle ->
+        try { java.net.URLDecoder.decode(rawTitle, "UTF-8") } catch (e: Exception) { rawTitle }
+    }
     private val contentType: String = savedStateHandle["type"] ?: "movie"
     private val year: String? = savedStateHandle["year"]
     private val season: Int? = savedStateHandle.get<Int>("season")?.takeIf { it != -1 }
@@ -112,11 +135,28 @@ class VideoPlayerViewModel @Inject constructor(
     private val logoUrl: String? = savedStateHandle["logoUrl"]
     private val originalLanguage: String? = savedStateHandle["originalLanguage"]
     private val isRandomPlayback: Boolean = savedStateHandle.get<Boolean>("isRandom") ?: false
+    private val episodeTitle: String? = savedStateHandle.get<String>("episodeTitle")?.let {
+        try { java.net.URLDecoder.decode(it, "UTF-8") } catch (e: Exception) { it }
+    }
+    private val isAutoplay: Boolean = savedStateHandle.get<Boolean>("isAutoplay") ?: false
+
+    init {
+        println("[VIEWMODEL-INIT] VideoPlayerViewModel created:")
+        println("[VIEWMODEL-INIT]   tmdbId=$tmdbId")
+        println("[VIEWMODEL-INIT]   title='$contentTitle'")
+        println("[VIEWMODEL-INIT]   type=$contentType")
+        println("[VIEWMODEL-INIT]   season=$season, episode=$episode")
+        println("[VIEWMODEL-INIT]   isRandom=$isRandomPlayback, isAutoplay=$isAutoplay")
+    }
     private var pendingSeekPosition: Long? = null
     private var currentStreamUrl: String? = null
+    private var currentJobId: String? = null // Persisted for error reporting after playback starts
     private var currentErrorId: Int? = null
     private var isSelectingTrack = false // Prevent infinite loop during auto-selection
     private var isAddingSubtitles = false // Don't show errors during subtitle loading
+    private var autoRetryCount = 0
+    private val maxAutoRetries = 1 // Only auto-retry once, then show error with manual retry option
+    private var upNextOverlayDismissed = false // Track if user dismissed the Up Next overlay
 
     private val _uiState = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _uiState.asStateFlow()
@@ -126,14 +166,18 @@ class VideoPlayerViewModel @Inject constructor(
         get() = _player
 
     private var autoPlayCountdownJob: kotlinx.coroutines.Job? = null
-    var onAutoPlayNext: ((season: Int, episode: Int) -> Unit)? = null
+    var onAutoPlayNext: ((season: Int, episode: Int, episodeTitle: String?) -> Unit)? = null
     var onAutoPlayRecommendation: ((tmdbId: Int) -> Unit)? = null
 
     init {
-        // Set initial posterUrl and logoUrl from server
+        // Set initial posterUrl, logoUrl, and episode info from navigation
         _uiState.value = _uiState.value.copy(
             posterUrl = posterUrl,
-            logoUrl = logoUrl
+            logoUrl = logoUrl,
+            contentType = contentType,
+            currentSeason = season,
+            currentEpisode = episode,
+            episodeTitle = episodeTitle
         )
 
         println("[LOGO-DEBUG] Received logoUrl from navigation: $logoUrl")
@@ -195,19 +239,105 @@ class VideoPlayerViewModel @Inject constructor(
                         bufferedPercentage = player.bufferedPercentage
                     )
 
-                    // Trigger prefetch at 75% for TV episodes
-                    if (contentType == "tv" &&
-                        duration > 0 &&
-                        !_uiState.value.hasPrefetched &&
-                        _uiState.value.autoPlayEnabled &&
-                        season != null && episode != null) {
+                    if (duration > 0) {
                         val progressPercent = (currentPos * 100 / duration).toInt()
-                        if (progressPercent >= 75) {
-                            triggerPrefetch()
+
+                        // Trigger prefetch at 75% for TV episodes
+                        if (contentType == "tv" &&
+                            !_uiState.value.hasPrefetched &&
+                            _uiState.value.autoPlayEnabled &&
+                            season != null && episode != null) {
+                            if (progressPercent >= 75) {
+                                triggerPrefetch()
+                            }
+                        }
+
+                        // Show "Up Next" overlay in the last 5 seconds of the file for TV series with autoplay enabled
+                        // BUT only if we don't have skip credits marker (skip credits replaces Up Next)
+                        // The overlay shows the 5-second countdown before auto-playing next episode
+                        val hasSkipCredits = _uiState.value.skipMarkers?.credits != null
+                        val remainingMs = duration - currentPos
+                        val isInLast5Seconds = remainingMs <= 5000 && remainingMs > 0
+                        if (contentType == "tv" &&
+                            _uiState.value.autoPlayEnabled &&
+                            !upNextOverlayDismissed &&
+                            !_uiState.value.showUpNextOverlay &&
+                            _uiState.value.nextEpisodeInfo?.hasNext == true &&
+                            !hasSkipCredits &&  // Only show if no skip credits data
+                            isInLast5Seconds) {
+                            _uiState.value = _uiState.value.copy(showUpNextOverlay = true)
+                            // Start the countdown when overlay appears
+                            startAutoPlayCountdownFromOverlay()
                         }
                     }
+
+                    // Update skip button visibility based on position
+                    updateSkipButtonVisibility(currentPos)
                 }
             }
+        }
+    }
+
+    /**
+     * Update skip button visibility based on current playback position.
+     * Buttons show during the first half of their segment only.
+     * Min segment length: 3 seconds. Tolerance: 1 second for position matching.
+     */
+    private fun updateSkipButtonVisibility(currentPosMs: Long) {
+        val markers = _uiState.value.skipMarkers ?: return
+        val state = _uiState.value
+
+        // Don't update during seeking
+        if (state.isSeeking) return
+
+        val currentPosSec = currentPosMs / 1000.0
+        val tolerance = 1.0 // 1 second tolerance for position matching
+
+        var showIntro = false
+        var showRecap = false
+        var showCredits = false
+
+        // Check intro marker (show for 75% of segment duration)
+        markers.intro?.let { intro ->
+            val segmentDuration = intro.end - intro.start
+            if (segmentDuration >= 3.0 && !state.introDismissed) {
+                val visibleEnd = intro.start + (segmentDuration * 0.75)
+                showIntro = currentPosSec >= (intro.start - tolerance) && currentPosSec <= visibleEnd
+            }
+        }
+
+        // Check recap marker (show for 75% of segment duration)
+        markers.recap?.let { recap ->
+            val segmentDuration = recap.end - recap.start
+            if (segmentDuration >= 3.0 && !state.recapDismissed) {
+                val visibleEnd = recap.start + (segmentDuration * 0.75)
+                showRecap = currentPosSec >= (recap.start - tolerance) && currentPosSec <= visibleEnd
+            }
+        }
+
+        // If both intro and recap would show, prioritize recap (comes first chronologically)
+        if (showIntro && showRecap) {
+            showIntro = false
+        }
+
+        // Check credits marker (show for 75% of segment duration)
+        markers.credits?.let { credits ->
+            val segmentDuration = credits.end - credits.start
+            if (segmentDuration >= 3.0 && !state.creditsDismissed) {
+                val visibleEnd = credits.start + (segmentDuration * 0.75)
+                showCredits = currentPosSec >= (credits.start - tolerance) && currentPosSec <= visibleEnd
+            }
+        }
+
+        // Update state if changed
+        if (showIntro != state.showSkipIntro ||
+            showRecap != state.showSkipRecap ||
+            showCredits != state.showSkipCredits) {
+            _uiState.value = state.copy(
+                showSkipIntro = showIntro,
+                showSkipRecap = showRecap,
+                showSkipCredits = showCredits
+            )
         }
     }
 
@@ -290,6 +420,28 @@ class VideoPlayerViewModel @Inject constructor(
                 override fun onTracksChanged(tracks: Tracks) {
                     println("[DEBUG] ExoPlayer tracks changed")
                     updateAvailableTracks()
+
+                    // Log video format info including HDR status for debugging
+                    tracks.groups.forEach { group ->
+                        if (group.type == androidx.media3.common.C.TRACK_TYPE_VIDEO && group.isSelected) {
+                            for (i in 0 until group.length) {
+                                if (group.isTrackSelected(i)) {
+                                    val format = group.getTrackFormat(i)
+                                    val colorInfo = format.colorInfo
+                                    val hdrType = when (colorInfo?.colorTransfer) {
+                                        androidx.media3.common.C.COLOR_TRANSFER_ST2084 -> "HDR10/HDR10+"
+                                        androidx.media3.common.C.COLOR_TRANSFER_HLG -> "HLG"
+                                        else -> if (colorInfo?.colorSpace == androidx.media3.common.C.COLOR_SPACE_BT2020) "HDR (BT.2020)" else "SDR"
+                                    }
+                                    println("[VIDEO] Resolution: ${format.width}x${format.height}, " +
+                                            "Codec: ${format.codecs ?: format.sampleMimeType}, " +
+                                            "HDR: $hdrType, " +
+                                            "ColorSpace: ${colorInfo?.colorSpace}, " +
+                                            "ColorTransfer: ${colorInfo?.colorTransfer}")
+                                }
+                            }
+                        }
+                    }
                 }
 
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
@@ -303,42 +455,8 @@ class VideoPlayerViewModel @Inject constructor(
                         return
                     }
 
-                    // Log error to database for tracking and fallback strategies
-                    viewModelScope.launch {
-                        try {
-                            val errorEntity = PlaybackErrorEntity(
-                                tmdbId = tmdbId,
-                                title = contentTitle,
-                                type = contentType,
-                                season = season,
-                                episode = episode,
-                                errorCode = error.errorCodeName,
-                                errorMessage = error.message ?: "Unknown error",
-                                errorCause = error.cause?.message,
-                                streamUrl = currentStreamUrl
-                            )
-                            val errorId = playbackErrorDao.insertError(errorEntity)
-                            currentErrorId = errorId.toInt()
-
-                            println("[ERROR-TRACKING] Logged error ID: $errorId for $contentTitle")
-                            println("[ERROR-TRACKING] Error details: ${error.errorCodeName} - ${error.message}")
-
-                            // Check if we've seen this error before and had a successful fallback
-                            val resolvedErrors = playbackErrorDao.getResolvedErrorsByCode(error.errorCodeName)
-                            if (resolvedErrors.isNotEmpty()) {
-                                println("[ERROR-TRACKING] Found ${resolvedErrors.size} previously resolved errors with code ${error.errorCodeName}")
-                                // Future: Apply known fallback strategy based on resolved errors
-                            }
-                        } catch (e: Exception) {
-                            println("[ERROR] Failed to log playback error: ${e.message}")
-                        }
-                    }
-
-                    _uiState.value = _uiState.value.copy(
-                        isLoading = false,
-                        loadingPhase = LoadingPhase.READY,
-                        error = "⚠️ Unfortunately this title isn't available at the moment. Please try again later."
-                    )
+                    // Handle error with potential auto-retry
+                    handlePlaybackError(error)
                 }
             })
 
@@ -493,11 +611,262 @@ class VideoPlayerViewModel @Inject constructor(
         return url != null && url.startsWith("http")
     }
 
+    /**
+     * Generate user-friendly error message based on ExoPlayer error code.
+     * Helps diagnose why playback failed even when the server provided a valid URL.
+     */
+    private fun getPlaybackErrorMessage(error: androidx.media3.common.PlaybackException): String {
+        val prefix = "⚠️ "
+
+        return when {
+            // IO/Network errors - stream URL may be valid but connection failed
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED ->
+                "${prefix}Network connection failed. Please check your internet and try again."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
+                "${prefix}Connection timed out. The stream server may be slow - please try again."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> {
+                // Extract HTTP status if available
+                val cause = error.cause?.message ?: ""
+                when {
+                    cause.contains("404") -> "${prefix}Stream not found (404). The file may have been removed."
+                    cause.contains("403") -> "${prefix}Access denied (403). The stream link may have expired."
+                    cause.contains("500") || cause.contains("502") || cause.contains("503") ->
+                        "${prefix}Stream server error. Please try again in a moment."
+                    else -> "${prefix}Stream unavailable (HTTP error). Please try again."
+                }
+            }
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND ->
+                "${prefix}Stream file not found. Please try a different source."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_NO_PERMISSION ->
+                "${prefix}Permission denied. The stream link may have expired."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED ->
+                "${prefix}Secure connection required. Please report this issue."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE ->
+                "${prefix}Stream read error. Please try again."
+
+            // Timeout during read (stream stalled)
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_TIMEOUT ->
+                "${prefix}Stream timed out. The source may be too slow - try another source."
+
+            // Decoder/codec errors
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ->
+                "${prefix}Video codec not supported on this device. Try reporting for an alternative."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ->
+                "${prefix}Decoder error. This video format may not be supported."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED ->
+                "${prefix}Decoding failed. The video file may be corrupted."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ->
+                "${prefix}Video quality too high for this device. Try reporting for a lower quality version."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ->
+                "${prefix}Video format not supported. Try reporting for an alternative."
+
+            // Audio renderer errors
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED ->
+                "${prefix}Audio initialization failed. Please try again."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED ->
+                "${prefix}Audio playback error. Please try again."
+
+            // Parsing/container errors
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED ->
+                "${prefix}Video file is corrupted. Try reporting for an alternative."
+
+            error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ->
+                "${prefix}Video container format not supported. Try reporting for an alternative."
+
+            // DRM errors (shouldn't happen with our content but just in case)
+            error.errorCodeName.startsWith("ERROR_CODE_DRM") ->
+                "${prefix}DRM protected content cannot be played."
+
+            // Unrecognized errors - show the actual error code for debugging
+            else -> {
+                val codeInfo = if (error.errorCodeName != "ERROR_CODE_UNSPECIFIED") {
+                    " (${error.errorCodeName})"
+                } else {
+                    ""
+                }
+                "${prefix}Playback failed$codeInfo. Please try again or report for an alternative."
+            }
+        }
+    }
+
+    /**
+     * Handle ExoPlayer playback errors with automatic reporting and retry.
+     * For recoverable errors (codec issues, HTTP errors), reports to server and tries alternative source.
+     */
+    private fun handlePlaybackError(error: androidx.media3.common.PlaybackException) {
+        viewModelScope.launch {
+            // Log error to database for local tracking
+            try {
+                val errorEntity = PlaybackErrorEntity(
+                    tmdbId = tmdbId,
+                    title = contentTitle,
+                    type = contentType,
+                    season = season,
+                    episode = episode,
+                    errorCode = error.errorCodeName,
+                    errorMessage = error.message ?: "Unknown error",
+                    errorCause = error.cause?.message,
+                    streamUrl = currentStreamUrl
+                )
+                val errorId = playbackErrorDao.insertError(errorEntity)
+                currentErrorId = errorId.toInt()
+
+                println("[ERROR-TRACKING] Logged error ID: $errorId for $contentTitle")
+                println("[ERROR-TRACKING] Error details: ${error.errorCodeName} - ${error.message}")
+            } catch (e: Exception) {
+                println("[ERROR] Failed to log playback error: ${e.message}")
+            }
+
+            // Check if error is recoverable (worth trying alternative source)
+            val isRecoverableError = isRecoverablePlaybackError(error)
+            val hasJobId = currentJobId != null
+            val canRetry = autoRetryCount < maxAutoRetries
+
+            println("[ERROR-RECOVERY] Recoverable: $isRecoverableError, HasJobId: $hasJobId, CanRetry: $canRetry (attempt ${autoRetryCount + 1}/$maxAutoRetries)")
+
+            if (isRecoverableError && hasJobId && canRetry) {
+                autoRetryCount++
+                println("[ERROR-RECOVERY] Attempting auto-recovery by requesting alternative source...")
+
+                _uiState.value = _uiState.value.copy(
+                    isLoading = true,
+                    loadingPhase = LoadingPhase.SEARCHING,
+                    downloadMessage = "Finding alternative source...",
+                    error = null
+                )
+
+                try {
+                    // Report bad stream to server and request alternative
+                    val request = com.duckflix.lite.data.remote.dto.ReportBadRequest(
+                        jobId = currentJobId!!,
+                        reason = "ExoPlayer error: ${error.errorCodeName}"
+                    )
+                    val response = api.reportBadStream(request)
+
+                    if (response.success && response.newJobId != null) {
+                        println("[ERROR-RECOVERY] Got alternative source job: ${response.newJobId}")
+                        currentJobId = response.newJobId
+
+                        // Mark previous error as resolved since we're trying alternative
+                        currentErrorId?.let { errorId ->
+                            try {
+                                playbackErrorDao.markAsResolved(errorId)
+                            } catch (e: Exception) {
+                                println("[ERROR] Failed to mark error as resolved: ${e.message}")
+                            }
+                        }
+
+                        // Start polling for new source
+                        _uiState.value = _uiState.value.copy(downloadJobId = response.newJobId)
+                        pollDownloadProgress(response.newJobId)
+                        return@launch
+                    } else {
+                        println("[ERROR-RECOVERY] Server has no alternative: ${response.message}")
+                        // Fall through to show error
+                    }
+                } catch (e: Exception) {
+                    println("[ERROR-RECOVERY] Failed to request alternative: ${e.message}")
+                    // Fall through to show error
+                }
+            }
+
+            // No recovery possible - show error to user
+            val userMessage = getPlaybackErrorMessage(error)
+            _uiState.value = _uiState.value.copy(
+                isLoading = false,
+                loadingPhase = LoadingPhase.READY,
+                error = userMessage
+            )
+        }
+    }
+
+    /**
+     * Determine if a playback error is worth attempting recovery (alternative source).
+     * Returns true for codec issues, HTTP errors, and format problems.
+     * Returns false for network connectivity issues (user should fix network first).
+     */
+    private fun isRecoverablePlaybackError(error: androidx.media3.common.PlaybackException): Boolean {
+        return when (error.errorCode) {
+            // Decoder/codec errors - different source might have compatible codec
+            androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+            androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED,
+            androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED -> true
+
+            // HTTP errors - source might be dead/expired, try alternative
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NO_PERMISSION -> true
+
+            // Parsing errors - corrupted file, try alternative
+            androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED -> true
+
+            // Audio errors - try alternative with different audio codec
+            androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED -> true
+
+            // Stream timeout - could be slow server, try alternative
+            androidx.media3.common.PlaybackException.ERROR_CODE_TIMEOUT,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE -> true
+
+            // Network connectivity - user needs to fix network, don't retry
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT -> false
+
+            // Other/unknown - don't retry
+            else -> false
+        }
+    }
+
     private fun loadVideoUrl() {
+        // Reset retry count for new content
+        autoRetryCount = 0
+        currentJobId = null
+
+        println("[STREAM-DEBUG] loadVideoUrl() called for tmdbId=$tmdbId, title='$contentTitle', season=$season, episode=$episode")
+
         viewModelScope.launch {
             try {
-                // Check VOD session
-                api.checkVodSession()
+                // Skip session check for autoplay - we just finished playing, session is valid
+                // Server hangs on session check during autoplay transitions
+                if (isAutoplay) {
+                    println("[STREAM-DEBUG] Skipping checkVodSession() for autoplay continuation")
+                } else {
+                    // Check VOD session with timeout and retry
+                    println("[STREAM-DEBUG] Calling checkVodSession()...")
+                    var sessionChecked = false
+                    for (attempt in 1..2) {
+                        try {
+                            kotlinx.coroutines.withTimeout(10000L) {
+                                api.checkVodSession()
+                            }
+                            sessionChecked = true
+                            break
+                        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                            println("[STREAM-DEBUG] checkVodSession() attempt $attempt timed out")
+                            if (attempt == 1) {
+                                println("[STREAM-DEBUG] Retrying after 1s delay...")
+                                delay(1000)
+                            }
+                        }
+                    }
+                    if (!sessionChecked) {
+                        throw Exception("Session check timed out after retries")
+                    }
+                    println("[STREAM-DEBUG] checkVodSession() succeeded")
+                }
 
                 _uiState.value = _uiState.value.copy(
                     loadingPhase = LoadingPhase.SEARCHING,
@@ -512,9 +881,31 @@ class VideoPlayerViewModel @Inject constructor(
                     season = season,
                     episode = episode
                 )
+                println("[STREAM-DEBUG] Calling startStreamUrl() with request: $streamRequest")
 
-                // Start stream URL retrieval
-                val startResponse = api.startStreamUrl(streamRequest)
+                // Start stream URL retrieval with timeout for autoplay
+                // Server can hang during autoplay transitions
+                val startResponse = if (isAutoplay) {
+                    var response: com.duckflix.lite.data.remote.dto.StreamUrlStartResponse? = null
+                    for (attempt in 1..3) {
+                        try {
+                            response = kotlinx.coroutines.withTimeout(15000L) {
+                                api.startStreamUrl(streamRequest)
+                            }
+                            break
+                        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                            println("[STREAM-DEBUG] startStreamUrl() attempt $attempt timed out")
+                            if (attempt < 3) {
+                                println("[STREAM-DEBUG] Retrying after 2s delay...")
+                                delay(2000)
+                            }
+                        }
+                    }
+                    response ?: throw Exception("Stream request timed out. Please try again.")
+                } else {
+                    api.startStreamUrl(streamRequest)
+                }
+                println("[STREAM-DEBUG] startStreamUrl() responded: immediate=${startResponse.immediate}, jobId=${startResponse.jobId}")
 
                 if (startResponse.immediate) {
                     // Content is cached (Zurg or RD cache) - start loading immediately in background
@@ -546,6 +937,7 @@ class VideoPlayerViewModel @Inject constructor(
                 } else {
                     // Need to download from RD - poll for progress
                     val jobId = startResponse.jobId!!
+                    currentJobId = jobId // Store for error reporting
                     println("[INFO] Starting RD download, jobId: $jobId")
 
                     _uiState.value = _uiState.value.copy(
@@ -557,10 +949,24 @@ class VideoPlayerViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 println("[ERROR] VideoPlayerViewModel: Failed to load video: ${e.message}")
+                val errorMsg = e.message?.let { msg ->
+                    when {
+                        msg.contains("401") || msg.contains("Unauthorized") ->
+                            "Session expired. Please log in again."
+                        msg.contains("timeout", ignoreCase = true) ->
+                            "Server timeout. Please try again."
+                        msg.contains("Unable to resolve host") || msg.contains("No address associated") ->
+                            "No internet connection. Please check your network."
+                        msg.contains("Unable to find") || msg.contains("No sources") ->
+                            msg // Use server's message about no sources
+                        else -> "Unfortunately this title isn't available at the moment. Please try again later."
+                    }
+                } ?: "Unfortunately this title isn't available at the moment. Please try again later."
+
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
                     loadingPhase = LoadingPhase.READY,
-                    error = "⚠️ Unfortunately this title isn't available at the moment. Please try again later."
+                    error = "⚠️ $errorMsg"
                 )
             }
         }
@@ -599,6 +1005,18 @@ class VideoPlayerViewModel @Inject constructor(
                         downloadMessage = progress.message
                     )
 
+                    // Check if server suggests a bandwidth retest (stale measurement or fallback used)
+                    if (progress.suggestBandwidthRetest == true) {
+                        println("[Bandwidth] Server suggests retest - triggering background test")
+                        bandwidthTester.performTestAndReportInBackground("bandwidth-retest")
+                    }
+
+                    // Store skip markers when they arrive (may come with completed status or slightly after)
+                    if (progress.skipMarkers != null && _uiState.value.skipMarkers == null) {
+                        println("[SkipMarkers] Received markers: intro=${progress.skipMarkers.intro != null}, recap=${progress.skipMarkers.recap != null}, credits=${progress.skipMarkers.credits != null}")
+                        _uiState.value = _uiState.value.copy(skipMarkers = progress.skipMarkers)
+                    }
+
                     when (progress.status) {
                         "completed" -> {
                             // Validate stream URL before attempting playback
@@ -607,6 +1025,31 @@ class VideoPlayerViewModel @Inject constructor(
                             }
 
                             println("[INFO] Download complete, preparing playback")
+
+                            // Extract next episode info from progress response (primary source)
+                            // This is the server's authoritative data for autoplay
+                            if (contentType == "tv" && progress.hasNextEpisode != null) {
+                                val nextEpisodeInfo = if (progress.hasNextEpisode && progress.nextEpisode != null) {
+                                    com.duckflix.lite.data.remote.dto.NextEpisodeResponse(
+                                        hasNext = true,
+                                        season = progress.nextEpisode.season,
+                                        episode = progress.nextEpisode.episode,
+                                        title = decodeTitle(progress.nextEpisode.title),
+                                        inCurrentPack = true // Server resolved it, so it's available
+                                    )
+                                } else {
+                                    // hasNextEpisode = false means series finale
+                                    com.duckflix.lite.data.remote.dto.NextEpisodeResponse(
+                                        hasNext = false,
+                                        season = null,
+                                        episode = null,
+                                        title = null,
+                                        inCurrentPack = false
+                                    )
+                                }
+                                _uiState.value = _uiState.value.copy(nextEpisodeInfo = nextEpisodeInfo)
+                                println("[AutoPlay] Next episode from progress: hasNext=${nextEpisodeInfo.hasNext}, S${nextEpisodeInfo.season}E${nextEpisodeInfo.episode}")
+                            }
 
                             // Update to preparing state
                             _uiState.value = _uiState.value.copy(
@@ -669,7 +1112,9 @@ class VideoPlayerViewModel @Inject constructor(
     }
 
     private fun startPlayback(streamUrl: String, fileName: String?) {
-        println("[DEBUG] startPlayback: Setting media item: $streamUrl")
+        println("[DEBUG] startPlayback: Setting media item")
+        println("[DEBUG] Stream URL length: ${streamUrl.length}, starts with https: ${streamUrl.startsWith("https")}")
+        println("[DEBUG] Stream URL (truncated): ${streamUrl.take(100)}...")
         currentStreamUrl = streamUrl
 
         // Explicitly set MIME type based on file extension to override RD's "application/force-download"
@@ -751,54 +1196,58 @@ class VideoPlayerViewModel @Inject constructor(
 
     private suspend fun saveProgress() {
         _player?.let { player ->
-            if (player.duration > 0) {
-                // Different completion thresholds: 95% for TV shows, 90% for movies
-                val completionThreshold = if (contentType == "tv") 0.95 else 0.90
-                val isCompleted = player.currentPosition >= (player.duration * completionThreshold)
-                val progress = WatchProgressEntity(
+            saveProgressWithValues(player.currentPosition, player.duration)
+        }
+    }
+
+    private suspend fun saveProgressWithValues(position: Long, duration: Long) {
+        if (duration > 0) {
+            // Different completion thresholds: 95% for TV shows, 90% for movies
+            val completionThreshold = if (contentType == "tv") 0.95 else 0.90
+            val isCompleted = position >= (duration * completionThreshold)
+            val progress = WatchProgressEntity(
+                tmdbId = tmdbId,
+                title = contentTitle,
+                type = contentType,
+                year = year,
+                posterUrl = posterUrl,
+                position = position,
+                duration = duration,
+                lastWatchedAt = System.currentTimeMillis(),
+                isCompleted = isCompleted,
+                season = season,
+                episode = episode
+            )
+            watchProgressDao.saveProgress(progress)
+
+            // Sync to server for recommendations
+            try {
+                val syncRequest = com.duckflix.lite.data.remote.dto.WatchProgressSyncRequest(
                     tmdbId = tmdbId,
-                    title = contentTitle,
                     type = contentType,
-                    year = year,
-                    posterUrl = posterUrl,
-                    position = player.currentPosition,
-                    duration = player.duration,
-                    lastWatchedAt = System.currentTimeMillis(),
-                    isCompleted = isCompleted,
+                    title = contentTitle,
+                    posterPath = posterUrl?.substringAfter("w500"), // Extract just the path
+                    logoPath = _uiState.value.logoUrl?.substringAfter("w500"), // Extract logo path
+                    releaseDate = year,
+                    position = position,
+                    duration = duration,
                     season = season,
                     episode = episode
                 )
-                watchProgressDao.saveProgress(progress)
+                api.syncWatchProgress(syncRequest)
+            } catch (e: Exception) {
+                println("[WARN] Failed to sync watch progress to server: ${e.message}")
+                // Non-critical - local progress is still saved
+            }
 
-                // Sync to server for recommendations
+            // Auto-remove from watchlist when completed (movies only)
+            if (isCompleted && contentType == "movie") {
                 try {
-                    val syncRequest = com.duckflix.lite.data.remote.dto.WatchProgressSyncRequest(
-                        tmdbId = tmdbId,
-                        type = contentType,
-                        title = contentTitle,
-                        posterPath = posterUrl?.substringAfter("w500"), // Extract just the path
-                        logoPath = _uiState.value.logoUrl?.substringAfter("w500"), // Extract logo path
-                        releaseDate = year,
-                        position = player.currentPosition,
-                        duration = player.duration,
-                        season = season,
-                        episode = episode
-                    )
-                    api.syncWatchProgress(syncRequest)
+                    watchlistDao.remove(tmdbId)
+                    // Also remove from server
+                    api.removeFromWatchlist(tmdbId, contentType)
                 } catch (e: Exception) {
-                    println("[WARN] Failed to sync watch progress to server: ${e.message}")
-                    // Non-critical - local progress is still saved
-                }
-
-                // Auto-remove from watchlist when completed (movies only)
-                if (isCompleted && contentType == "movie") {
-                    try {
-                        watchlistDao.remove(tmdbId)
-                        // Also remove from server
-                        api.removeFromWatchlist(tmdbId, contentType)
-                    } catch (e: Exception) {
-                        // Watchlist removal failure is not critical
-                    }
+                    // Watchlist removal failure is not critical
                 }
             }
         }
@@ -838,6 +1287,202 @@ class VideoPlayerViewModel @Inject constructor(
 
     fun seekTo(position: Long) {
         _player?.seekTo(position)
+    }
+
+    /**
+     * Called when user starts seeking (dragging the seek bar).
+     * Hide skip buttons during seek.
+     */
+    fun onSeekStart() {
+        _uiState.value = _uiState.value.copy(
+            isSeeking = true,
+            showSkipIntro = false,
+            showSkipRecap = false,
+            showSkipCredits = false
+        )
+    }
+
+    /**
+     * Called when user finishes seeking.
+     * Skip button visibility will be updated on next position update.
+     */
+    fun onSeekEnd() {
+        _uiState.value = _uiState.value.copy(isSeeking = false)
+    }
+
+    /**
+     * Skip to the end of the intro segment.
+     */
+    fun skipIntro() {
+        val intro = _uiState.value.skipMarkers?.intro ?: return
+        val endMs = (intro.end * 1000).toLong()
+        println("[SkipMarkers] Skipping intro to ${intro.end}s")
+        _player?.seekTo(endMs)
+        _uiState.value = _uiState.value.copy(
+            showSkipIntro = false,
+            introDismissed = true
+        )
+    }
+
+    /**
+     * Skip to the end of the recap segment.
+     */
+    fun skipRecap() {
+        val recap = _uiState.value.skipMarkers?.recap ?: return
+        val endMs = (recap.end * 1000).toLong()
+        println("[SkipMarkers] Skipping recap to ${recap.end}s")
+        _player?.seekTo(endMs)
+        _uiState.value = _uiState.value.copy(
+            showSkipRecap = false,
+            recapDismissed = true
+        )
+    }
+
+    /**
+     * Skip credits - behavior depends on hasPostCredits flag.
+     * - If hasPostCredits: seek to credits.end (post-credits scene)
+     * - If no post-credits: play next episode IMMEDIATELY (no countdown)
+     */
+    fun skipCredits() {
+        val credits = _uiState.value.skipMarkers?.credits ?: return
+        println("[SkipMarkers] Skipping credits, hasPostCredits=${credits.hasPostCredits}")
+
+        _uiState.value = _uiState.value.copy(
+            showSkipCredits = false,
+            creditsDismissed = true
+        )
+
+        if (credits.hasPostCredits == true) {
+            // Seek to post-credits scene
+            val endMs = (credits.end * 1000).toLong()
+            println("[SkipMarkers] Seeking to post-credits scene at ${credits.end}s")
+            _player?.seekTo(endMs)
+            // Dismiss Up Next overlay temporarily - it will re-trigger when post-credits ends
+            _uiState.value = _uiState.value.copy(showUpNextOverlay = false)
+        } else {
+            // No post-credits, play next episode immediately (skip the countdown)
+            println("[SkipMarkers] No post-credits, playing next episode immediately")
+            playNextEpisodeImmediately()
+        }
+    }
+
+    /**
+     * Play the next episode immediately without countdown.
+     * Used when user explicitly skips credits.
+     */
+    private fun playNextEpisodeImmediately() {
+        // Cancel any existing countdown
+        autoPlayCountdownJob?.cancel()
+        _uiState.value = _uiState.value.copy(
+            autoPlayCountdown = 0,
+            showUpNextOverlay = false
+        )
+
+        // Trigger background bandwidth test
+        bandwidthTester.performTestAndReportInBackground("skip-credits")
+
+        if (contentType != "tv" || !_uiState.value.autoPlayEnabled) return
+
+        // In random mode, fetch a fresh random episode
+        if (isRandomPlayback) {
+            viewModelScope.launch {
+                try {
+                    val randomEpisode = api.getRandomEpisode(tmdbId)
+                    val decodedTitle = decodeTitle(randomEpisode.title)
+                    println("[SkipCredits] Random mode - playing S${randomEpisode.season}E${randomEpisode.episode}")
+                    onAutoPlayNext?.invoke(randomEpisode.season, randomEpisode.episode, decodedTitle)
+                } catch (e: Exception) {
+                    println("[SkipCredits] Failed to fetch random episode: ${e.message}")
+                    _uiState.value = _uiState.value.copy(showRandomEpisodeError = true)
+                }
+            }
+            return
+        }
+
+        // Try prefetched content first for seamless playback
+        val prefetchEpisode = _uiState.value.prefetchNextEpisode
+        val prefetchJobId = _uiState.value.prefetchJobId
+
+        if (prefetchJobId != null && prefetchEpisode != null) {
+            viewModelScope.launch {
+                val isReady = promotePrefetchJob()
+                if (isReady) {
+                    println("[SkipCredits] Using prefetched S${prefetchEpisode.season}E${prefetchEpisode.episode}")
+                    onAutoPlayNext?.invoke(prefetchEpisode.season, prefetchEpisode.episode, prefetchEpisode.title)
+                } else {
+                    // Prefetch not ready, use nextEpisodeInfo
+                    playNextFromEpisodeInfo()
+                }
+            }
+            return
+        }
+
+        // No prefetch, use nextEpisodeInfo directly
+        playNextFromEpisodeInfo()
+    }
+
+    /**
+     * Play next episode using nextEpisodeInfo (fallback when no prefetch).
+     */
+    private fun playNextFromEpisodeInfo() {
+        val nextEpisode = _uiState.value.nextEpisodeInfo
+        val prefetchEpisode = _uiState.value.prefetchNextEpisode
+
+        val season: Int?
+        val episode: Int?
+        val episodeTitle: String?
+
+        when {
+            nextEpisode != null && nextEpisode.hasNext && nextEpisode.season != null && nextEpisode.episode != null -> {
+                season = nextEpisode.season
+                episode = nextEpisode.episode
+                episodeTitle = nextEpisode.title
+                println("[SkipCredits] Using nextEpisodeInfo: S${season}E${episode}")
+            }
+            prefetchEpisode != null -> {
+                season = prefetchEpisode.season
+                episode = prefetchEpisode.episode
+                episodeTitle = prefetchEpisode.title
+                println("[SkipCredits] Using prefetchNextEpisode: S${season}E${episode}")
+            }
+            else -> {
+                println("[SkipCredits] No next episode info available")
+                _uiState.value = _uiState.value.copy(showSeriesCompleteOverlay = true)
+                return
+            }
+        }
+
+        if (season == null || episode == null) {
+            println("[SkipCredits] Invalid next episode data")
+            _uiState.value = _uiState.value.copy(showSeriesCompleteOverlay = true)
+            return
+        }
+
+        onAutoPlayNext?.invoke(season, episode, episodeTitle)
+    }
+
+    /**
+     * Dismiss a skip button without skipping.
+     */
+    fun dismissSkipIntro() {
+        _uiState.value = _uiState.value.copy(
+            showSkipIntro = false,
+            introDismissed = true
+        )
+    }
+
+    fun dismissSkipRecap() {
+        _uiState.value = _uiState.value.copy(
+            showSkipRecap = false,
+            recapDismissed = true
+        )
+    }
+
+    fun dismissSkipCredits() {
+        _uiState.value = _uiState.value.copy(
+            showSkipCredits = false,
+            creditsDismissed = true
+        )
     }
 
     fun toggleControls() {
@@ -1042,14 +1687,18 @@ class VideoPlayerViewModel @Inject constructor(
     private fun loadAutoPlaySettings() {
         viewModelScope.launch {
             val settings = autoPlaySettingsDao.getSettingsOnce()
-            if (settings != null) {
-                val shouldEnable = if (contentType == "tv") {
-                    settings.enabled && settings.lastSeriesTmdbId == tmdbId
+            val shouldEnable = if (contentType == "tv") {
+                if (settings?.lastSeriesTmdbId == tmdbId) {
+                    // Same series - use the per-title toggle state
+                    settings.enabled
                 } else {
-                    settings.sessionEnabled
+                    // New series - use the global default setting
+                    settings?.autoplaySeriesDefault ?: true
                 }
-                _uiState.value = _uiState.value.copy(autoPlayEnabled = shouldEnable)
+            } else {
+                settings?.sessionEnabled ?: false
             }
+            _uiState.value = _uiState.value.copy(autoPlayEnabled = shouldEnable)
         }
     }
 
@@ -1068,13 +1717,28 @@ class VideoPlayerViewModel @Inject constructor(
             }
 
             if (newState && _player?.duration != null) {
+                // When autoplay is enabled mid-playback:
+                // 1. Ensure we have next episode info (may already be set from progress response)
                 prefetchNextContent()
+                // 2. Trigger source prefetch if we have next episode info and haven't prefetched yet
+                if (_uiState.value.nextEpisodeInfo?.hasNext == true && !_uiState.value.hasPrefetched) {
+                    triggerPrefetch()
+                }
             }
         }
     }
 
     private fun prefetchNextContent() {
         if (_uiState.value.isLoadingNextContent) return
+
+        // If we already have next episode info from progress response, don't re-fetch
+        // (except for random playback which needs fresh random selection)
+        val existingNextEpisode = _uiState.value.nextEpisodeInfo
+        if (!isRandomPlayback && existingNextEpisode != null) {
+            println("[AutoPlay] Already have next episode info from progress response, skipping fetch")
+            return
+        }
+
         viewModelScope.launch {
             try {
                 _uiState.value = _uiState.value.copy(isLoadingNextContent = true)
@@ -1119,11 +1783,34 @@ class VideoPlayerViewModel @Inject constructor(
     }
 
     private fun handleVideoEnded() {
+        // Trigger background bandwidth test between episodes (non-blocking)
+        bandwidthTester.performTestAndReportInBackground("episode-end")
+
         if (!_uiState.value.autoPlayEnabled) return
+
+        // If countdown is already running (from Up Next overlay), let it finish
+        // The countdown will trigger playNextEpisodeImmediately() when done
+        if (autoPlayCountdownJob?.isActive == true && _uiState.value.autoPlayCountdown > 0) {
+            println("[AutoPlay] Video ended but countdown already running (${_uiState.value.autoPlayCountdown}s remaining)")
+            return
+        }
+
+        // If Up Next overlay was dismissed, don't auto-play
+        if (upNextOverlayDismissed) {
+            println("[AutoPlay] Video ended but Up Next was dismissed, not auto-playing")
+            return
+        }
+
         if (contentType == "tv") handleTVEpisodeEnded() else handleMovieEnded()
     }
 
     private fun handleTVEpisodeEnded() {
+        // In random mode, always fetch a fresh random episode
+        if (isRandomPlayback) {
+            fetchRandomEpisodeAndPlay()
+            return
+        }
+
         // Check if we have a prefetch job ready
         val prefetchEpisode = _uiState.value.prefetchNextEpisode
         val prefetchJobId = _uiState.value.prefetchJobId
@@ -1135,7 +1822,7 @@ class VideoPlayerViewModel @Inject constructor(
                 if (isReady) {
                     println("[AutoPlay] Using prefetched content for S${prefetchEpisode.season}E${prefetchEpisode.episode}")
                     startAutoPlayCountdown {
-                        onAutoPlayNext?.invoke(prefetchEpisode.season, prefetchEpisode.episode)
+                        onAutoPlayNext?.invoke(prefetchEpisode.season, prefetchEpisode.episode, prefetchEpisode.title)
                     }
                 } else {
                     // Prefetch not ready, fall back to normal flow
@@ -1158,19 +1845,22 @@ class VideoPlayerViewModel @Inject constructor(
         // Determine which source to use for next episode info
         val season: Int?
         val episode: Int?
+        val episodeTitle: String?
 
         when {
             nextEpisode != null && nextEpisode.hasNext && nextEpisode.season != null && nextEpisode.episode != null -> {
                 // Use nextEpisodeInfo
                 season = nextEpisode.season
                 episode = nextEpisode.episode
-                println("[AutoPlay] Using nextEpisodeInfo: S${season}E${episode}")
+                episodeTitle = nextEpisode.title
+                println("[AutoPlay] Using nextEpisodeInfo: S${season}E${episode} - $episodeTitle")
             }
             prefetchEpisode != null -> {
                 // Fall back to prefetchNextEpisode
                 season = prefetchEpisode.season
                 episode = prefetchEpisode.episode
-                println("[AutoPlay] Using prefetchNextEpisode as fallback: S${season}E${episode}")
+                episodeTitle = prefetchEpisode.title
+                println("[AutoPlay] Using prefetchNextEpisode as fallback: S${season}E${episode} - $episodeTitle")
             }
             else -> {
                 // No next episode info available
@@ -1196,7 +1886,7 @@ class VideoPlayerViewModel @Inject constructor(
         }
 
         startAutoPlayCountdown {
-            onAutoPlayNext?.invoke(season, episode)
+            onAutoPlayNext?.invoke(season, episode, episodeTitle)
         }
     }
 
@@ -1205,11 +1895,12 @@ class VideoPlayerViewModel @Inject constructor(
             try {
                 println("[AutoPlay] Fetching random episode on-the-fly for tmdbId=$tmdbId")
                 val randomEpisode = api.getRandomEpisode(tmdbId)
-                println("[AutoPlay] Got random episode: S${randomEpisode.season}E${randomEpisode.episode}")
+                val decodedTitle = decodeTitle(randomEpisode.title)
+                println("[AutoPlay] Got random episode: S${randomEpisode.season}E${randomEpisode.episode} - $decodedTitle")
 
                 // Start countdown and play
                 startAutoPlayCountdown {
-                    onAutoPlayNext?.invoke(randomEpisode.season, randomEpisode.episode)
+                    onAutoPlayNext?.invoke(randomEpisode.season, randomEpisode.episode, decodedTitle)
                 }
             } catch (e: Exception) {
                 println("[AutoPlay] Failed to fetch random episode: ${e.message}")
@@ -1242,6 +1933,23 @@ class VideoPlayerViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Start autoplay countdown when Up Next overlay appears (in last 5 seconds of file).
+     * This runs the countdown while the overlay is visible, then triggers next episode.
+     */
+    private fun startAutoPlayCountdownFromOverlay() {
+        autoPlayCountdownJob?.cancel()
+        _uiState.value = _uiState.value.copy(autoPlayCountdown = 5)
+        autoPlayCountdownJob = viewModelScope.launch {
+            for (i in 5 downTo 1) {
+                _uiState.value = _uiState.value.copy(autoPlayCountdown = i)
+                delay(1000)
+            }
+            // Countdown finished, play next episode
+            playNextEpisodeImmediately()
+        }
+    }
+
     fun cancelAutoPlay() {
         autoPlayCountdownJob?.cancel()
         _uiState.value = _uiState.value.copy(
@@ -1262,6 +1970,21 @@ class VideoPlayerViewModel @Inject constructor(
 
     fun dismissRandomEpisodeError() {
         _uiState.value = _uiState.value.copy(showRandomEpisodeError = false)
+    }
+
+    fun dismissUpNextOverlay() {
+        upNextOverlayDismissed = true
+        autoPlayCountdownJob?.cancel()
+        _uiState.value = _uiState.value.copy(
+            showUpNextOverlay = false,
+            autoPlayCountdown = 0
+        )
+    }
+
+    fun playNextNow() {
+        // User clicked "Play Now" - trigger immediate playback
+        println("[NextEpisode] User clicked Play Now")
+        playNextEpisodeImmediately()
     }
 
     /**
@@ -1298,7 +2021,7 @@ class VideoPlayerViewModel @Inject constructor(
                         hasNext = true,
                         season = response.nextEpisode.season,
                         episode = response.nextEpisode.episode,
-                        title = response.nextEpisode.title,
+                        title = decodeTitle(response.nextEpisode.title),
                         inCurrentPack = true  // Prefetch means it's available
                     )
 
@@ -1327,7 +2050,23 @@ class VideoPlayerViewModel @Inject constructor(
 
         try {
             println("[Prefetch] Promoting job $jobId")
-            val response = api.promotePrefetch(jobId)
+            // Use a 5-second timeout to avoid blocking autoplay if server is slow
+            val response = kotlinx.coroutines.withTimeoutOrNull(5000L) {
+                api.promotePrefetch(jobId)
+            }
+
+            if (response == null) {
+                println("[Prefetch] Promote timed out after 5s, falling back to normal autoplay")
+                return false
+            }
+
+            println("[Prefetch] Promote response: success=${response.success}, status=${response.status}, error=${response.error}")
+
+            // Check for error response
+            if (response.error != null) {
+                println("[Prefetch] Server error: ${response.error}")
+                return false
+            }
 
             if (response.success && response.status == "completed" && response.streamUrl != null) {
                 println("[Prefetch] Job ready! Stream URL available")
@@ -1341,7 +2080,7 @@ class VideoPlayerViewModel @Inject constructor(
                         hasNext = true,
                         season = response.nextEpisode.season,
                         episode = response.nextEpisode.episode,
-                        title = response.nextEpisode.title,
+                        title = decodeTitle(response.nextEpisode.title),
                         inCurrentPack = true  // Prefetched content is always available
                     )
 
@@ -1689,17 +2428,23 @@ class VideoPlayerViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
 
+        // Capture player state BEFORE releasing - saveProgress needs these values
+        // but the coroutine runs async and player will be null by then
+        val player = _player
+        val currentPosition = player?.currentPosition ?: 0L
+        val duration = player?.duration ?: 0L
+
         // Save final progress and end session
         viewModelScope.launch {
             try {
-                saveProgress()
+                saveProgressWithValues(currentPosition, duration)
                 api.endVodSession()
             } catch (e: Exception) {
                 println("[ERROR] VideoPlayerViewModel: Failed to save final progress: ${e.message}")
             }
         }
 
-        _player?.release()
+        player?.release()
         _player = null
     }
 }
