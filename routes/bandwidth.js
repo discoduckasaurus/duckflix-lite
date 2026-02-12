@@ -6,27 +6,90 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
-// Test payload size (5MB)
-const TEST_PAYLOAD_SIZE = 5 * 1024 * 1024;
+// Legacy test payload (25MB) for backward compat
+const LEGACY_PAYLOAD_SIZE = 25 * 1024 * 1024;
+const legacyPayload = crypto.randomBytes(LEGACY_PAYLOAD_SIZE);
 
-// Pre-generate random payload (do once at startup)
-const testPayload = crypto.randomBytes(TEST_PAYLOAD_SIZE);
+// Streaming test: reusable 1MB chunk written repeatedly
+const STREAM_CHUNK_SIZE = 1024 * 1024;
+const streamChunk = crypto.randomBytes(STREAM_CHUNK_SIZE);
+
+// Default/max streaming duration
+const DEFAULT_STREAM_DURATION_S = 5;
+const MAX_STREAM_DURATION_S = 10;
 
 /**
  * GET /api/bandwidth/test
- * Returns test payload for client to measure download speed
+ * Legacy: returns fixed test payload for client to measure download speed
  */
 router.get('/test', authenticateToken, (req, res) => {
-  logger.info(`Bandwidth test requested by user ${req.user.username}`);
+  logger.info(`Bandwidth test (legacy) requested by user ${req.user.username}`);
 
   res.set({
     'Content-Type': 'application/octet-stream',
-    'Content-Length': TEST_PAYLOAD_SIZE,
+    'Content-Length': LEGACY_PAYLOAD_SIZE,
     'Cache-Control': 'no-store',
-    'X-Test-Size-Bytes': TEST_PAYLOAD_SIZE
+    'X-Test-Size-Bytes': LEGACY_PAYLOAD_SIZE
   });
 
-  res.send(testPayload);
+  res.send(legacyPayload);
+});
+
+/**
+ * GET /api/bandwidth/test-stream?duration=5
+ * Streaming bandwidth test — sends random data for `duration` seconds.
+ * Works accurately at ANY connection speed (1 Mbps or 1 Gbps).
+ *
+ * Client should:
+ *   1. Record timestamp of first byte received
+ *   2. Accumulate total bytes received
+ *   3. On stream end, compute: totalBytes * 8 / elapsedSeconds / 1_000_000 = Mbps
+ *   4. POST result to /api/bandwidth/report
+ *
+ * Response headers:
+ *   X-Test-Duration-Seconds: actual duration the server will stream
+ */
+router.get('/test-stream', authenticateToken, (req, res) => {
+  const durationS = Math.min(
+    Math.max(parseInt(req.query.duration) || DEFAULT_STREAM_DURATION_S, 1),
+    MAX_STREAM_DURATION_S
+  );
+
+  logger.info(`Bandwidth test (stream, ${durationS}s) requested by user ${req.user.username}`);
+
+  res.set({
+    'Content-Type': 'application/octet-stream',
+    'Cache-Control': 'no-store',
+    'Transfer-Encoding': 'chunked',
+    'X-Test-Duration-Seconds': durationS
+  });
+
+  const startTime = Date.now();
+  const endTime = startTime + (durationS * 1000);
+  let totalBytes = 0;
+
+  function writeChunks() {
+    // Write as fast as the client can consume until time's up
+    while (Date.now() < endTime) {
+      const ok = res.write(streamChunk);
+      totalBytes += STREAM_CHUNK_SIZE;
+      if (!ok) {
+        // Backpressure: wait for drain then continue
+        res.once('drain', writeChunks);
+        return;
+      }
+    }
+    // Time's up
+    res.end();
+    logger.info(`Bandwidth test streamed ${Math.round(totalBytes / (1024 * 1024))}MB in ${durationS}s to ${req.user.username}`);
+  }
+
+  // Handle client disconnect
+  req.on('close', () => {
+    // Client disconnected early — that's fine
+  });
+
+  writeChunks();
 });
 
 /**
@@ -35,7 +98,7 @@ router.get('/test', authenticateToken, (req, res) => {
  */
 router.post('/report', authenticateToken, (req, res) => {
   try {
-    const { measuredMbps, trigger } = req.body;
+    const { measuredMbps, durationMs, trigger } = req.body;
     const userId = req.user.sub;
 
     if (typeof measuredMbps !== 'number' || !Number.isFinite(measuredMbps) || measuredMbps <= 0) {
@@ -45,6 +108,9 @@ router.post('/report', authenticateToken, (req, res) => {
     // Cap at reasonable maximum (1 Gbps)
     const cappedMbps = Math.min(measuredMbps, 1000);
 
+    // Flag unreliable measurements (test completed too fast for accurate reading)
+    const isReliable = !durationMs || durationMs >= 2000;
+
     db.prepare(`
       UPDATE users
       SET measured_bandwidth_mbps = ?,
@@ -52,12 +118,13 @@ router.post('/report', authenticateToken, (req, res) => {
       WHERE id = ?
     `).run(cappedMbps, userId);
 
-    logger.info(`Bandwidth reported for user ${req.user.username}: ${cappedMbps} Mbps (trigger: ${trigger || 'unknown'})`);
+    logger.info(`Bandwidth reported for user ${req.user.username}: ${cappedMbps.toFixed(1)} Mbps (trigger: ${trigger || 'unknown'}, duration: ${durationMs || '?'}ms, reliable: ${isReliable})`);
 
     res.json({
       success: true,
       recorded: cappedMbps,
-      maxBitrate: cappedMbps / 1.3 // Return their effective max bitrate
+      reliable: isReliable,
+      maxBitrate: cappedMbps / 1.3
     });
   } catch (error) {
     logger.error('Bandwidth report error:', error);
@@ -88,12 +155,19 @@ router.get('/status', authenticateToken, (req, res) => {
     const safetyMargin = user.bandwidth_safety_margin || 1.3;
     const maxBitrate = user.measured_bandwidth_mbps / safetyMargin;
 
+    // Check staleness (>1 hour)
+    const measuredAt = user.bandwidth_measured_at ? new Date(user.bandwidth_measured_at + 'Z').getTime() : 0;
+    const ageMs = Date.now() - measuredAt;
+    const isStale = ageMs > 60 * 60 * 1000;
+
     res.json({
       hasMeasurement: true,
       measuredMbps: user.measured_bandwidth_mbps,
       measuredAt: user.bandwidth_measured_at,
       safetyMargin: safetyMargin,
-      maxBitrateMbps: Math.round(maxBitrate * 10) / 10
+      maxBitrateMbps: Math.round(maxBitrate * 10) / 10,
+      isStale,
+      suggestRetest: isStale
     });
   } catch (error) {
     logger.error('Bandwidth status error:', error);

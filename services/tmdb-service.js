@@ -168,8 +168,84 @@ async function getMovieRecommendations(tmdbId) {
   }
 }
 
+/**
+ * Get a random episode from a TV series (excluding Season 0/specials)
+ * @param {number} tmdbId
+ * @returns {Promise<Object|null>} { season, episode, title } or null
+ */
+async function getRandomEpisode(tmdbId) {
+  try {
+    const response = await axios.get(`${TMDB_BASE_URL}/tv/${tmdbId}`, {
+      params: { api_key: TMDB_API_KEY },
+      timeout: TMDB_TIMEOUT
+    });
+
+    const validSeasons = response.data.seasons.filter(s => s.season_number > 0);
+    if (validSeasons.length === 0) return null;
+
+    const totalEpisodes = validSeasons.reduce((sum, s) => sum + s.episode_count, 0);
+    if (totalEpisodes === 0) return null;
+
+    const randomNum = Math.floor(Math.random() * totalEpisodes) + 1;
+    let counter = 0;
+    let selectedSeason = null;
+    let selectedEpisode = null;
+
+    for (const season of validSeasons) {
+      if (counter + season.episode_count >= randomNum) {
+        selectedSeason = season.season_number;
+        selectedEpisode = randomNum - counter;
+        break;
+      }
+      counter += season.episode_count;
+    }
+
+    // Fetch episode title
+    const epResponse = await axios.get(
+      `${TMDB_BASE_URL}/tv/${tmdbId}/season/${selectedSeason}/episode/${selectedEpisode}`,
+      { params: { api_key: TMDB_API_KEY }, timeout: TMDB_TIMEOUT }
+    );
+
+    return {
+      season: selectedSeason,
+      episode: selectedEpisode,
+      title: epResponse.data.name
+    };
+  } catch (error) {
+    logger.warn(`[TMDB] Failed to get random episode for ${tmdbId}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Get IMDB ID for a movie or TV show from TMDB external_ids
+ * @param {number} tmdbId
+ * @param {string} type - 'movie' or 'tv'
+ * @returns {Promise<string|null>} IMDB ID (e.g. "tt0903747") or null
+ */
+async function getImdbId(tmdbId, type) {
+  const cacheKey = `imdb-${tmdbId}-${type}`;
+  if (runtimeCache.has(cacheKey)) return runtimeCache.get(cacheKey);
+
+  try {
+    const endpoint = type === 'movie'
+      ? `${TMDB_BASE_URL}/movie/${tmdbId}/external_ids`
+      : `${TMDB_BASE_URL}/tv/${tmdbId}/external_ids`;
+
+    const res = await axios.get(endpoint, { params: { api_key: TMDB_API_KEY }, timeout: TMDB_TIMEOUT });
+    const imdbId = res.data?.imdb_id || null;
+    runtimeCache.set(cacheKey, imdbId);
+    return imdbId;
+  } catch (error) {
+    logger.warn(`[TMDB] Failed to get IMDB ID for ${tmdbId} (${type}):`, error.message);
+    return null;
+  }
+}
+
 module.exports = {
   getRuntime,
   getNextEpisode,
-  getMovieRecommendations
+  getRandomEpisode,
+  getMovieRecommendations,
+  getImdbId
 };

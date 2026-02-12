@@ -508,4 +508,226 @@ router.put('/loading-phrases', (req, res) => {
   }
 });
 
+// =========================================
+// Scheduled Loading Phrases
+// =========================================
+
+const { HOLIDAYS, getHolidayDate, doesScheduleMatchDate } = require('../services/holiday-dates');
+
+/**
+ * GET /api/admin/loading-phrases/schedules
+ * List all scheduled phrase sets with user names resolved
+ */
+router.get('/loading-phrases/schedules', (req, res) => {
+  try {
+    const schedules = db.prepare('SELECT * FROM loading_phrase_schedules ORDER BY created_at DESC').all();
+
+    // Resolve user names for targeted schedules
+    const users = db.prepare('SELECT id, username FROM users').all();
+    const userMap = new Map(users.map(u => [u.id, u.username]));
+
+    const result = schedules.map(s => {
+      let targetUsers = null;
+      if (s.target_user_ids) {
+        const ids = JSON.parse(s.target_user_ids);
+        targetUsers = ids.map(id => ({ id, username: userMap.get(id) || `User #${id}` }));
+      }
+
+      // Resolve next occurrence for display
+      let nextDate = null;
+      if (s.schedule_type === 'holiday') {
+        const year = new Date().getFullYear();
+        const thisYear = getHolidayDate(s.holiday, year);
+        nextDate = thisYear >= new Date().toISOString().substring(0, 10) ? thisYear : getHolidayDate(s.holiday, year + 1);
+      } else if (s.scheduled_date) {
+        nextDate = s.scheduled_date;
+      }
+
+      const holidayInfo = s.holiday ? HOLIDAYS.find(h => h.key === s.holiday) : null;
+
+      return {
+        ...s,
+        phrases_a: JSON.parse(s.phrases_a),
+        phrases_b: JSON.parse(s.phrases_b),
+        target_user_ids: s.target_user_ids ? JSON.parse(s.target_user_ids) : null,
+        targetUsers,
+        nextDate,
+        holidayName: holidayInfo ? holidayInfo.name : null
+      };
+    });
+
+    res.json({ schedules: result, holidays: HOLIDAYS });
+  } catch (error) {
+    logger.error('Get loading phrase schedules error:', error);
+    res.status(500).json({ error: 'Failed to get schedules' });
+  }
+});
+
+/**
+ * POST /api/admin/loading-phrases/schedules
+ * Create a new scheduled phrase set
+ */
+router.post('/loading-phrases/schedules', (req, res) => {
+  try {
+    const { name, scheduleType, scheduledDate, holiday, repeatType, phrasesA, phrasesB, targetUserIds, isEnabled, orderedPairs } = req.body;
+
+    if (!name || !scheduleType) {
+      return res.status(400).json({ error: 'Name and schedule type are required' });
+    }
+
+    if (scheduleType === 'date' && !scheduledDate) {
+      return res.status(400).json({ error: 'Date is required for date-type schedules' });
+    }
+
+    if (scheduleType === 'holiday' && !holiday) {
+      return res.status(400).json({ error: 'Holiday is required for holiday-type schedules' });
+    }
+
+    if (!Array.isArray(phrasesA) || !Array.isArray(phrasesB) || phrasesA.length === 0 || phrasesB.length === 0) {
+      return res.status(400).json({ error: 'Both phrases A and B arrays are required' });
+    }
+
+    if (orderedPairs) {
+      // Ordered pairs mode: A and B must have equal length (1:1 pairing)
+      if (phrasesA.length !== phrasesB.length) {
+        return res.status(400).json({
+          error: `Ordered pairs requires equal A and B counts (got ${phrasesA.length} A, ${phrasesB.length} B)`
+        });
+      }
+    } else {
+      // Default mode: validate A↔B first letter matching
+      const bFirstLetters = new Set(phrasesB.map(p => p.charAt(0).toUpperCase()));
+      const unmatchedA = phrasesA.filter(a => !bFirstLetters.has(a.charAt(0).toUpperCase()));
+      if (unmatchedA.length > 0) {
+        return res.status(400).json({
+          error: 'Each A phrase must have at least one B phrase with matching first letter',
+          unmatchedPhrases: unmatchedA
+        });
+      }
+    }
+
+    const result = db.prepare(`
+      INSERT INTO loading_phrase_schedules (name, schedule_type, scheduled_date, holiday, repeat_type, phrases_a, phrases_b, target_user_ids, is_enabled, ordered_pairs)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      name,
+      scheduleType,
+      scheduleType === 'date' ? scheduledDate : null,
+      scheduleType === 'holiday' ? holiday : null,
+      repeatType || 'none',
+      JSON.stringify(phrasesA),
+      JSON.stringify(phrasesB),
+      targetUserIds && targetUserIds.length > 0 ? JSON.stringify(targetUserIds) : null,
+      isEnabled !== false ? 1 : 0,
+      orderedPairs ? 1 : 0
+    );
+
+    logger.info(`Admin ${req.user.username} created loading phrase schedule "${name}" (ID: ${result.lastInsertRowid})`);
+
+    res.json({ success: true, id: result.lastInsertRowid });
+  } catch (error) {
+    logger.error('Create loading phrase schedule error:', error);
+    res.status(500).json({ error: 'Failed to create schedule' });
+  }
+});
+
+/**
+ * PUT /api/admin/loading-phrases/schedules/:id
+ * Update a scheduled phrase set
+ */
+router.put('/loading-phrases/schedules/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const { name, scheduleType, scheduledDate, holiday, repeatType, phrasesA, phrasesB, targetUserIds, isEnabled, orderedPairs } = req.body;
+
+    const existing = db.prepare('SELECT id FROM loading_phrase_schedules WHERE id = ?').get(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Schedule not found' });
+    }
+
+    if (!name || !scheduleType) {
+      return res.status(400).json({ error: 'Name and schedule type are required' });
+    }
+
+    if (scheduleType === 'date' && !scheduledDate) {
+      return res.status(400).json({ error: 'Date is required for date-type schedules' });
+    }
+
+    if (scheduleType === 'holiday' && !holiday) {
+      return res.status(400).json({ error: 'Holiday is required for holiday-type schedules' });
+    }
+
+    if (!Array.isArray(phrasesA) || !Array.isArray(phrasesB) || phrasesA.length === 0 || phrasesB.length === 0) {
+      return res.status(400).json({ error: 'Both phrases A and B arrays are required' });
+    }
+
+    if (orderedPairs) {
+      if (phrasesA.length !== phrasesB.length) {
+        return res.status(400).json({
+          error: `Ordered pairs requires equal A and B counts (got ${phrasesA.length} A, ${phrasesB.length} B)`
+        });
+      }
+    } else {
+      const bFirstLetters = new Set(phrasesB.map(p => p.charAt(0).toUpperCase()));
+      const unmatchedA = phrasesA.filter(a => !bFirstLetters.has(a.charAt(0).toUpperCase()));
+      if (unmatchedA.length > 0) {
+        return res.status(400).json({
+          error: 'Each A phrase must have at least one B phrase with matching first letter',
+          unmatchedPhrases: unmatchedA
+        });
+      }
+    }
+
+    db.prepare(`
+      UPDATE loading_phrase_schedules
+      SET name = ?, schedule_type = ?, scheduled_date = ?, holiday = ?, repeat_type = ?,
+          phrases_a = ?, phrases_b = ?, target_user_ids = ?, is_enabled = ?, ordered_pairs = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(
+      name,
+      scheduleType,
+      scheduleType === 'date' ? scheduledDate : null,
+      scheduleType === 'holiday' ? holiday : null,
+      repeatType || 'none',
+      JSON.stringify(phrasesA),
+      JSON.stringify(phrasesB),
+      targetUserIds && targetUserIds.length > 0 ? JSON.stringify(targetUserIds) : null,
+      isEnabled !== false ? 1 : 0,
+      orderedPairs ? 1 : 0,
+      id
+    );
+
+    logger.info(`Admin ${req.user.username} updated loading phrase schedule ID ${id}`);
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Update loading phrase schedule error:', error);
+    res.status(500).json({ error: 'Failed to update schedule' });
+  }
+});
+
+/**
+ * DELETE /api/admin/loading-phrases/schedules/:id
+ * Delete a scheduled phrase set
+ */
+router.delete('/loading-phrases/schedules/:id', (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+
+    const existing = db.prepare('SELECT id, name FROM loading_phrase_schedules WHERE id = ?').get(id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Schedule not found' });
+    }
+
+    db.prepare('DELETE FROM loading_phrase_schedules WHERE id = ?').run(id);
+
+    logger.info(`Admin ${req.user.username} deleted loading phrase schedule "${existing.name}" (ID: ${id})`);
+
+    res.json({ success: true });
+  } catch (error) {
+    logger.error('Delete loading phrase schedule error:', error);
+    res.status(500).json({ error: 'Failed to delete schedule' });
+  }
+});
+
 module.exports = router;

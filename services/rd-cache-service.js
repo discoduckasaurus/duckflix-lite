@@ -1,9 +1,18 @@
 const { db } = require('../db/init');
 const logger = require('../utils/logger');
 const axios = require('axios');
+const crypto = require('crypto');
 
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in ms
 const VERIFY_TIMEOUT = 5000; // 5 second timeout for link verification
+
+/**
+ * Hash an RD API key to a short identifier for cache isolation
+ */
+function hashRdKey(rdApiKey) {
+  if (!rdApiKey) return '';
+  return crypto.createHash('sha256').update(rdApiKey).digest('hex').substring(0, 12);
+}
 
 /**
  * Parse resolution from filename
@@ -21,23 +30,26 @@ function parseResolutionFromFilename(fileName) {
 
 class RdCacheService {
   /**
-   * Get cached RD link, filtered by user's max bitrate
+   * Get cached RD link, filtered by user's RD key and max bitrate
    * @param {Object} params
    * @param {number} params.tmdbId
    * @param {string} params.type - 'movie' or 'tv'
    * @param {number} [params.season]
    * @param {number} [params.episode]
    * @param {number} [params.maxBitrateMbps] - User's max playable bitrate
+   * @param {string} [params.rdApiKey] - User's RD API key for per-user isolation
    */
-  async getCachedLink({ tmdbId, type, season, episode, maxBitrateMbps }) {
+  async getCachedLink({ tmdbId, type, season, episode, maxBitrateMbps, rdApiKey }) {
     const now = Date.now();
+    const keyHash = hashRdKey(rdApiKey);
 
     let query = `
       SELECT * FROM rd_link_cache
       WHERE tmdb_id = ? AND type = ?
+        AND rd_key_hash = ?
         AND expires_at > ?
     `;
-    const params = [tmdbId, type, now];
+    const params = [tmdbId, type, keyHash, now];
 
     // Add season/episode filters for TV
     if (type === 'tv') {
@@ -89,10 +101,12 @@ class RdCacheService {
    * @param {number} [params.resolution]
    * @param {number} [params.estimatedBitrateMbps]
    * @param {number} [params.fileSizeBytes]
+   * @param {string} [params.rdApiKey] - User's RD API key for per-user isolation
    */
-  async cacheLink({ tmdbId, title, year, type, season, episode, streamUrl, fileName, resolution, estimatedBitrateMbps, fileSizeBytes }) {
+  async cacheLink({ tmdbId, title, year, type, season, episode, streamUrl, fileName, resolution, estimatedBitrateMbps, fileSizeBytes, rdApiKey }) {
     const now = Date.now();
     const expiresAt = now + CACHE_TTL;
+    const keyHash = hashRdKey(rdApiKey);
 
     // Parse resolution from filename if not provided
     const res = resolution || parseResolutionFromFilename(fileName);
@@ -101,9 +115,9 @@ class RdCacheService {
       INSERT INTO rd_link_cache (
         tmdb_id, title, year, type, season, episode,
         stream_url, file_name, resolution, estimated_bitrate_mbps, file_size_bytes,
-        created_at, expires_at, last_accessed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(tmdb_id, type, season, episode, resolution)
+        rd_key_hash, created_at, expires_at, last_accessed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(tmdb_id, type, season, episode, resolution, rd_key_hash)
       DO UPDATE SET
         stream_url = excluded.stream_url,
         file_name = excluded.file_name,
@@ -114,7 +128,7 @@ class RdCacheService {
     `).run(
       tmdbId, title, year, type, season || null, episode || null,
       streamUrl, fileName, res, estimatedBitrateMbps || null, fileSizeBytes || null,
-      now, expiresAt, now
+      keyHash, now, expiresAt, now
     );
 
     logger.info(`[RD Cache] Stored ${tmdbId} (${type}) - ${res}p @ ${estimatedBitrateMbps?.toFixed(1) || '?'} Mbps`);

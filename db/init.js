@@ -16,6 +16,7 @@ if (!fs.existsSync(dbDir)) {
 // Initialize database connection
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL'); // Write-Ahead Logging for better concurrency
+db.pragma('busy_timeout = 5000'); // Wait up to 5s for locks instead of failing immediately
 
 logger.info(`Database initialized at: ${DB_PATH}`);
 
@@ -192,11 +193,17 @@ function initDatabase() {
     logger.info('Added file_size_bytes column to rd_link_cache');
   } catch (e) {}
 
-  // Drop old index and create new one with resolution (UNIQUE for upsert support)
+  // Migration: Add per-user RD cache isolation
+  try {
+    db.exec(`ALTER TABLE rd_link_cache ADD COLUMN rd_key_hash TEXT NOT NULL DEFAULT ''`);
+    logger.info('Added rd_key_hash column to rd_link_cache for per-user isolation');
+  } catch (e) {}
+
+  // Drop old index and create new one with rd_key_hash (UNIQUE for upsert, per-user)
   db.exec(`DROP INDEX IF EXISTS idx_rd_cache_lookup`);
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_rd_cache_lookup
-    ON rd_link_cache(tmdb_id, type, season, episode, resolution)
+    ON rd_link_cache(tmdb_id, type, season, episode, resolution, rd_key_hash)
   `);
 
   // Playback failures tracking
@@ -424,6 +431,37 @@ function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_quota_date
     ON subtitle_quota_tracking(download_date)
   `);
+
+  // Scheduled loading phrases (date/holiday-specific phrase sets)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS loading_phrase_schedules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      schedule_type TEXT NOT NULL,
+      scheduled_date TEXT,
+      holiday TEXT,
+      repeat_type TEXT DEFAULT 'none',
+      phrases_a TEXT NOT NULL,
+      phrases_b TEXT NOT NULL,
+      target_user_ids TEXT,
+      is_enabled BOOLEAN DEFAULT 1,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  // Migration: Add ordered_pairs to loading_phrase_schedules
+  try {
+    db.exec(`ALTER TABLE loading_phrase_schedules ADD COLUMN ordered_pairs BOOLEAN DEFAULT 0`);
+    logger.info('Added ordered_pairs column to loading_phrase_schedules');
+  } catch (e) {}
+
+  // DFTV pseudo-live channel
+  db.prepare(`
+    INSERT OR IGNORE INTO special_channels
+      (id, name, display_name, group_name, stream_url, logo_url, sort_order, is_active)
+    VALUES ('dftv-mixed', 'DFTV', 'DFTV', 'DuckFlix', 'dftv://mixed', NULL, 1, 1)
+  `).run();
 
   logger.info('Database tables created successfully');
 }

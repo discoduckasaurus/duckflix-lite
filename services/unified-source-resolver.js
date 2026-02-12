@@ -8,7 +8,7 @@
  * to reduce time-to-first-playback.
  */
 
-const { searchZurg } = require('./zurg-search');
+const { searchZurg, normalizeTitle, titleMatches } = require('./zurg-search');
 const { searchContent: searchProwlarr } = require('./prowlarr-service');
 const logger = require('../utils/logger');
 const { estimateBitrateMbps, isValidSource, parseResolution } = require('../utils/bitrate');
@@ -23,7 +23,7 @@ const MIN_EARLY_RESOLUTION = 720;
  * @param {string[]} excludedFilePaths - Zurg file paths to exclude
  * @param {Function} onSourcesReady - Optional callback for streaming mode: (sources, isComplete) => void
  */
-async function getAllSources({ title, year, type, season, episode, tmdbId, rdApiKey, maxBitrateMbps, excludedHashes = [], excludedFilePaths = [] }, onSourcesReady = null) {
+async function getAllSources({ title, year, type, season, episode, tmdbId, rdApiKey, maxBitrateMbps, excludedHashes = [], excludedFilePaths = [], platform }, onSourcesReady = null) {
   logger.info(`🔍 Searching ALL sources in parallel: ${title} (${year})`);
 
   if (excludedHashes.length > 0 || excludedFilePaths.length > 0) {
@@ -45,6 +45,9 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
   const processProwlarrTorrents = (torrents) => {
     const { isBadLink } = require('./bad-link-tracker');
     const sources = [];
+    const normalizedExpected = normalizeTitle(title);
+    const expectedWords = normalizedExpected.split(' ').filter(w => w.length > 2);
+    const shouldCheckTitle = expectedWords.length >= 2;
 
     for (const torrent of torrents) {
       // Skip excluded hashes
@@ -58,11 +61,13 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
       const resolution = parseResolution(torrent.title);
       const sizeBytes = torrent.size || 0;
 
-      // Filter by bandwidth if specified
-      if (maxBitrateMbps && sizeBytes > 0 && runtimeMinutes) {
-        const estimatedBitrate = estimateBitrateMbps(sizeBytes, runtimeMinutes);
-        if (estimatedBitrate > maxBitrateMbps) {
-          continue;
+      // Check bandwidth — mark over-bandwidth sources as fallback instead of dropping
+      let overBandwidth = false;
+      let sourceBitrateMbps = null;
+      if (sizeBytes > 0 && runtimeMinutes) {
+        sourceBitrateMbps = estimateBitrateMbps(sizeBytes, runtimeMinutes);
+        if (maxBitrateMbps && sourceBitrateMbps > maxBitrateMbps) {
+          overBandwidth = true;
         }
       }
 
@@ -77,6 +82,20 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
         if (titleYear && titleYear !== String(year)) {
           continue;
         }
+      }
+
+      // For movies: reject torrents that look like TV episodes (S##E##)
+      if (type === 'movie') {
+        const tvEpisodePattern = /s\d{1,2}[\._\s]?e\d{1,2}/i;
+        if (tvEpisodePattern.test(torrent.title)) {
+          continue;
+        }
+      }
+
+      // Title matching: reject torrents that don't match the requested title
+      // (same 70% word-match logic used for Zurg results)
+      if (shouldCheckTitle && !titleMatches(torrent.title, title)) {
+        continue;
       }
 
       // Filter by episode for TV
@@ -123,7 +142,9 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
         sizeMB: sizeBytes / (1024 * 1024),
         seeders: torrent.seeders,
         isCached: false,
-        isFlaggedBad: badInfo
+        isFlaggedBad: badInfo,
+        overBandwidth,
+        estimatedBitrateMbps: sourceBitrateMbps
       });
     }
 
@@ -134,7 +155,7 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
   const emitSources = (isComplete) => {
     if (!onSourcesReady) return;
 
-    const ranked = rankUnifiedSources(allSources, type);
+    const ranked = rankUnifiedSources(allSources, type, platform);
     logger.info(`📤 Emitting ${ranked.length} sources (complete: ${isComplete})`);
     onSourcesReady(ranked, isComplete);
   };
@@ -147,7 +168,7 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
 
   // Start Prowlarr search with streaming callback
   const prowlarrPromise = new Promise((resolve) => {
-    searchProwlarr({ title, year, type, season, episode }, (newTorrents, isComplete) => {
+    searchProwlarr({ title, year, type, season, episode, tmdbId }, (newTorrents, isComplete) => {
       // Process new torrents
       const newSources = processProwlarrTorrents(newTorrents);
       if (newSources.length > 0) {
@@ -188,13 +209,12 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
       // Check if flagged as bad
       const badInfo = isBadLink({ streamUrl: zurgFile.filePath });
 
-      // Filter by bandwidth if specified
-      if (maxBitrateMbps && zurgFile.mbPerMinute) {
-        const zurgBitrate = zurgFile.mbPerMinute / 8; // rough conversion
-        if (zurgBitrate > maxBitrateMbps) {
-          logger.debug(`Filtered Zurg ${zurgFile.fileName}: ${zurgBitrate.toFixed(1)} > ${maxBitrateMbps.toFixed(1)} Mbps`);
-          continue;
-        }
+      // Check bandwidth — mark over-bandwidth sources as fallback instead of dropping
+      let overBandwidth = false;
+      const sourceBitrateMbps = zurgFile.mbPerMinute ? (zurgFile.mbPerMinute * 8) / 60 : null;
+      if (maxBitrateMbps && sourceBitrateMbps && sourceBitrateMbps > maxBitrateMbps) {
+        overBandwidth = true;
+        logger.info(`Over-bandwidth Zurg: ${zurgFile.fileName} (${sourceBitrateMbps.toFixed(1)} > ${maxBitrateMbps.toFixed(1)} Mbps, will try as fallback)`);
       }
 
       // Filter garbage files
@@ -214,7 +234,9 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
         mbPerMinute: zurgFile.mbPerMinute,
         isCached: true, // Zurg files are always cached (they're in Zurg mount)
         meetsQualityThreshold: zurgFile.meetsQualityThreshold,
-        isFlaggedBad: badInfo
+        isFlaggedBad: badInfo,
+        overBandwidth,
+        estimatedBitrateMbps: sourceBitrateMbps
       });
     }
     logger.info(`✅ Zurg: ${allSources.filter(s => s.source === 'zurg').length} sources added`);
@@ -235,16 +257,17 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
     // Just wait a bit to give it a chance to get some results
     await Promise.race([
       prowlarrPromise,
-      new Promise(resolve => setTimeout(resolve, 15000)) // Max 15s wait for all results
+      new Promise(resolve => setTimeout(resolve, 45000)) // Max 45s wait (matches Prowlarr timeout)
     ]);
   }
 
   const zurgCount = allSources.filter(s => s.source === 'zurg').length;
   const prowlarrCount = allSources.filter(s => s.source === 'prowlarr').length;
-  logger.info(`📊 Total sources: ${allSources.length} (${zurgCount} Zurg cached, ${prowlarrCount} Prowlarr uncached)`);
+  const overBwCount = allSources.filter(s => s.overBandwidth).length;
+  logger.info(`📊 Total sources: ${allSources.length} (${zurgCount} Zurg cached, ${prowlarrCount} Prowlarr uncached${overBwCount > 0 ? `, ${overBwCount} over-bandwidth fallback` : ''})`);
 
   // Rank all sources together
-  const rankedSources = rankUnifiedSources(allSources, type);
+  const rankedSources = rankUnifiedSources(allSources, type, platform);
 
   logger.info(`🏆 Ranked ${rankedSources.length} sources (top: ${rankedSources[0]?.title?.substring(0, 60)}...)`);
 
@@ -255,16 +278,34 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
  * Unified ranking algorithm that treats cached sources equally
  * Note: Codec compatibility is validated via ffprobe AFTER stream URL is resolved
  */
-function rankUnifiedSources(sources, type) {
+function rankUnifiedSources(sources, type, platform) {
   return sources
     .map((source) => {
       let score = 0;
       const title = (source.title || '').toLowerCase();
       const titleUpper = title.toUpperCase();
 
+      // Web client container preference: MP4 plays natively in browsers, MKV does not
+      if (platform === 'web') {
+        if (title.endsWith('.mp4')) {
+          score += 2000;
+        } else if (title.endsWith('.mkv')) {
+          score -= 1000;
+        }
+      }
+
       // FLAGGED BAD - massive penalty (try last)
       if (source.isFlaggedBad) {
         score -= 100000; // Ensure these are tried last
+      }
+
+      // OVER BANDWIDTH - heavy penalty so these are tried after all in-bandwidth sources
+      // Among over-bandwidth, prefer sources closest to the bandwidth limit (lowest bitrate first)
+      if (source.overBandwidth) {
+        score -= 50000;
+        if (source.estimatedBitrateMbps) {
+          score -= source.estimatedBitrateMbps * 100; // Lower bitrate = smaller penalty = tried first
+        }
       }
 
       // CACHED BONUS - same for Zurg and Prowlarr cached

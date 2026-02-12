@@ -17,7 +17,7 @@ class DownloadJobManager {
     }, 5 * 60 * 1000);
   }
 
-  createJob(jobId, contentInfo, userInfo = {}) {
+  createJob(jobId, contentInfo, userInfo = {}, options = {}) {
     this.jobs.set(jobId, {
       jobId,
       contentInfo,
@@ -27,6 +27,7 @@ class DownloadJobManager {
         ip: userInfo.ip || 'unknown',
         rdApiKeyLast4: userInfo.rdApiKey ? userInfo.rdApiKey.slice(-4) : 'N/A'
       },
+      isPrefetch: !!options.isPrefetch,
       progress: 0,
       status: 'searching', // 'searching' | 'downloading' | 'completed' | 'error'
       message: 'Searching for content...',

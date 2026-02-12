@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DuckFlix Lite - Admin Dashboard</title>
-    <link rel="stylesheet" href="/static/admin/styles.css?v=15">
+    <link rel="stylesheet" href="/static/admin/styles.css?v=18">
 </head>
 <body>
     <!-- Login Screen -->
@@ -101,6 +101,7 @@
                     <button class="btn btn-primary" id="save-phrases-btn">Save Changes</button>
                 </div>
                 <div id="loading-phrases-container"></div>
+                <div id="scheduled-phrases-container"></div>
             </div>
 
             <!-- Live TV Channels View -->
@@ -109,7 +110,7 @@
                     <h1>Live TV Channels</h1>
                     <div class="view-header-actions">
                         <button class="btn btn-secondary" id="seed-logos-btn">Auto-Match Logos</button>
-                        <button class="btn btn-secondary" id="reset-sources-btn" title="Reset all channels back to primary (NTV/DaddyLive)">Reset Sources</button>
+                        <button class="btn btn-secondary" id="reset-sources-btn" title="Reset all channels back to primary source">Reset Sources</button>
                         <button class="btn btn-primary" id="save-channels-btn">Save All Changes</button>
                     </div>
                 </div>
@@ -119,9 +120,7 @@
                         <select id="channel-source-filter">
                             <option value="all">All Sources</option>
                             <option value="tvpass">TVPass</option>
-                            <option value="cabernet">DaddyLive-only</option>
                             <option value="has-ntv">Has NTV</option>
-                            <option value="has-daddylive">Has DaddyLive</option>
                             <option value="failover">On Failover (not primary)</option>
                             <option value="special">Special</option>
                         </select>
@@ -221,6 +220,6 @@
     <input type="file" id="logo-upload-input" accept="image/*" style="display:none">
     <input type="file" id="provider-logo-upload-input" accept="image/*" style="display:none">
 
-    <script src="/static/admin/app.js?v=15"></script>
+    <script src="/static/admin/app.js?v=18"></script>
 </body>
 </html>

@@ -2,9 +2,61 @@ const axios = require('axios');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 
+const http = require('http');
+const https = require('https');
+
 const PROWLARR_BASE_URL = process.env.PROWLARR_BASE_URL || 'http://localhost:9696';
 const PROWLARR_API_KEY = process.env.PROWLARR_API_KEY;
 
+// Inline concurrency limiter — caps concurrent Prowlarr API calls
+function createLimiter(concurrency) {
+  let active = 0;
+  const queue = [];
+  function next() {
+    if (active >= concurrency || queue.length === 0) return;
+    active++;
+    const { fn, resolve, reject } = queue.shift();
+    fn().then(resolve, reject).finally(() => { active--; next(); });
+  }
+  return function limit(fn) {
+    return new Promise((resolve, reject) => {
+      queue.push({ fn, resolve, reject });
+      next();
+    });
+  };
+}
+
+const prowlarrLimiter = createLimiter(6);
+
+// Connection-pooled axios instance for Prowlarr
+const prowlarrAxios = axios.create({
+  baseURL: PROWLARR_BASE_URL,
+  headers: { 'X-Api-Key': PROWLARR_API_KEY },
+  timeout: 45000,
+  httpAgent: new http.Agent({ keepAlive: true, maxSockets: 10 }),
+  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 10 }),
+});
+
+// Retry wrapper — matches opensubtitles-service.js pattern
+async function prowlarrRequestWithRetry(config, retryCount = 0) {
+  const maxRetries = 2;
+  const retryDelay = Math.pow(2, retryCount) * 1000; // 1s, 2s
+
+  try {
+    return await prowlarrAxios(config);
+  } catch (error) {
+    const status = error.response?.status;
+    const isRetryable = status === 502 || status === 503 ||
+      error.code === 'ECONNABORTED' || error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT';
+
+    if (isRetryable && retryCount < maxRetries) {
+      logger.warn(`Prowlarr ${status || error.code} error, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      return prowlarrRequestWithRetry(config, retryCount + 1);
+    }
+    throw error;
+  }
+}
 
 // Blocklist for problematic release groups
 const BLOCKLIST_GROUPS = ['YIFY', 'YTS', 'RARBG']; // Often blocked by RD
@@ -15,22 +67,21 @@ const MIN_SEEDERS = 5;
 /**
  * Search Prowlarr with multiple queries and return ranked results
  */
-async function searchTorrentsWithProwlarr(searchQuery) {
+async function searchTorrentsWithProwlarr(searchQuery, extraParams = {}) {
   if (!PROWLARR_API_KEY) {
     logger.warn('Prowlarr not configured');
     return [];
   }
 
   try {
-    const response = await axios.get(`${PROWLARR_BASE_URL}/api/v1/search`, {
+    const response = await prowlarrRequestWithRetry({
+      method: 'get',
+      url: '/api/v1/search',
       params: {
         query: searchQuery,
-        type: 'search'
+        type: 'search',
+        ...extraParams
       },
-      headers: {
-        'X-Api-Key': PROWLARR_API_KEY
-      },
-      timeout: 30000
     });
 
     const results = response.data
@@ -110,7 +161,7 @@ async function searchTorrentsWithProwlarr(searchQuery) {
     return processed.filter(r => r !== null);
 
   } catch (err) {
-    logger.error('Prowlarr search failed:', err.message);
+    logger.error(`Prowlarr search failed: ${err.message || err.code || 'unknown error'} (${err.code || 'no code'})`);
     return [];
   }
 }
@@ -123,33 +174,54 @@ async function searchTorrentsWithProwlarr(searchQuery) {
  * @param {Function} onResults - Callback called with new results as they arrive: (torrents, isComplete) => void
  * @returns {Promise<Array>} - All torrents found (for backwards compatibility)
  */
-async function searchContent({ title, year, type, season, episode }, onResults = null) {
+async function searchContent({ title, year, type, season, episode, tmdbId }, onResults = null) {
   try {
     if (!PROWLARR_API_KEY) {
       throw new Error('Prowlarr API key not configured');
     }
 
-    // Build multiple search queries (from main server logic)
+    // Clean title: decode URL-encoded + signs and strip problematic chars
+    const cleanTitle = title
+      .replace(/\+/g, ' ')
+      .replace(/[!?]/g, '')
+      .trim();
+
+    // Build search queries — TMDB ID search first (precise), then text fallbacks
+    // Each entry: { query, extraParams } — extraParams override the default type:'search'
     const searchQueries = [];
+
+    if (tmdbId) {
+      if (type === 'tv' && season && episode) {
+        searchQueries.push({
+          query: cleanTitle,
+          extraParams: { type: 'tvsearch', tmdbId, season, ep: episode }
+        });
+      } else if (type === 'movie') {
+        searchQueries.push({
+          query: cleanTitle,
+          extraParams: { type: 'movie', tmdbId }
+        });
+      }
+    }
 
     if (type === 'tv') {
       const s = String(season).padStart(2, '0');
       const e = String(episode).padStart(2, '0');
 
       // Try specific episode first
-      searchQueries.push(`${title} S${s}E${e}`);
-      if (year) searchQueries.push(`${title} ${year} S${s}E${e}`);
+      searchQueries.push({ query: `${cleanTitle} S${s}E${e}` });
+      if (year) searchQueries.push({ query: `${cleanTitle} ${year} S${s}E${e}` });
 
       // Then try season pack
-      searchQueries.push(`${title} S${s}`);
-      if (year) searchQueries.push(`${title} ${year} S${s}`);
+      searchQueries.push({ query: `${cleanTitle} S${s}` });
+      if (year) searchQueries.push({ query: `${cleanTitle} ${year} S${s}` });
 
       // "Season X" naming variant
-      searchQueries.push(`${title} Season ${season}`);
+      searchQueries.push({ query: `${cleanTitle} Season ${season}` });
     } else {
       // Movie searches
-      if (year) searchQueries.push(`${title} ${year}`);
-      searchQueries.push(title);
+      if (year) searchQueries.push({ query: `${cleanTitle} ${year}` });
+      searchQueries.push({ query: cleanTitle });
     }
 
     const seenHashes = new Set();
@@ -171,15 +243,16 @@ async function searchContent({ title, year, type, season, episode }, onResults =
       return newTorrents;
     };
 
-    // Run all searches in parallel, but emit results as they arrive
-    const searchPromises = searchQueries.map(query => {
-      logger.info(`Searching: ${query}`);
-      return searchTorrentsWithProwlarr(query)
+    // Run all searches throttled (max 6 concurrent), emit results as they arrive
+    const searchPromises = searchQueries.map(({ query, extraParams }) => {
+      const label = extraParams?.tmdbId ? `${query} (tmdbId:${extraParams.tmdbId})` : query;
+      logger.info(`Queuing search: ${label}`);
+      return prowlarrLimiter(() => searchTorrentsWithProwlarr(query, extraParams))
         .then(results => {
           completedQueries++;
           const isComplete = completedQueries === searchQueries.length;
           if (results.length > 0) {
-            logger.info(`✓ Found ${results.length} torrents for: ${query}`);
+            logger.info(`✓ Found ${results.length} torrents for: ${label}`);
             const newTorrents = addTorrents(results);
             // Emit new results if callback provided
             if (onResults && newTorrents.length > 0) {
@@ -196,7 +269,7 @@ async function searchContent({ title, year, type, season, episode }, onResults =
         })
         .catch(err => {
           completedQueries++;
-          logger.warn(`Search failed for ${query}: ${err.message}`);
+          logger.warn(`Search failed for ${label}: ${err.message}`);
           if (onResults && completedQueries === searchQueries.length) {
             onResults([], true);
           }

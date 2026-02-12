@@ -1,6 +1,7 @@
 const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const { addMagnet, getTorrentInfo, selectFiles, getUnrestrictedLink } = require('../services/rd-service');
+const { getUserRdApiKey } = require('../services/user-service');
 const logger = require('../utils/logger');
 
 const router = express.Router();
@@ -19,7 +20,7 @@ router.post('/add-magnet', async (req, res) => {
       return res.status(400).json({ error: 'Magnet URL required' });
     }
 
-    const rdApiKey = req.user.rdApiKey;
+    const rdApiKey = getUserRdApiKey(req.user.sub);
     if (!rdApiKey) {
       return res.status(400).json({ error: 'Real-Debrid API key not configured for user' });
     }
@@ -45,7 +46,7 @@ router.get('/torrent/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const rdApiKey = req.user.rdApiKey;
+    const rdApiKey = getUserRdApiKey(req.user.sub);
     if (!rdApiKey) {
       return res.status(400).json({ error: 'Real-Debrid API key not configured' });
     }
@@ -71,7 +72,7 @@ router.post('/torrent/:id/select', async (req, res) => {
       return res.status(400).json({ error: 'File IDs array required' });
     }
 
-    const rdApiKey = req.user.rdApiKey;
+    const rdApiKey = getUserRdApiKey(req.user.sub);
     if (!rdApiKey) {
       return res.status(400).json({ error: 'Real-Debrid API key not configured' });
     }
@@ -96,7 +97,7 @@ router.post('/unrestrict', async (req, res) => {
       return res.status(400).json({ error: 'Link required' });
     }
 
-    const rdApiKey = req.user.rdApiKey;
+    const rdApiKey = getUserRdApiKey(req.user.sub);
     if (!rdApiKey) {
       return res.status(400).json({ error: 'Real-Debrid API key not configured' });
     }

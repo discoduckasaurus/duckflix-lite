@@ -8,6 +8,8 @@ let currentView = 'dashboard';
 let currentUser = null;
 
 // Utility: API Request Helper
+let _loggingOut = false;
+
 async function apiRequest(endpoint, options = {}) {
     const token = localStorage.getItem(TOKEN_KEY);
     const headers = {
@@ -26,8 +28,12 @@ async function apiRequest(endpoint, options = {}) {
         });
 
         if (response.status === 401) {
-            logout();
-            throw new Error('Session expired');
+            // Only show login screen once, silently swallow parallel 401s
+            if (!_loggingOut) {
+                _loggingOut = true;
+                logout();
+            }
+            throw new Error('__session_expired__');
         }
 
         if (!response.ok) {
@@ -63,6 +69,7 @@ async function login(username, password) {
         throw new Error('Access denied: Admin privileges required');
     }
 
+    _loggingOut = false;
     localStorage.setItem(TOKEN_KEY, data.token);
     localStorage.setItem(USERNAME_KEY, data.user.username);
     currentUser = data.user;
@@ -85,7 +92,12 @@ function showView(viewName) {
     document.querySelector(`.nav-menu a[data-view="${viewName}"]`).classList.add('active');
 }
 
+function isSessionExpired(error) {
+    return error && error.message === '__session_expired__';
+}
+
 function showError(elementId, message) {
+    if (message === '__session_expired__') return;
     const el = document.getElementById(elementId);
     el.textContent = message;
     el.style.display = 'block';
@@ -157,6 +169,7 @@ async function loadDashboard() {
 
         document.getElementById('recent-failures').innerHTML = failuresHtml;
     } catch (error) {
+        if (isSessionExpired(error)) return;
         console.error('Failed to load dashboard:', error);
         showError('dashboard-error', error.message);
     }
@@ -215,6 +228,7 @@ async function loadUsers() {
 
         document.getElementById('users-table-container').innerHTML = tableHtml;
     } catch (error) {
+        if (isSessionExpired(error)) return;
         console.error('Failed to load users:', error);
         document.getElementById('users-table-container').innerHTML = `<p class="error">Failed to load users: ${error.message}</p>`;
     }
@@ -253,7 +267,7 @@ async function editUser(userId) {
 
         showModal('user-modal');
     } catch (error) {
-        alert('Failed to load user: ' + error.message);
+        if (!isSessionExpired(error)) alert('Failed to load user: ' + error.message);
     }
 }
 
@@ -309,6 +323,7 @@ async function loadFailures() {
 
         document.getElementById('failures-table-container').innerHTML = tableHtml;
     } catch (error) {
+        if (isSessionExpired(error)) return;
         console.error('Failed to load failures:', error);
         document.getElementById('failures-table-container').innerHTML = `<p class="error">Failed to load failures: ${error.message}</p>`;
     }
@@ -337,6 +352,7 @@ async function loadHealth() {
 
         document.getElementById('health-status-container').innerHTML = healthHtml;
     } catch (error) {
+        if (isSessionExpired(error)) return;
         console.error('Failed to load health:', error);
         document.getElementById('health-status-container').innerHTML = `<p class="error">Failed to load health status: ${error.message}</p>`;
     }
@@ -370,7 +386,11 @@ async function loadLoadingPhrases() {
         `;
 
         document.getElementById('loading-phrases-container').innerHTML = phrasesHtml;
+
+        // Also load scheduled phrases
+        loadScheduledPhrases();
     } catch (error) {
+        if (isSessionExpired(error)) return;
         console.error('Failed to load loading phrases:', error);
         document.getElementById('loading-phrases-container').innerHTML = `<p class="error">Failed to load loading phrases: ${error.message}</p>`;
     }
@@ -406,6 +426,296 @@ async function saveLoadingPhrases() {
 }
 
 // =========================================
+// Scheduled Loading Phrases
+// =========================================
+
+let allSchedules = [];
+let scheduleHolidays = [];
+let scheduleFormVisible = false;
+let editingScheduleId = null;
+let scheduleSelectedUserIds = new Set();
+
+async function loadScheduledPhrases() {
+    try {
+        const data = await apiRequest('/api/admin/loading-phrases/schedules');
+        allSchedules = data.schedules || [];
+        scheduleHolidays = data.holidays || [];
+        renderScheduledPhrases();
+    } catch (error) {
+        if (isSessionExpired(error)) return;
+        console.error('Failed to load scheduled phrases:', error);
+        document.getElementById('scheduled-phrases-container').innerHTML =
+            `<p class="error">Failed to load scheduled phrases: ${error.message}</p>`;
+    }
+}
+
+function renderScheduledPhrases() {
+    const container = document.getElementById('scheduled-phrases-container');
+
+    const cardsHtml = allSchedules.length > 0
+        ? allSchedules.map(s => {
+            const typeMeta = s.schedule_type === 'holiday'
+                ? `Holiday: ${s.holidayName || s.holiday}`
+                : `Date: ${formatScheduleDate(s.scheduled_date)}${s.repeat_type !== 'none' ? `, ${capitalize(s.repeat_type)}` : ''}`;
+
+            const usersMeta = s.targetUsers
+                ? `Users: ${s.targetUsers.map(u => u.username).join(', ')}`
+                : 'All Users';
+
+            const pairMode = s.ordered_pairs ? 'ordered' : 'letter-match';
+            const phraseCounts = `${s.phrases_a.length} A, ${s.phrases_b.length} B (${pairMode})`;
+
+            return `
+                <div class="schedule-card ${s.is_enabled ? '' : 'disabled'}">
+                    <div class="schedule-card-info">
+                        <div class="schedule-card-name">${escapeHtml(s.name)}</div>
+                        <div class="schedule-card-meta">
+                            <span>${typeMeta}</span>
+                            <span>${usersMeta}</span>
+                            <span>${phraseCounts} phrases</span>
+                        </div>
+                    </div>
+                    <div class="schedule-card-actions">
+                        <span class="schedule-enabled-badge ${s.is_enabled ? 'on' : 'off'}">${s.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                        <button class="btn btn-sm btn-secondary" onclick="editSchedule(${s.id})">Edit</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteSchedule(${s.id}, '${escapeHtml(s.name).replace(/'/g, "\\'")}')">Delete</button>
+                    </div>
+                </div>
+            `;
+        }).join('')
+        : '<div class="empty-schedules">No scheduled phrases yet. Add one to override default phrases on specific dates or holidays.</div>';
+
+    const formHtml = scheduleFormVisible ? renderScheduleForm() : '';
+
+    container.innerHTML = `
+        <div class="scheduled-phrases-section">
+            <div class="section-header">
+                <h2>Scheduled Phrases</h2>
+                ${!scheduleFormVisible ? '<button class="btn btn-primary btn-sm" onclick="showScheduleForm()">+ Add Schedule</button>' : ''}
+            </div>
+            <div class="schedule-list">${cardsHtml}</div>
+            ${formHtml}
+        </div>
+    `;
+}
+
+function renderScheduleForm() {
+    const s = editingScheduleId ? allSchedules.find(x => x.id === editingScheduleId) : null;
+    const isDate = s ? s.schedule_type === 'date' : true;
+
+    const holidayOptions = scheduleHolidays.map(h =>
+        `<option value="${h.key}" ${s && s.holiday === h.key ? 'selected' : ''}>${h.name}</option>`
+    ).join('');
+
+    const usersHtml = allUsers.length > 0
+        ? allUsers.map(u => {
+            const selected = scheduleSelectedUserIds.has(u.id);
+            return `<span class="schedule-user-chip ${selected ? 'selected' : ''}" onclick="toggleScheduleUser(${u.id})" data-user-id="${u.id}">${u.username}</span>`;
+        }).join('')
+        : '<span style="color:var(--text-secondary);font-size:0.8rem;">Load Users view first to select specific users</span>';
+
+    return `
+        <div class="schedule-form">
+            <h3>${editingScheduleId ? 'Edit Schedule' : 'New Schedule'}</h3>
+            <div class="schedule-form-grid">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="schedule-name" value="${s ? escapeHtml(s.name) : ''}" placeholder="e.g., Christmas Phrases">
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <div class="schedule-type-toggle">
+                        <label><input type="radio" name="schedule-type" value="date" ${isDate ? 'checked' : ''} onchange="onScheduleTypeChange()"> Date</label>
+                        <label><input type="radio" name="schedule-type" value="holiday" ${!isDate ? 'checked' : ''} onchange="onScheduleTypeChange()"> Holiday</label>
+                    </div>
+                </div>
+                <div id="schedule-date-fields" class="schedule-conditional ${isDate ? 'active' : ''}">
+                    <div class="form-group">
+                        <label>Date</label>
+                        <input type="date" id="schedule-date" value="${s && s.scheduled_date ? s.scheduled_date : ''}">
+                    </div>
+                    <div class="form-group">
+                        <label>Repeat</label>
+                        <select id="schedule-repeat">
+                            <option value="none" ${!s || s.repeat_type === 'none' ? 'selected' : ''}>None (one-time)</option>
+                            <option value="yearly" ${s && s.repeat_type === 'yearly' ? 'selected' : ''}>Yearly</option>
+                            <option value="monthly" ${s && s.repeat_type === 'monthly' ? 'selected' : ''}>Monthly</option>
+                            <option value="weekly" ${s && s.repeat_type === 'weekly' ? 'selected' : ''}>Weekly</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="schedule-holiday-field" class="schedule-conditional ${!isDate ? 'active' : ''}">
+                    <div class="form-group">
+                        <label>Holiday</label>
+                        <select id="schedule-holiday">
+                            ${holidayOptions}
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group schedule-form-full">
+                    <label>Target Users <small style="font-weight:400;color:var(--text-secondary);">(leave empty for all users)</small></label>
+                    <div class="schedule-users-list">${usersHtml}</div>
+                </div>
+                <div class="form-group schedule-form-full">
+                    <label>Options</label>
+                    <div style="display:flex;gap:1.5rem;flex-wrap:wrap;">
+                        <label style="font-weight:400;"><input type="checkbox" id="schedule-enabled" ${!s || s.is_enabled ? 'checked' : ''}> Active</label>
+                        <label style="font-weight:400;" title="When enabled, A[1] pairs with B[1], A[2] with B[2], etc. First-letter matching is skipped."><input type="checkbox" id="schedule-ordered-pairs" ${s && s.ordered_pairs ? 'checked' : ''}> Ordered pairs (A and B match by position, not first letter)</label>
+                    </div>
+                </div>
+            </div>
+            <div class="schedule-phrases-grid">
+                <div>
+                    <label style="font-weight:500;font-size:0.875rem;margin-bottom:0.35rem;display:block;">A Phrases (one per line)</label>
+                    <textarea id="schedule-phrases-a" rows="8" placeholder="Decorating&#10;Wrapping&#10;...">${s ? s.phrases_a.join('\n') : ''}</textarea>
+                </div>
+                <div>
+                    <label style="font-weight:500;font-size:0.875rem;margin-bottom:0.35rem;display:block;">B Phrases (one per line)</label>
+                    <textarea id="schedule-phrases-b" rows="8" placeholder="decorations&#10;wreaths&#10;...">${s ? s.phrases_b.join('\n') : ''}</textarea>
+                </div>
+            </div>
+            <div class="schedule-form-actions">
+                <button class="btn btn-secondary btn-sm" onclick="hideScheduleForm()">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="saveSchedule()">Save Schedule</button>
+            </div>
+        </div>
+    `;
+}
+
+function showScheduleForm(scheduleId) {
+    editingScheduleId = scheduleId || null;
+    scheduleFormVisible = true;
+
+    // Pre-select users if editing
+    scheduleSelectedUserIds.clear();
+    if (editingScheduleId) {
+        const s = allSchedules.find(x => x.id === editingScheduleId);
+        if (s && s.target_user_ids) {
+            s.target_user_ids.forEach(id => scheduleSelectedUserIds.add(id));
+        }
+    }
+
+    // Ensure users are loaded for the chips
+    if (allUsers.length === 0) {
+        apiRequest('/api/admin/users').then(data => {
+            allUsers = data.users || [];
+            renderScheduledPhrases();
+        }).catch(() => renderScheduledPhrases());
+    } else {
+        renderScheduledPhrases();
+    }
+}
+
+function hideScheduleForm() {
+    scheduleFormVisible = false;
+    editingScheduleId = null;
+    scheduleSelectedUserIds.clear();
+    renderScheduledPhrases();
+}
+
+function onScheduleTypeChange() {
+    const type = document.querySelector('input[name="schedule-type"]:checked').value;
+    document.getElementById('schedule-date-fields').className = `schedule-conditional ${type === 'date' ? 'active' : ''}`;
+    document.getElementById('schedule-holiday-field').className = `schedule-conditional ${type === 'holiday' ? 'active' : ''}`;
+}
+
+function toggleScheduleUser(userId) {
+    if (scheduleSelectedUserIds.has(userId)) {
+        scheduleSelectedUserIds.delete(userId);
+    } else {
+        scheduleSelectedUserIds.add(userId);
+    }
+    // Toggle chip class without full re-render
+    const chip = document.querySelector(`.schedule-user-chip[data-user-id="${userId}"]`);
+    if (chip) chip.classList.toggle('selected');
+}
+
+async function saveSchedule() {
+    const name = document.getElementById('schedule-name').value.trim();
+    const scheduleType = document.querySelector('input[name="schedule-type"]:checked').value;
+    const scheduledDate = document.getElementById('schedule-date').value;
+    const holiday = document.getElementById('schedule-holiday').value;
+    const repeatType = document.getElementById('schedule-repeat').value;
+    const isEnabled = document.getElementById('schedule-enabled').checked;
+    const orderedPairs = document.getElementById('schedule-ordered-pairs').checked;
+
+    const phrasesAText = document.getElementById('schedule-phrases-a').value;
+    const phrasesBText = document.getElementById('schedule-phrases-b').value;
+    const phrasesA = phrasesAText.split('\n').filter(l => l.trim()).map(l => l.trim());
+    const phrasesB = phrasesBText.split('\n').filter(l => l.trim()).map(l => l.trim());
+
+    if (!name) {
+        showToast('Name is required', 'error');
+        return;
+    }
+
+    if (phrasesA.length === 0 || phrasesB.length === 0) {
+        showToast('Both A and B phrases are required', 'error');
+        return;
+    }
+
+    const payload = {
+        name,
+        scheduleType,
+        scheduledDate: scheduleType === 'date' ? scheduledDate : null,
+        holiday: scheduleType === 'holiday' ? holiday : null,
+        repeatType: scheduleType === 'date' ? repeatType : 'none',
+        phrasesA,
+        phrasesB,
+        targetUserIds: scheduleSelectedUserIds.size > 0 ? [...scheduleSelectedUserIds] : null,
+        isEnabled,
+        orderedPairs
+    };
+
+    try {
+        if (editingScheduleId) {
+            await apiRequest(`/api/admin/loading-phrases/schedules/${editingScheduleId}`, {
+                method: 'PUT',
+                body: JSON.stringify(payload)
+            });
+            showToast('Schedule updated!', 'success');
+        } else {
+            await apiRequest('/api/admin/loading-phrases/schedules', {
+                method: 'POST',
+                body: JSON.stringify(payload)
+            });
+            showToast('Schedule created!', 'success');
+        }
+
+        hideScheduleForm();
+        await loadScheduledPhrases();
+    } catch (error) {
+        showToast('Failed to save schedule: ' + error.message, 'error');
+    }
+}
+
+function editSchedule(id) {
+    showScheduleForm(id);
+}
+
+async function deleteSchedule(id, name) {
+    if (!confirm(`Delete schedule "${name}"? This cannot be undone.`)) return;
+
+    try {
+        await apiRequest(`/api/admin/loading-phrases/schedules/${id}`, { method: 'DELETE' });
+        showToast('Schedule deleted', 'success');
+        await loadScheduledPhrases();
+    } catch (error) {
+        showToast('Failed to delete schedule: ' + error.message, 'error');
+    }
+}
+
+function formatScheduleDate(dateStr) {
+    if (!dateStr) return '-';
+    const d = new Date(dateStr + 'T00:00:00');
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function capitalize(str) {
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+// =========================================
 // Live TV Channel Management
 // =========================================
 let allAdminChannels = [];
@@ -421,6 +731,7 @@ async function loadLiveTVChannels() {
         renderChannelList();
         updateChannelStats();
     } catch (error) {
+        if (isSessionExpired(error)) return;
         console.error('Failed to load channels:', error);
         document.getElementById('channels-table-container').innerHTML =
             `<p class="error">Failed to load channels: ${error.message}</p>`;
@@ -442,10 +753,9 @@ function getFilteredChannels() {
         // Source filter
         if (sourceFilter === 'has-ntv') {
             if (!ch.hasNTV) return false;
-        } else if (sourceFilter === 'has-daddylive') {
-            if (!ch.hasDaddyLive) return false;
         } else if (sourceFilter === 'failover') {
-            if (!(ch.hasNTV || ch.hasDaddyLive) || ch.activeSource === 'ntv' || ch.activeSource === 'daddylive' || !ch.activeSource) return false;
+            const idx = ch.activeSourceIndex || 0;
+            if (idx === 0 || (ch.streamSources || []).length <= 1) return false;
         } else if (sourceFilter !== 'all' && ch.source !== sourceFilter) {
             return false;
         }
@@ -502,7 +812,7 @@ function renderChannelList() {
             <span>On</span>
             <span>Logo</span>
             <span>Channel</span>
-            <span>Source</span>
+            <span>Sources</span>
             <span>#</span>
         </div>
     `;
@@ -516,37 +826,21 @@ function renderChannelList() {
         const disabledClass = !isEnabled ? 'disabled-row' : '';
         const newClass = !ch.hasMetadata ? 'new-row' : '';
 
-        // Active source (what's actually streaming right now)
-        const activeSource = ch.activeSource;
-        const activeLabel = activeSource === 'ntv' ? 'NTV'
-            : activeSource === 'daddylive' ? 'DL'
-            : activeSource === 'tvpass' ? 'TVP'
-            : activeSource === 'backup' ? 'BKP'
-            : null;
-        // Determine the expected primary source for this channel
-        const expectedPrimary = ch.hasNTV ? 'ntv' : ch.hasDaddyLive ? 'daddylive' : null;
-        const isFailover = expectedPrimary && activeSource && activeSource !== expectedPrimary;
+        // Build source chain display from streamSources array
+        const sources = ch.streamSources || [];
+        const activeIdx = ch.activeSourceIndex || 0;
+        const isFailover = activeIdx > 0 && sources.length > 1;
 
-        // Primary source config: NTV > DaddyLive > original source
-        const primarySource = ch.hasNTV ? 'ntv' : ch.hasDaddyLive ? 'daddylive' : ch.source;
-        const primaryClass = `source-${primarySource}`;
-        const primaryLabel = primarySource === 'ntv' ? 'NTV'
-            : primarySource === 'daddylive' ? 'DaddyLive'
-            : primarySource === 'cabernet' ? 'DaddyLive'
-            : primarySource;
-
-        // Source badges
-        const badges = [];
-        if (activeLabel) {
-            const activeClass = isFailover ? 'stream-badge-failover' : 'stream-badge-active';
-            badges.push(`<span class="stream-badge ${activeClass}" title="Currently streaming via ${activeSource}">${activeLabel}</span>`);
-        }
-        if (ch.hasNTV) badges.push('<span class="stream-badge stream-badge-ntv" title="Has NTV stream">NTV</span>');
-        if (ch.hasDaddyLive && ch.source === 'tvpass') {
-            badges.push('<span class="stream-badge stream-badge-tvpass" title="TVPass fallback">TVPass</span>');
-        }
-        if (ch.hasBackupStreams) badges.push('<span class="stream-badge stream-badge-backup" title="Has backup streams">Backup</span>');
-        const badgesHtml = badges.length > 0 ? badges.join(' ') : '';
+        // Source chain: show ordered labels with active highlighted
+        const sourceChainHtml = sources.map((s, i) => {
+            const short = s.label === 'TVPass' ? 'TVP'
+                : s.label === 'Backup' ? 'BKP'
+                : s.label;
+            const cls = i === activeIdx
+                ? (isFailover ? 'source-chain-failover' : 'source-chain-active')
+                : 'source-chain-inactive';
+            return `<span class="source-chain-item ${cls}" title="${s.label} (#${i + 1})">${short}</span>`;
+        }).join('<span class="source-chain-arrow">&rarr;</span>');
 
         const logoHtml = ch.logo
             ? `<img class="channel-logo" src="${ch.logo}" alt="" title="Click to change logo" onclick="triggerLogoUpload('${ch.id}')" onerror="this.outerHTML='<div class=\\'channel-logo-placeholder\\' onclick=\\'triggerLogoUpload(&quot;${ch.id}&quot;)\\'>+</div>'">`
@@ -574,13 +868,11 @@ function renderChannelList() {
                         data-original="${escapeHtml(ch.displayName)}"
                         onchange="onChannelRename('${ch.id}', this.value)">
                     <div class="channel-meta">
-                        <span class="channel-source-badge ${primaryClass}">${primaryLabel}</span>
-                        ${badgesHtml}
                         <span class="channel-group-text">${escapeHtml(ch.group)}</span>
                         <span style="color:#94a3b8">${ch.id}</span>
                     </div>
                 </div>
-                <span class="channel-source-badge ${primaryClass}" style="justify-self:center">${primaryLabel}</span>
+                <div class="channel-source-chain">${sourceChainHtml || '<span style="color:#94a3b8">-</span>'}</div>
                 ${positionHtml}
             </div>
         `;
@@ -606,15 +898,25 @@ function updateChannelStats() {
         const change = channelChanges.get(ch.id);
         return change?.isEnabled !== undefined ? change.isEnabled : ch.isEnabled;
     }).length;
-    const tvpass = allAdminChannels.filter(ch => ch.source === 'tvpass').length;
-    const daddyliveOnly = allAdminChannels.filter(ch => ch.source === 'cabernet').length;
     const withNTV = allAdminChannels.filter(ch => ch.hasNTV).length;
-    const withDL = allAdminChannels.filter(ch => ch.hasDaddyLive).length;
     const newCount = allAdminChannels.filter(ch => !ch.hasMetadata).length;
+
+    // Count how many are currently on each source (active index)
+    let onNTV = 0, onTVP = 0, onFailover = 0;
+    for (const ch of allAdminChannels) {
+        const sources = ch.streamSources || [];
+        const activeIdx = ch.activeSourceIndex || 0;
+        const activeLabel = sources[activeIdx]?.label;
+        if (activeLabel === 'NTV') onNTV++;
+        else if (activeLabel === 'TVPass') onTVP++;
+        if (activeIdx > 0 && sources.length > 1) onFailover++;
+    }
 
     const statsEl = document.getElementById('channel-stats');
     if (statsEl) {
-        statsEl.innerHTML = `${enabled}/${total} enabled | ${withNTV} NTV | ${withDL} DL | ${tvpass} TVPass | ${daddyliveOnly} DL-only` +
+        statsEl.innerHTML = `${enabled}/${total} enabled | ${withNTV} have NTV` +
+            ` | Active: ${onNTV} NTV, ${onTVP} TVP` +
+            (onFailover > 0 ? ` | <strong style="color:var(--warning-color)">${onFailover} on failover</strong>` : '') +
             (newCount > 0 ? ` | <strong style="color:var(--warning-color)">${newCount} new</strong>` : '') +
             (channelChanges.size > 0 ? ` | <strong style="color:var(--primary-color)">${channelChanges.size} unsaved</strong>` : '');
     }
@@ -839,7 +1141,7 @@ async function seedCabernetLogos() {
         const data = await apiRequest('/api/admin/channels/seed-cabernet-logos', {
             method: 'POST'
         });
-        showToast(`Auto-matched ${data.matched}/${data.total} DaddyLive channel logos`, 'success');
+        showToast(`Auto-matched ${data.matched}/${data.total} channel logos`, 'success');
         await loadLiveTVChannels();
     } catch (error) {
         showToast('Auto-match failed: ' + error.message, 'error');
@@ -881,6 +1183,7 @@ async function loadProviders() {
             banner.style.display = 'flex';
         }
     } catch (error) {
+        if (isSessionExpired(error)) return;
         console.error('Failed to load providers:', error);
         document.getElementById('providers-table-container').innerHTML =
             `<p class="error">Failed to load providers: ${error.message}</p>`;
@@ -1456,3 +1759,10 @@ window.onProviderDragOver = onProviderDragOver;
 window.onProviderDrop = onProviderDrop;
 window.onProviderDragEnd = onProviderDragEnd;
 window.dismissProviderBanner = dismissProviderBanner;
+window.showScheduleForm = showScheduleForm;
+window.hideScheduleForm = hideScheduleForm;
+window.editSchedule = editSchedule;
+window.deleteSchedule = deleteSchedule;
+window.saveSchedule = saveSchedule;
+window.toggleScheduleUser = toggleScheduleUser;
+window.onScheduleTypeChange = onScheduleTypeChange;

@@ -6,6 +6,8 @@ const recommendationsService = require('../services/recommendations-service');
 const fs = require('fs');
 const path = require('path');
 
+const { doesScheduleMatchDate } = require('../services/holiday-dates');
+
 const router = express.Router();
 
 // All user routes require authentication
@@ -13,8 +15,8 @@ router.use(authenticateToken);
 
 /**
  * GET /api/user/loading-phrases
- * Get loading phrases for slot machine animation
- * Public endpoint - no admin required
+ * Get loading phrases for slot machine animation.
+ * Checks for active scheduled phrases first, falls back to defaults.
  */
 router.get('/loading-phrases', (req, res) => {
   try {
@@ -23,7 +25,41 @@ router.get('/loading-phrases', (req, res) => {
     res.set('Pragma', 'no-cache');
     res.set('Expires', '0');
 
-    // Check if phrases are in database
+    const userId = req.user.sub;
+    const today = new Date().toISOString().substring(0, 10); // YYYY-MM-DD
+
+    // Check for active scheduled phrases
+    const schedules = db.prepare('SELECT * FROM loading_phrase_schedules WHERE is_enabled = 1').all();
+
+    let userTargetedMatch = null;
+    let allUsersMatch = null;
+
+    for (const schedule of schedules) {
+      if (!doesScheduleMatchDate(schedule, today)) continue;
+
+      const targetIds = schedule.target_user_ids ? JSON.parse(schedule.target_user_ids) : null;
+
+      if (targetIds && targetIds.includes(userId)) {
+        // User-targeted schedule — highest priority
+        userTargetedMatch = schedule;
+        break;
+      } else if (!targetIds && !allUsersMatch) {
+        // All-users schedule — lower priority
+        allUsersMatch = schedule;
+      }
+    }
+
+    const matchedSchedule = userTargetedMatch || allUsersMatch;
+    if (matchedSchedule) {
+      return res.json({
+        phrasesA: JSON.parse(matchedSchedule.phrases_a),
+        phrasesB: JSON.parse(matchedSchedule.phrases_b),
+        scheduleName: matchedSchedule.name,
+        orderedPairs: !!matchedSchedule.ordered_pairs
+      });
+    }
+
+    // Fall back to default phrases
     const phrasesRecord = db.prepare('SELECT value FROM app_settings WHERE key = ?').get('loading_phrases');
 
     let phrasesA, phrasesB;
@@ -253,7 +289,7 @@ router.get('/watchlist', (req, res) => {
 router.post('/watchlist', async (req, res) => {
   try {
     const username = req.user.username;
-    const { tmdbId, type, title, posterPath, releaseDate, voteAverage } = req.body;
+    const { tmdbId, type, title, posterPath, logoPath, releaseDate, voteAverage } = req.body;
 
     if (!tmdbId || !type || !title) {
       return res.status(400).json({
@@ -279,6 +315,7 @@ router.post('/watchlist', async (req, res) => {
       type,
       title,
       posterPath,
+      logoPath,
       releaseDate,
       voteAverage,
       addedAt: new Date().toISOString()
@@ -386,9 +423,10 @@ router.get('/watch-progress', (req, res) => {
     const downloadJobManager = require('../services/download-job-manager');
     const activeJobs = downloadJobManager.getAllJobs();
 
-    // Filter jobs for this user that are active OR failed
+    // Filter jobs for this user that are active OR failed (exclude prefetch jobs)
     const userJobs = activeJobs.filter(job =>
       job.userInfo?.userId === userId &&
+      !job.isPrefetch &&
       (job.status === 'searching' || job.status === 'downloading' || job.status === 'error')
     );
 
@@ -456,6 +494,7 @@ router.post('/watch-progress', async (req, res) => {
       type,
       title,
       posterPath,
+      logoPath,
       releaseDate,
       position,
       duration,
@@ -480,6 +519,7 @@ router.post('/watch-progress', async (req, res) => {
       type,
       title,
       posterPath,
+      logoPath,
       releaseDate,
       position,
       duration,

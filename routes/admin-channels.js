@@ -6,7 +6,18 @@ const { db } = require('../db/init');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const liveTVService = require('../services/livetv-service');
-const { channelActiveSource } = require('./livetv');
+const { channelActiveSource, channelSegmentActivity } = require('./livetv');
+const { NTV_DOMAINS } = require('../services/ntv-service');
+
+/**
+ * Get a human-readable label for a stream URL.
+ * Mirrors getSourceLabel() in livetv.js.
+ */
+function getSourceLabel(url) {
+  if (url.startsWith('ntv://') || NTV_DOMAINS.some(d => url.includes(d))) return 'NTV';
+  if (url.includes('tvpass.org')) return 'TVPass';
+  return 'Backup';
+}
 
 // Load backup-streams.json for stream source info
 const BACKUP_STREAMS_PATH = path.join(__dirname, '..', 'db', 'backup-streams.json');
@@ -86,7 +97,7 @@ function normalizeName(name) {
 /**
  * GET /api/admin/channels
  * List all channels (M3U + special) with their admin config from channel_metadata.
- * Includes stream source info (DaddyLive mapping, backup streams).
+ * Includes stream source info (NTV mapping, backup streams).
  */
 router.get('/channels', (req, res) => {
   try {
@@ -100,15 +111,15 @@ router.get('/channels', (req, res) => {
       m3uChannels = JSON.parse(m3uData.epg_data);
     }
 
-    // Get DaddyLive stream map (tvpassId -> daddylive URL)
-    let dlStreamMap = {};
+    // Get NTV stream map (channelId -> { channel_id, channel_name, ... })
+    let ntvStreamMap = {};
     try {
-      const dlRow = db.prepare(`
-        SELECT epg_data FROM epg_cache WHERE channel_id = 'daddylive_stream_map'
+      const ntvRow = db.prepare(`
+        SELECT epg_data FROM epg_cache WHERE channel_id = 'ntv_stream_map'
       `).get();
-      if (dlRow) dlStreamMap = JSON.parse(dlRow.epg_data);
+      if (ntvRow) ntvStreamMap = JSON.parse(ntvRow.epg_data);
     } catch (err) {
-      logger.debug('Failed to load daddylive_stream_map:', err.message);
+      logger.debug('Failed to load ntv_stream_map:', err.message);
     }
 
     // Get special channels
@@ -140,37 +151,34 @@ router.get('/channels', (req, res) => {
         autoMatchedLogo = logoMatchMap.get(normalized) || null;
       }
 
-      const hasDaddyLive = !!dlStreamMap[ch.id];
+      const hasNTV = !!ntvStreamMap[ch.id];
       const hasBackupStreams = !!backupStreams[ch.id];
       let streamSourceCount = 1; // original M3U URL
-      if (hasDaddyLive) streamSourceCount++;
+      if (hasNTV) streamSourceCount++;
       if (hasBackupStreams && backupStreams[ch.id].primary) streamSourceCount++;
       if (hasBackupStreams && backupStreams[ch.id].backups?.length) {
         streamSourceCount += backupStreams[ch.id].backups.length;
       }
 
-      // Determine active stream source
-      let activeSourceLabel = null;
+      // Build full ordered stream source chain with labels
+      let streamSources = []; // [{ label: 'NTV', active: false }, ...]
       let activeSourceIndex = 0;
       try {
         const streamUrls = liveTVService.getStreamUrls(ch.id);
         const activeState = channelActiveSource.get(ch.id);
         activeSourceIndex = activeState?.urlIndex || 0;
-        const dlUrl = dlStreamMap[ch.id];
-        // Label based on which URL is at the active index
-        if (streamUrls.length > 0) {
-          const activeUrl = streamUrls[activeSourceIndex] || streamUrls[0];
-          if (dlUrl && activeUrl === dlUrl) {
-            activeSourceLabel = 'daddylive';
-          } else if (activeUrl.includes('tvpass.org')) {
-            activeSourceLabel = 'tvpass';
-          } else if (activeUrl.includes('localhost:9191') || activeUrl.includes('dlhd')) {
-            activeSourceLabel = 'daddylive';
-          } else {
-            activeSourceLabel = 'backup';
-          }
-        }
+
+        streamSources = streamUrls.map((url, i) => ({
+          label: getSourceLabel(url),
+          active: i === activeSourceIndex,
+          index: i
+        }));
       } catch (e) { /* channel may not have URLs */ }
+
+      // Active source label (what's currently in use or would be used)
+      const activeSourceLabel = streamSources.length > 0
+        ? streamSources[activeSourceIndex]?.label?.toLowerCase() || null
+        : null;
 
       channels.push({
         id: ch.id,
@@ -180,11 +188,12 @@ router.get('/channels', (req, res) => {
         logo: meta?.custom_logo_url || autoMatchedLogo || null,
         isEnabled: meta ? !!meta.is_enabled : true,
         sortOrder: meta?.sort_order ?? 999,
-        source: ch.source || (ch.id.startsWith('cab-') ? 'cabernet' : 'tvpass'),
+        source: ch.source || (ch.id.startsWith('ntv-') ? 'ntv' : ch.id.startsWith('cab-') ? 'cabernet' : 'tvpass'),
         hasMetadata: !!meta,
-        hasDaddyLive,
+        hasNTV,
         hasBackupStreams,
         streamSourceCount,
+        streamSources, // Full ordered source chain with labels
         activeSource: activeSourceLabel,
         activeSourceIndex
       });
@@ -203,7 +212,6 @@ router.get('/channels', (req, res) => {
         sortOrder: meta?.sort_order ?? ch.sort_order,
         source: 'special',
         hasMetadata: !!meta,
-        hasDaddyLive: false,
         hasBackupStreams: hasBackup,
         streamSourceCount: 1 + (hasBackup ? (backupStreams[ch.id].backups?.length || 0) + (backupStreams[ch.id].primary ? 1 : 0) : 0)
       });
@@ -268,8 +276,8 @@ router.put('/channels/batch', (req, res) => {
 
 /**
  * POST /api/admin/channels/reset-sources
- * Reset active stream source for all channels (or specific ones) back to primary (DaddyLive).
- * Clears the failover state so channels retry DaddyLive on next request.
+ * Reset active stream source for all channels (or specific ones) back to primary.
+ * Clears the failover state so channels retry the primary source on next request.
  */
 router.post('/channels/reset-sources', (req, res) => {
   try {
@@ -282,10 +290,12 @@ router.post('/channels/reset-sources', (req, res) => {
           channelActiveSource.delete(id);
           resetCount++;
         }
+        channelSegmentActivity.delete(id);
       }
     } else {
       resetCount = channelActiveSource.size;
       channelActiveSource.clear();
+      channelSegmentActivity.clear();
     }
 
     logger.info(`[Admin] Reset stream sources for ${resetCount} channels`);

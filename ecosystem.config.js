@@ -10,7 +10,11 @@ module.exports = {
     exec_mode: 'fork',
     autorestart: true,
     watch: false,
-    max_memory_restart: '8G',
+    max_memory_restart: '4G',
+    kill_timeout: 35000,
+    wait_ready: true,
+    listen_timeout: 15000,
+    node_args: '--max-old-space-size=4096',
     env: {
       NODE_ENV: 'production',
       PORT: 3001

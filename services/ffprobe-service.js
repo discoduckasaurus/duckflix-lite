@@ -420,6 +420,8 @@ async function analyzeStreamCompatibility(videoUrl) {
     const args = [
       '-v', 'error',
       '-print_format', 'json',
+      '-show_chapters',
+      '-show_entries', 'format=duration',
       '-show_entries', 'stream=index,codec_type,codec_name,profile,level,width,height,pix_fmt,avg_frame_rate,bit_rate,bits_per_raw_sample,channels,sample_rate,extradata_size,color_transfer,codec_tag_string',
       '-show_entries', 'stream_side_data_list',
       '-show_entries', 'stream_disposition=default',
@@ -439,7 +441,8 @@ async function analyzeStreamCompatibility(videoUrl) {
       videoCompatible: true, videoReason: null,
       audioCompatible: true, audioNeedsProcessing: false,
       bestCompatibleAudioIndex: null, defaultAudioCodec: null,
-      audioStreams: [], probeTimeMs: Date.now() - startTime, timedOut: false,
+      audioStreams: [], chapters: [], duration: null,
+      probeTimeMs: Date.now() - startTime, timedOut: false,
       ...overrides
     });
 
@@ -472,10 +475,10 @@ async function analyzeStreamCompatibility(videoUrl) {
         // Video compatibility check
         const videoCheck = checkVideoCompatibility(videoStream);
         const videoCodecTag = videoStream.codec_tag_string || '';
-        const videoCodecName = videoStream.codec_name || '';
+        const rawCodecName = (videoStream.codec_name || '').toLowerCase();
         const videoProfile = videoStream.profile || '';
         const videoLevel = videoStream.level || 0;
-        const fullVideoCodec = videoCodecTag || `${videoCodecName} (${videoProfile}, L${videoLevel})`;
+        const fullVideoCodec = videoCodecTag || `${rawCodecName} (${videoProfile}, L${videoLevel})`;
 
         // Audio analysis
         const audioStreams = streams
@@ -524,11 +527,14 @@ async function analyzeStreamCompatibility(videoUrl) {
           videoCompatible: videoCheck.compatible,
           videoReason: videoCheck.reason,
           videoCodec: fullVideoCodec,
+          videoCodecName: rawCodecName,
           audioCompatible,
           audioNeedsProcessing,
           bestCompatibleAudioIndex,
           defaultAudioCodec,
           audioStreams,
+          chapters: result.chapters || [],
+          duration: parseFloat(result.format?.duration) || null,
           probeTimeMs,
           timedOut: false
         });

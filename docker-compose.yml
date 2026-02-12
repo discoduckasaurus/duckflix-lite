@@ -1,13 +1,1 @@
-services:
-  stepdaddy:
-    build:
-      context: ../StepDaddyLiveHD
-      dockerfile: Dockerfile.standalone
-      args:
-        PORT: "9191"
-        API_URL: "http://localhost:9191"
-        PROXY_CONTENT: "TRUE"
-    container_name: stepdaddy
-    ports:
-      - "9191:9191"
-    restart: unless-stopped
+# DaddyLive removed — NTV + TVPass only

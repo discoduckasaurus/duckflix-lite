@@ -1,29 +1,77 @@
+/**
+ * ZURG SEARCH SERVICE
+ * ====================
+ *
+ * WHAT IS ZURG:
+ * Zurg is a SHARED P2P NETWORK that indexes torrents cached on Real-Debrid's CDN.
+ * It exposes these as a FUSE filesystem mount at /mnt/zurg (configurable via ZURG_MOUNT_PATH).
+ *
+ *   - Zurg is NOT just the admin's personal RD library — it shows content from the
+ *     entire Zurg community network. Any torrent cached by ANY RD user can appear here.
+ *   - Files appearing in Zurg are ALREADY cached on RD's CDN, meaning they can be
+ *     instantly added to any RD account (no seeder download / no wait).
+ *   - Zurg search is FAST (~1s) compared to Prowlarr (~14-20s), making it the
+ *     preferred first source in unified-source-resolver.js.
+ *
+ * SEARCH FLOW:
+ * 1. searchZurg() calls findInZurgMount() from @duckflix/zurg-client
+ *    → Searches the FUSE mount directories for matching video files
+ * 2. Results are filtered by:
+ *    a. Title match (70%+ word overlap) — prevents wrong-show matches
+ *    b. File readability (1KB read test) — catches stale/expired mount entries
+ * 3. Returns { match, fallback, matches[] } where:
+ *    - match = best quality result that meets quality threshold
+ *    - fallback = result below threshold (still playable, just lower quality)
+ *
+ * STALE FILES:
+ * The Zurg FUSE mount can show files that are no longer accessible (EIO errors).
+ * This happens when a torrent was removed from the network cache but Zurg hasn't
+ * refreshed yet. isZurgFileReadable() catches these before they reach the user.
+ *
+ * DOWNSTREAM:
+ * Zurg sources feed into unified-source-resolver.js which combines them with Prowlarr
+ * sources. In vod.js, Zurg sources are resolved to direct RD URLs via
+ * zurg-to-rd-resolver.js, with fallback to FUSE mount streaming if resolution fails.
+ */
+
 const { findInZurgMount } = require('@duckflix/zurg-client');
 const logger = require('../utils/logger');
 const fs = require('fs').promises;
 
+const FUSE_TIMEOUT_MS = 10000;
+
 /**
- * Quick validation that a Zurg file is actually readable (not stale/expired from RD)
- * Reads first 1KB to detect EIO errors before returning file as valid source
+ * Race a promise against a timeout. Prevents FUSE hangs from consuming libuv threads indefinitely.
+ */
+function withFuseTimeout(promise, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`FUSE timeout: ${label} after ${FUSE_TIMEOUT_MS}ms`)), FUSE_TIMEOUT_MS);
+    })
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Quick validation that a Zurg file is actually readable (not stale/expired from cache).
+ * Reads first 1KB to detect EIO errors before returning file as valid source.
+ * A file passing this check IS streamable via the FUSE mount.
+ * Timeout-protected to prevent FUSE hangs from blocking the thread pool.
  */
 async function isZurgFileReadable(filePath) {
   if (!filePath) return false;
 
+  let fd;
   try {
-    const fd = await fs.open(filePath, 'r');
-    try {
-      const buffer = Buffer.alloc(1024);
-      const { bytesRead } = await fd.read(buffer, 0, 1024, 0);
-      await fd.close();
-      // Valid video files should have at least a few hundred bytes
-      return bytesRead >= 100;
-    } catch (readErr) {
-      await fd.close().catch(() => {});
-      logger.warn(`Zurg file read test failed: ${readErr.code || readErr.message}`);
-      return false;
-    }
-  } catch (openErr) {
-    logger.warn(`Zurg file open failed: ${openErr.code || openErr.message} - ${filePath.substring(0, 60)}`);
+    fd = await withFuseTimeout(fs.open(filePath, 'r'), `open ${filePath.substring(0, 60)}`);
+    const buffer = Buffer.alloc(1024);
+    const { bytesRead } = await withFuseTimeout(fd.read(buffer, 0, 1024, 0), `read ${filePath.substring(0, 60)}`);
+    await fd.close().catch(() => {});
+    return bytesRead >= 100;
+  } catch (err) {
+    if (fd) await fd.close().catch(() => {});
+    logger.warn(`Zurg file check failed: ${err.message} - ${filePath.substring(0, 60)}`);
     return false;
   }
 }
@@ -104,14 +152,17 @@ async function searchZurg({ title, year, type, season, episode, duration }) {
       duration
     });
 
-    const result = await findInZurgMount({
-      title: cleanTitle,
-      year,
-      type,
-      season,
-      episode,
-      episodeRuntime: duration
-    });
+    const result = await withFuseTimeout(
+      findInZurgMount({
+        title: cleanTitle,
+        year,
+        type,
+        season,
+        episode,
+        episodeRuntime: duration
+      }),
+      `findInZurgMount(${cleanTitle})`
+    );
 
     // Debug: Log what zurg-client returned
     logger.debug(`Zurg-client returned: matches=${result.matches?.length || 0}, match=${!!result.match}, fallback=${!!result.fallback}`);
@@ -214,5 +265,7 @@ function updateSearchCriteria(criteria) {
 module.exports = {
   searchZurg,
   getSearchCriteria,
-  updateSearchCriteria
+  updateSearchCriteria,
+  normalizeTitle,
+  titleMatches
 };

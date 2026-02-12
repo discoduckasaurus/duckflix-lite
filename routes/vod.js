@@ -16,9 +16,21 @@ const { detectEmbeddedSubtitles, getBestEmbeddedSubtitle } = require('../service
 const { standardizeLanguage } = require('../utils/language-standardizer');
 const { extractSubtitleStream, analyzeStreamCompatibility } = require('../services/ffprobe-service');
 const { remuxWithCompatibleAudio, transcodeAudioToEac3 } = require('../services/audio-processor');
+const { getSearchSeason } = require('../services/season-offset');
 const path = require('path');
 
 const TRANSCODED_DIR = path.join(__dirname, '..', 'transcoded');
+const FUSE_TIMEOUT_MS = 10000;
+
+function withFuseTimeout(promise, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`FUSE timeout: ${label} after ${FUSE_TIMEOUT_MS}ms`)), FUSE_TIMEOUT_MS);
+    })
+  ]).finally(() => clearTimeout(timer));
+}
 
 const router = express.Router();
 
@@ -45,10 +57,10 @@ router.get("/stream/:streamId", async (req, res) => {
 
   const fs = require("fs");
 
-  // Verify file exists and get stats - async to avoid blocking event loop on FUSE mounts
+  // Verify file exists and get stats - timeout-protected to prevent FUSE hangs
   let fileSize;
   try {
-    const stat = await fs.promises.stat(filePath);
+    const stat = await withFuseTimeout(fs.promises.stat(filePath), 'stream stat');
     fileSize = stat.size;
   } catch (err) {
     if (err.code === 'ENOENT') {
@@ -204,10 +216,10 @@ router.use(authenticateToken);
  */
 router.post('/stream-url/start', async (req, res) => {
   try {
-    const { tmdbId, title, year, type, season, episode } = req.body;
+    const { tmdbId, title, year, type, season, episode, platform } = req.body;
     const userId = req.user.sub;
 
-    logger.info(`Starting stream URL retrieval for: ${title} (${year})`);
+    logger.info(`Starting stream URL retrieval for: ${title} (${year})${platform ? ` [${platform}]` : ''}`);
 
     // Skip blocking Zurg search here - processRdDownload handles Zurg + Prowlarr in parallel
     // This returns the jobId immediately so client can start showing progress
@@ -225,13 +237,13 @@ router.post('/stream-url/start', async (req, res) => {
       rdApiKey
     };
 
-    downloadJobManager.createJob(jobId, { tmdbId, title, year, type, season, episode }, userInfo);
+    downloadJobManager.createJob(jobId, { tmdbId, title, year, type, season, episode, platform }, userInfo);
 
     logger.info(`Created download job ${jobId} for ${title}`);
 
     // Start download in background (pass host for stream proxy URL generation)
     const serverHost = req.get('host');
-    processRdDownload(jobId, { tmdbId, title, year, type, season, episode, userId, serverHost });
+    processRdDownload(jobId, { tmdbId, title, year, type, season, episode, userId, serverHost, platform });
 
     res.json({
       immediate: false,
@@ -290,7 +302,28 @@ router.get('/stream-url/progress/:jobId', (req, res) => {
       else message = 'Processing...';
     }
 
-    res.json({
+    // Check if bandwidth retest should be suggested
+    let suggestBandwidthRetest = false;
+    if (job.usedOverBandwidthFallback) {
+      suggestBandwidthRetest = true;
+    } else if (job.status === 'completed' || job.status === 'error') {
+      // Also suggest on completion if measurement is stale (>1 hour)
+      try {
+        const userId = job.userInfo?.userId;
+        if (userId) {
+          const user = db.prepare('SELECT bandwidth_measured_at FROM users WHERE id = ?').get(userId);
+          if (user?.bandwidth_measured_at) {
+            const measuredAt = new Date(user.bandwidth_measured_at + 'Z').getTime();
+            if (Date.now() - measuredAt > 60 * 60 * 1000) {
+              suggestBandwidthRetest = true;
+            }
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // Build response
+    const response = {
       status: job.status,
       progress: job.progress,
       message: message,
@@ -299,8 +332,20 @@ router.get('/stream-url/progress/:jobId', (req, res) => {
       quality: job.quality,
       source: job.streamUrl ? 'rd' : null,
       subtitles: job.subtitles || [],
-      error: job.error
-    });
+      skipMarkers: job.skipMarkers || null,
+      error: job.error,
+      suggestBandwidthRetest
+    };
+
+    // Include autoplay data for TV episodes (available once job completes)
+    if (job.contentInfo?.type === 'tv') {
+      if (job.nextEpisode !== undefined) {
+        response.hasNextEpisode = job.nextEpisode !== null;
+        response.nextEpisode = job.nextEpisode;
+      }
+    }
+
+    res.json(response);
   } catch (error) {
     logger.error('Progress check error:', error);
     res.status(500).json({ error: 'Progress check failed' });
@@ -526,6 +571,7 @@ router.post('/prefetch-promote/:jobId', async (req, res) => {
       fileName: job.fileName || null,
       quality: job.quality || null,
       contentInfo: job.contentInfo,
+      skipMarkers: job.skipMarkers || null,
       hasNext: !!nextEpisode,
       nextEpisode
     });
@@ -546,7 +592,11 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
 
       // Step 1: Check cache first (OpenSubtitles downloads are cached indefinitely)
       const cached = opensubtitlesService.getCachedSubtitle(tmdbId, type, season, episode, preferredLang);
-      if (cached && require('fs').existsSync(cached.file_path)) {
+      let cachedFileExists = false;
+      if (cached) {
+        try { await require('fs').promises.access(cached.file_path); cachedFileExists = true; } catch {}
+      }
+      if (cached && cachedFileExists) {
         const langResult = standardizeLanguage(cached.language);
         downloadJobManager.updateJob(jobId, {
           subtitles: [{
@@ -644,10 +694,70 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
 }
 
 /**
+ * Background skip-marker fetcher (chapters + IntroDB).
+ * Called after stream URL is resolved, results land on the job via updateJob.
+ */
+function fetchSkipMarkersBackground(jobId, chapters, contentInfo, imdbId, duration) {
+  (async () => {
+    try {
+      const { getSkipMarkers } = require('../services/skip-markers-service');
+      const markers = await getSkipMarkers({
+        chapters,
+        tmdbId: contentInfo.tmdbId,
+        type: contentInfo.type,
+        season: contentInfo.season,
+        episode: contentInfo.episode,
+        imdbId,
+        duration
+      });
+
+      if (markers.intro || markers.recap || markers.credits) {
+        downloadJobManager.updateJob(jobId, { skipMarkers: markers });
+        logger.info(`[SkipMarkers] Job ${jobId}: intro=${markers.intro ? markers.intro.source : 'no'}, recap=${markers.recap ? markers.recap.source : 'no'}, credits=${markers.credits ? markers.credits.source : 'no'}`);
+      }
+    } catch (err) {
+      logger.warn(`[SkipMarkers] Background fetch failed: ${err.message}`);
+    }
+  })();
+}
+
+/**
+ * Resolve next-episode info and store on the job (non-blocking).
+ * Called when a TV episode job completes so the progress response always includes autoplay data.
+ */
+function resolveNextEpisodeForJob(jobId, tmdbId, type, season, episode) {
+  if (type !== 'tv' || !season || !episode) return;
+
+  (async () => {
+    try {
+      const { getNextEpisode } = require('../services/tmdb-service');
+      const next = await getNextEpisode(parseInt(tmdbId), parseInt(season), parseInt(episode));
+      const job = downloadJobManager.getJob(jobId);
+      if (!job) return;
+
+      if (next) {
+        downloadJobManager.updateJob(jobId, {
+          nextEpisode: {
+            season: next.season,
+            episode: next.episode,
+            title: next.title,
+            overview: next.overview
+          }
+        });
+      } else {
+        downloadJobManager.updateJob(jobId, { nextEpisode: null });
+      }
+    } catch (err) {
+      logger.warn(`[Autoplay] Failed to resolve next episode for job ${jobId}:`, err.message);
+    }
+  })();
+}
+
+/**
  * Validate video+audio compatibility and process audio if needed.
  * Returns { accepted: boolean, streamUrl?: string, reason?: string }
  */
-async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, serverHost) {
+async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, serverHost, platform) {
   const analysis = await analyzeStreamCompatibility(candidateUrl);
 
   // Log full analysis
@@ -673,11 +783,12 @@ async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, server
 
   // Audio compatible as-is, or probe timed out (assume compatible)
   if (analysis.audioCompatible || analysis.timedOut) {
-    return { accepted: true, streamUrl: candidateUrl };
+    return { accepted: true, streamUrl: candidateUrl, videoCodec: analysis.videoCodec, videoCodecName: analysis.videoCodecName, chapters: analysis.chapters, duration: analysis.duration };
   }
 
-  // Audio needs processing
-  const outputPath = path.join(TRANSCODED_DIR, `${jobId}_${Date.now()}.mkv`);
+  // Audio needs processing — use .mp4 for web clients (browsers can't play MKV)
+  const outputExt = platform === 'web' ? 'mp4' : 'mkv';
+  const outputPath = path.join(TRANSCODED_DIR, `${jobId}_${Date.now()}.${outputExt}`);
 
   if (analysis.bestCompatibleAudioIndex !== null) {
     // Remux: strip incompatible audio, keep compatible track
@@ -687,7 +798,7 @@ async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, server
     });
 
     logger.info(`[AudioProcess] Remuxing audio stream ${analysis.bestCompatibleAudioIndex} for ${sourceLabel}`);
-    const result = await remuxWithCompatibleAudio(candidateUrl, outputPath, analysis.bestCompatibleAudioIndex);
+    const result = await remuxWithCompatibleAudio(candidateUrl, outputPath, analysis.bestCompatibleAudioIndex, { videoCodecName: analysis.videoCodecName });
 
     if (!result.success) {
       return { accepted: false, reason: 'audio_remux_failed' };
@@ -700,7 +811,7 @@ async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, server
     });
 
     logger.info(`[AudioProcess] Transcoding ${analysis.defaultAudioCodec} -> EAC3 for ${sourceLabel}`);
-    const result = await transcodeAudioToEac3(candidateUrl, outputPath);
+    const result = await transcodeAudioToEac3(candidateUrl, outputPath, { videoCodecName: analysis.videoCodecName });
 
     if (!result.success) {
       return { accepted: false, reason: 'audio_transcode_failed' };
@@ -710,17 +821,25 @@ async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, server
   // Store processed file path on job for cleanup + serving
   downloadJobManager.updateJob(jobId, { processedFilePath: outputPath });
 
-  const host = serverHost || process.env.SERVER_HOST || `localhost:${process.env.PORT || 3001}`;
-  const processedUrl = `https://${host}/api/vod/stream-processed/${jobId}`;
+  // Web: relative URL avoids stream-proxy layer (cleaner for AirPlay)
+  // Other platforms: absolute URL so APK/external clients can resolve it
+  const processedUrl = platform === 'web'
+    ? `/api/vod/stream-processed/${jobId}`
+    : `https://${serverHost || process.env.SERVER_HOST || `localhost:${process.env.PORT || 3001}`}/api/vod/stream-processed/${jobId}`;
 
-  return { accepted: true, streamUrl: processedUrl };
+  return { accepted: true, streamUrl: processedUrl, videoCodec: analysis.videoCodec, videoCodecName: analysis.videoCodecName, chapters: analysis.chapters, duration: analysis.duration };
 }
 
 /**
  * Background RD download processor with progressive updates
  */
 async function processRdDownload(jobId, contentInfo) {
-  const { tmdbId, title, year, type, season, episode, userId, serverHost } = contentInfo;
+  const { tmdbId, title, year, type, season, episode, userId, serverHost, platform } = contentInfo;
+
+  // For shows with TMDB/TVDB season numbering mismatches (e.g. American Dad),
+  // compute the TVDB season number that torrent files actually use.
+  // Original `season` is kept for cache keys, TMDB API calls, and metadata.
+  const searchSeason = type === 'tv' ? getSearchSeason(tmdbId, season) : season;
 
   try {
     const rdApiKey = getUserRdApiKey(userId);
@@ -738,8 +857,8 @@ async function processRdDownload(jobId, contentInfo) {
     // Get user bandwidth limit
     let maxBitrateMbps = null;
     try {
-      const user = db.prepare('SELECT max_bitrate_mbps FROM users WHERE id = ?').get(userId);
-      maxBitrateMbps = user?.max_bitrate_mbps || null;
+      const user = db.prepare('SELECT measured_bandwidth_mbps FROM users WHERE id = ?').get(userId);
+      maxBitrateMbps = user?.measured_bandwidth_mbps || null;
     } catch (e) {
       logger.warn('Failed to get user bandwidth limit:', e.message);
     }
@@ -751,7 +870,8 @@ async function processRdDownload(jobId, contentInfo) {
         type,
         season,
         episode,
-        maxBitrateMbps
+        maxBitrateMbps,
+        rdApiKey
       });
 
       if (cached) {
@@ -771,7 +891,7 @@ async function processRdDownload(jobId, contentInfo) {
             message: 'Validating stream...'
           });
 
-          const validation = await validateAndProcessSource(cached.streamUrl, jobId, 'rd-cache', serverHost);
+          const validation = await validateAndProcessSource(cached.streamUrl, jobId, 'rd-cache', serverHost, platform);
 
           if (!validation.accepted) {
             logger.warn({
@@ -783,7 +903,45 @@ async function processRdDownload(jobId, contentInfo) {
             // Fall through to fresh search
           } else {
             // SUCCESS - use cached link (or processed URL if audio was remuxed/transcoded)
-            const finalStreamUrl = validation.streamUrl;
+            let finalStreamUrl = validation.streamUrl;
+
+            // Web client MKV→MP4 remux for cached links
+            if (platform === 'web' && cached.fileName?.toLowerCase().endsWith('.mkv') && !finalStreamUrl.includes('/stream-processed/')) {
+              try {
+                downloadJobManager.updateJob(jobId, {
+                  status: 'processing',
+                  message: 'Preparing for web playback...'
+                });
+
+                const remuxOutputPath = path.join(TRANSCODED_DIR, `${jobId}_${Date.now()}.mp4`);
+                const { execFile } = require('child_process');
+                const { promisify } = require('util');
+                const execFileAsync = promisify(execFile);
+
+                logger.info(`[Web Remux] Remuxing cached MKV→MP4 for web client: ${cached.fileName}`);
+
+                const remuxArgs = [
+                  '-y', '-i', finalStreamUrl,
+                  '-c:v', 'copy', '-c:a', 'copy', '-sn'
+                ];
+                // Safari requires hvc1 tag for HEVC in MP4 (hev1 = black screen with audio)
+                // videoCodecName is the raw codec name ("hevc"), not the tag string ("[0][0][0][0]" in MKV)
+                if (validation.videoCodecName === 'hevc' || validation.videoCodecName === 'h265') {
+                  remuxArgs.push('-tag:v', 'hvc1');
+                }
+                remuxArgs.push('-movflags', '+faststart', remuxOutputPath);
+
+                await execFileAsync('ffmpeg', remuxArgs, { timeout: 10 * 60 * 1000 });
+
+                downloadJobManager.updateJob(jobId, { processedFilePath: remuxOutputPath });
+
+                finalStreamUrl = `/api/vod/stream-processed/${jobId}`;
+
+                logger.info(`[Web Remux] Done: ${remuxOutputPath}`);
+              } catch (remuxErr) {
+                logger.warn(`[Web Remux] Failed, falling back to raw URL: ${remuxErr.message}`);
+              }
+            }
 
             downloadJobManager.updateJob(jobId, {
               status: 'completed',
@@ -794,6 +952,15 @@ async function processRdDownload(jobId, contentInfo) {
               quality: cached.resolution ? `${cached.resolution}p` : null,
               subtitles: [] // Will be populated in background
             });
+
+            // Resolve next episode for autoplay (non-blocking)
+            resolveNextEpisodeForJob(jobId, tmdbId, type, season, episode);
+
+            // Fetch skip markers in background (chapters from probe + IntroDB)
+            const { getImdbId } = require('../services/tmdb-service');
+            getImdbId(tmdbId, type)
+              .then(imdbId => fetchSkipMarkersBackground(jobId, validation.chapters || [], contentInfo, imdbId, validation.duration))
+              .catch(() => fetchSkipMarkersBackground(jobId, validation.chapters || [], contentInfo, null, validation.duration));
 
             // Fetch subtitles in background (use original URL for embedded subtitle detection)
             fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, cached.streamUrl, serverHost);
@@ -882,11 +1049,12 @@ async function processRdDownload(jobId, contentInfo) {
       title,
       year,
       type,
-      season,
+      season: searchSeason,
       episode,
       tmdbId,
       rdApiKey,
-      maxBitrateMbps
+      maxBitrateMbps,
+      platform
     }, onSourcesReady).then(() => {
       // getAllSources returned — mark search complete so the while loop can exit
       // (Prowlarr callbacks may have already set this, but ensure it's set)
@@ -964,7 +1132,12 @@ async function processRdDownload(jobId, contentInfo) {
       const sourceType = source.source === 'zurg' ? 'Zurg' : 'Prowlarr';
       const queueInfo = searchComplete ? `${attemptNum}` : `${attemptNum}+`;
 
-      logger.info(`Attempt ${queueInfo}: [${sourceType}] ${source.title.substring(0, 60)} (${cached})`);
+      logger.info(`Attempt ${queueInfo}: [${sourceType}] ${source.title.substring(0, 60)} (${cached}${source.overBandwidth ? ', OVER-BW' : ''})`);
+
+      // Flag job if we're falling back to over-bandwidth sources
+      if (source.overBandwidth) {
+        downloadJobManager.updateJob(jobId, { usedOverBandwidthFallback: true });
+      }
 
       // Track this attempt
       downloadJobManager.addAttemptedSource(jobId, {
@@ -990,19 +1163,28 @@ async function processRdDownload(jobId, contentInfo) {
         let candidateFilename = null;
 
         if (source.source === 'zurg') {
-          // Try to resolve Zurg file to RD direct link
+          // ZURG SOURCE HANDLING:
+          // Zurg is a shared P2P network of RD-cached content. If a file is in Zurg,
+          // it IS cached on RD's CDN and can be instantly added to any RD account.
+          //
+          // Strategy:
+          // 1. Try to resolve to a direct RD CDN URL (faster, better seeking)
+          // 2. If resolution fails, fall back to Zurg FUSE mount streaming
+          //    (the file already passed readability check in zurg-search.js)
           const rdLink = await resolveZurgToRdLink(source.filePath, rdApiKey);
 
           if (rdLink) {
             candidateUrl = rdLink;
             candidateFilename = source.filePath.split('/').pop();
-            logger.info(`✅ Zurg source #${attemptNum} resolved to RD link`);
+            logger.info(`✅ Zurg source #${attemptNum} resolved to RD direct link`);
           } else {
-            // Zurg file couldn't be resolved to RD, try as proxy
-            const streamId = Buffer.from(source.filePath, 'utf-8').toString('base64url');
+            // RD resolution failed — fall back to Zurg FUSE mount streaming.
+            // The file IS readable (verified by zurg-search.js isZurgFileReadable).
+            // Encode the FUSE path as a base64url stream ID for the /stream/:streamId proxy.
+            const streamId = Buffer.from(source.filePath).toString('base64url');
             candidateUrl = `https://${serverHost}/api/vod/stream/${streamId}`;
             candidateFilename = source.filePath.split('/').pop();
-            logger.info(`✅ Zurg source #${attemptNum} using proxy`);
+            logger.info(`✅ Zurg source #${attemptNum} using FUSE mount fallback`);
           }
         } else {
           // Prowlarr source - download from RD with timeout for slow downloads
@@ -1012,18 +1194,20 @@ async function processRdDownload(jobId, contentInfo) {
           let lastRdSeeders = null;
           let lastRdSpeed = null;
           const SLOW_START_TIMEOUT = 12000; // 12s to get past 0% (was 20s)
-          const DEAD_TORRENT_TIMEOUT = 8000; // 8s for 0-seeder/0-speed detection
+          const DEAD_TORRENT_TIMEOUT = 15000; // 15s for 0-seeder/0-speed detection
           const STALL_TIMEOUT = 60000; // 60s stall at any progress level
 
           const downloadPromise = downloadFromRD(
             source.magnet,
             rdApiKey,
-            season,
+            searchSeason,
             episode,
             (rdProgress, rdMessage, rdMeta) => {
-              // Don't update if job already completed (another source succeeded)
+              // Don't update if job already completed or errored (orphaned downloads from
+              // timed-out sources keep polling RD for up to 4h — prevent them from
+              // overwriting the final job status)
               const currentJob = downloadJobManager.getJob(jobId);
-              if (currentJob?.status === 'completed') return;
+              if (currentJob?.status === 'completed' || currentJob?.status === 'error') return;
 
               // Track RD metadata for faster dead torrent detection
               if (rdMeta) {
@@ -1093,10 +1277,20 @@ async function processRdDownload(jobId, contentInfo) {
           } catch (timeoutError) {
             if (timeoutError.message.includes('TIMEOUT')) {
               logger.warn(`⏱️  ${timeoutError.message}`);
+              // Suppress unhandled rejection from orphaned downloadFromRD (its 4h polling loop
+              // continues after we move on — when it eventually fails, we don't want a crash)
+              downloadPromise.catch(() => {});
               // Clean up stuck torrents in background (don't await - just fire and forget)
               cleanupStuckTorrents(rdApiKey, 2, 5).catch(() => {});
               lastError = timeoutError;
               continue; // Try next source
+            }
+            // 451 = DMCA'd on RD — skip this source, try next
+            if (timeoutError.response?.status === 451) {
+              logger.warn(`⚠️  Source #${attemptNum} DMCA'd on RD (451 infringing_file), trying next...`);
+              downloadPromise.catch(() => {});
+              lastError = timeoutError;
+              continue;
             }
             throw timeoutError; // Re-throw other errors
           }
@@ -1109,7 +1303,7 @@ async function processRdDownload(jobId, contentInfo) {
             message: `Validating stream...`
           });
 
-          const validation = await validateAndProcessSource(candidateUrl, jobId, source.title?.substring(0, 50), serverHost);
+          const validation = await validateAndProcessSource(candidateUrl, jobId, source.title?.substring(0, 50), serverHost, platform);
 
           if (!validation.accepted) {
             logger.warn({
@@ -1126,7 +1320,11 @@ async function processRdDownload(jobId, contentInfo) {
           // Stream accepted (possibly with audio processing)
           result = {
             download: validation.streamUrl,
-            filename: candidateFilename
+            filename: candidateFilename,
+            videoCodec: validation.videoCodec,
+            videoCodecName: validation.videoCodecName,
+            chapters: validation.chapters,
+            duration: validation.duration
           };
           successfulSource = source;
           break;
@@ -1135,8 +1333,10 @@ async function processRdDownload(jobId, contentInfo) {
         lastError = error;
         logger.warn(`⚠️  Source #${attemptNum} failed: ${error.message} (${error.code || 'no code'})`);
 
-        // If FILE_NOT_FOUND or source issues, try next
+        // If FILE_NOT_FOUND, DMCA, or source issues, try next
         if (error.code === 'FILE_NOT_FOUND' ||
+            error.response?.status === 451 ||
+            error.message?.includes('infringing') ||
             error.message?.includes('dead') ||
             error.message?.includes('virus') ||
             error.message?.includes('error') ||
@@ -1175,11 +1375,55 @@ async function processRdDownload(jobId, contentInfo) {
 
     logger.info(`[RD Download] Got unrestricted link (full): ${result.download}`);
 
+    // Save original RD URL for caching before web remux potentially overwrites it
+    const originalRdUrl = result.download;
+
+    // Web client MKV→MP4 remux: browsers can't play MKV, so remux container with -c copy
+    // Skip if the stream is already a processed file (audio processing already output MP4 for web)
+    if (platform === 'web' && result.filename?.toLowerCase().endsWith('.mkv') && !result.download.includes('/stream-processed/')) {
+      try {
+        downloadJobManager.updateJob(jobId, {
+          status: 'processing',
+          message: 'Preparing for web playback...'
+        });
+
+        const remuxOutputPath = path.join(TRANSCODED_DIR, `${jobId}_${Date.now()}.mp4`);
+        const { execFile } = require('child_process');
+        const { promisify } = require('util');
+        const execFileAsync = promisify(execFile);
+
+        logger.info(`[Web Remux] Remuxing MKV→MP4 for web client: ${result.filename}`);
+
+        const remuxArgs = [
+          '-y', '-i', result.download,
+          '-c:v', 'copy', '-c:a', 'copy', '-sn'
+        ];
+        // Safari requires hvc1 tag for HEVC in MP4 (hev1 = black screen with audio)
+        if (result.videoCodecName === 'hevc' || result.videoCodecName === 'h265') {
+          remuxArgs.push('-tag:v', 'hvc1');
+        }
+        remuxArgs.push('-movflags', '+faststart', remuxOutputPath);
+
+        await execFileAsync('ffmpeg', remuxArgs, { timeout: 10 * 60 * 1000 }); // 10 min timeout
+
+        downloadJobManager.updateJob(jobId, { processedFilePath: remuxOutputPath });
+
+        result.download = `/api/vod/stream-processed/${jobId}`;
+
+        logger.info(`[Web Remux] Done: ${remuxOutputPath}`);
+      } catch (remuxErr) {
+        // Remux failed — fall back to raw URL (MKV). The web client may not play it,
+        // but it's better than erroring the whole job.
+        logger.warn(`[Web Remux] Failed, falling back to raw URL: ${remuxErr.message}`);
+      }
+    }
+
     // Cache the successful RD link (24h TTL with live verification on retrieval)
     // Only cache actual RD direct links, not proxy URLs (which are local Zurg proxies)
-    const isRdDirectLink = result.download &&
-      !result.download.includes('/api/vod/stream/') &&
-      (result.download.includes('real-debrid.com') || result.download.includes('rdb.so'));
+    // Use originalRdUrl to cache the real RD link even if we remuxed for web
+    const isRdDirectLink = originalRdUrl &&
+      !originalRdUrl.includes('/api/vod/stream/') &&
+      (originalRdUrl.includes('real-debrid.com') || originalRdUrl.includes('rdb.so'));
 
     if (isRdDirectLink) {
       try {
@@ -1195,10 +1439,11 @@ async function processRdDownload(jobId, contentInfo) {
           type,
           season,
           episode,
-          streamUrl: result.download,
+          streamUrl: originalRdUrl,
           fileName: result.filename,
           resolution,
-          fileSizeBytes: result.filesize || result.bytes || null
+          fileSizeBytes: result.filesize || result.bytes || null,
+          rdApiKey
         });
       } catch (cacheErr) {
         logger.warn(`Failed to cache RD link: ${cacheErr.message}`);
@@ -1220,8 +1465,19 @@ async function processRdDownload(jobId, contentInfo) {
       subtitles: [] // Will be populated in background
     });
 
-    // Auto-fetch subtitles in background (truly non-blocking)
-    fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, result.download, serverHost);
+    // Resolve next episode for autoplay (non-blocking)
+    resolveNextEpisodeForJob(jobId, tmdbId, type, season, episode);
+
+    // Fetch skip markers in background (chapters from probe + IntroDB)
+    {
+      const { getImdbId } = require('../services/tmdb-service');
+      getImdbId(tmdbId, type)
+        .then(imdbId => fetchSkipMarkersBackground(jobId, result.chapters || [], contentInfo, imdbId, result.duration))
+        .catch(() => fetchSkipMarkersBackground(jobId, result.chapters || [], contentInfo, null, result.duration));
+    }
+
+    // Auto-fetch subtitles in background (use original URL for embedded subtitle detection)
+    fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, originalRdUrl, serverHost);
 
     // Also track as playback for monitoring dashboard (non-blocking)
     try {
@@ -1275,7 +1531,8 @@ async function processRdDownload(jobId, contentInfo) {
  * Process RD download with exclusions (for re-search after bad report)
  */
 async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, { excludedHashes = [], excludedFilePaths = [] }) {
-  const { tmdbId, title, year, type, season, episode, userId } = contentInfo;
+  const { tmdbId, title, year, type, season, episode, userId, platform } = contentInfo;
+  const searchSeason = type === 'tv' ? getSearchSeason(tmdbId, season) : season;
 
   try {
     const rdApiKey = getUserRdApiKey(userId);
@@ -1292,8 +1549,8 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
     // Get user bandwidth limit
     let maxBitrateMbps = null;
     try {
-      const user = db.prepare('SELECT max_bitrate_mbps FROM users WHERE id = ?').get(userId);
-      maxBitrateMbps = user?.max_bitrate_mbps || null;
+      const user = db.prepare('SELECT measured_bandwidth_mbps FROM users WHERE id = ?').get(userId);
+      maxBitrateMbps = user?.measured_bandwidth_mbps || null;
     } catch (e) {
       logger.warn('Failed to get user bandwidth limit:', e.message);
     }
@@ -1307,13 +1564,14 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
         title,
         year,
         type,
-        season,
+        season: searchSeason,
         episode,
         tmdbId,
         rdApiKey,
         maxBitrateMbps,
         excludedHashes,
-        excludedFilePaths
+        excludedFilePaths,
+        platform
       });
 
       if (!allSources || allSources.length === 0) {
@@ -1364,17 +1622,19 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
         let candidateFilename = null;
 
         if (source.source === 'zurg') {
+          // Zurg source: try RD direct link, fall back to FUSE mount (see main processRdDownload)
           const rdLink = await resolveZurgToRdLink(source.filePath, rdApiKey);
 
           if (rdLink) {
             candidateUrl = rdLink;
             candidateFilename = source.filePath.split('/').pop();
-            logger.info(`✅ Alternative Zurg source ${attemptNum}/${allSources.length} resolved`);
+            logger.info(`✅ Alternative Zurg source ${attemptNum}/${allSources.length} resolved to RD link`);
           } else {
-            const streamId = Buffer.from(source.filePath, 'utf-8').toString('base64url');
+            // Fall back to FUSE mount streaming (file already verified readable)
+            const streamId = Buffer.from(source.filePath).toString('base64url');
             candidateUrl = `https://${serverHost}/api/vod/stream/${streamId}`;
             candidateFilename = source.filePath.split('/').pop();
-            logger.info(`✅ Alternative Zurg source ${attemptNum}/${allSources.length} using proxy`);
+            logger.info(`✅ Alternative Zurg source ${attemptNum}/${allSources.length} using FUSE mount fallback`);
           }
         } else {
           // Prowlarr source with timeout for slow downloads
@@ -1385,12 +1645,12 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
           const downloadPromise = downloadFromRD(
             source.magnet,
             rdApiKey,
-            season,
+            searchSeason,
             episode,
             (rdProgress, rdMessage) => {
-              // Don't update if job already completed (another source succeeded)
+              // Don't update if job already in terminal state (orphaned download protection)
               const currentJob = downloadJobManager.getJob(jobId);
-              if (currentJob?.status === 'completed') return;
+              if (currentJob?.status === 'completed' || currentJob?.status === 'error') return;
 
               const rdMatch = rdMessage.match(/Downloading:\s*(\d+)%/);
               if (rdMatch) {
@@ -1433,8 +1693,15 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
           } catch (timeoutError) {
             if (timeoutError.message.includes('TIMEOUT')) {
               logger.warn(`⏱️  ${timeoutError.message}`);
-              // Clean up stuck torrents in background
+              downloadPromise.catch(() => {});
               cleanupStuckTorrents(rdApiKey, 2, 5).catch(() => {});
+              lastError = timeoutError;
+              continue;
+            }
+            // 451 = DMCA'd on RD — skip this source, try next
+            if (timeoutError.response?.status === 451) {
+              logger.warn(`⚠️  Alternative source ${attemptNum} DMCA'd on RD (451), trying next...`);
+              downloadPromise.catch(() => {});
               lastError = timeoutError;
               continue;
             }
@@ -1449,7 +1716,7 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
             message: `Validating stream...`
           });
 
-          const validation = await validateAndProcessSource(candidateUrl, jobId, source.title?.substring(0, 50), serverHost);
+          const validation = await validateAndProcessSource(candidateUrl, jobId, source.title?.substring(0, 50), serverHost, platform);
 
           if (!validation.accepted) {
             logger.warn({
@@ -1465,7 +1732,11 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
 
           result = {
             download: validation.streamUrl,
-            filename: candidateFilename
+            filename: candidateFilename,
+            videoCodec: validation.videoCodec,
+            videoCodecName: validation.videoCodecName,
+            chapters: validation.chapters,
+            duration: validation.duration
           };
           successfulSource = source;
           break;
@@ -1494,11 +1765,52 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
       throw new Error(lastError?.message || 'No alternative sources succeeded');
     }
 
+    // Save original RD URL for caching before web remux potentially overwrites it
+    const originalRdUrl = result.download;
+
+    // Web client MKV→MP4 remux (same as processRdDownload)
+    if (platform === 'web' && result.filename?.toLowerCase().endsWith('.mkv') && !result.download.includes('/stream-processed/')) {
+      try {
+        downloadJobManager.updateJob(jobId, {
+          status: 'processing',
+          message: 'Preparing for web playback...'
+        });
+
+        const remuxOutputPath = path.join(TRANSCODED_DIR, `${jobId}_${Date.now()}.mp4`);
+        const { execFile } = require('child_process');
+        const { promisify } = require('util');
+        const execFileAsync = promisify(execFile);
+
+        logger.info(`[Web Remux] Remuxing MKV→MP4 for web client: ${result.filename}`);
+
+        const remuxArgs = [
+          '-y', '-i', result.download,
+          '-c:v', 'copy', '-c:a', 'copy', '-sn'
+        ];
+        // Safari requires hvc1 tag for HEVC in MP4 (hev1 = black screen with audio)
+        if (result.videoCodecName === 'hevc' || result.videoCodecName === 'h265') {
+          remuxArgs.push('-tag:v', 'hvc1');
+        }
+        remuxArgs.push('-movflags', '+faststart', remuxOutputPath);
+
+        await execFileAsync('ffmpeg', remuxArgs, { timeout: 10 * 60 * 1000 });
+
+        downloadJobManager.updateJob(jobId, { processedFilePath: remuxOutputPath });
+
+        result.download = `/api/vod/stream-processed/${jobId}`;
+
+        logger.info(`[Web Remux] Done: ${remuxOutputPath}`);
+      } catch (remuxErr) {
+        logger.warn(`[Web Remux] Failed, falling back to raw URL: ${remuxErr.message}`);
+      }
+    }
+
     // Cache the successful RD link (24h TTL with live verification on retrieval)
     // Only cache actual RD direct links, not proxy URLs
-    const isRdDirectLink = result.download &&
-      !result.download.includes('/api/vod/stream/') &&
-      (result.download.includes('real-debrid.com') || result.download.includes('rdb.so'));
+    // Use originalRdUrl to cache the real RD link even if we remuxed for web
+    const isRdDirectLink = originalRdUrl &&
+      !originalRdUrl.includes('/api/vod/stream/') &&
+      (originalRdUrl.includes('real-debrid.com') || originalRdUrl.includes('rdb.so'));
 
     if (isRdDirectLink) {
       try {
@@ -1513,10 +1825,11 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
           type,
           season,
           episode,
-          streamUrl: result.download,
+          streamUrl: originalRdUrl,
           fileName: result.filename,
           resolution,
-          fileSizeBytes: result.filesize || result.bytes || null
+          fileSizeBytes: result.filesize || result.bytes || null,
+          rdApiKey
         });
       } catch (cacheErr) {
         logger.warn(`Failed to cache RD link: ${cacheErr.message}`);
@@ -1532,6 +1845,14 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
       fileSize: result.filesize || result.bytes || null,
       quality: successfulSource?.quality || null
     });
+
+    // Fetch skip markers in background (chapters from probe + IntroDB)
+    {
+      const { getImdbId } = require('../services/tmdb-service');
+      getImdbId(tmdbId, type)
+        .then(imdbId => fetchSkipMarkersBackground(jobId, result.chapters || [], contentInfo, imdbId, result.duration))
+        .catch(() => fetchSkipMarkersBackground(jobId, result.chapters || [], contentInfo, null, result.duration));
+    }
 
     logger.info(`✅ Re-search job ${jobId} completed with alternative source`);
   } catch (error) {
@@ -1554,6 +1875,7 @@ router.post('/stream-url', async (req, res) => {
   try {
     const { tmdbId, title, year, type, season, episode } = req.body;
     const userId = req.user.sub;
+    const searchSeason = type === 'tv' ? getSearchSeason(tmdbId, season) : season;
 
     logger.info(`Getting stream URL for: ${title} (${year})`);
 
@@ -1562,14 +1884,14 @@ router.post('/stream-url', async (req, res) => {
       title,
       year,
       type, // Pass 'tv' or 'movie' directly - zurg-client expects 'tv' not 'episode'
-      season,
+      season: searchSeason,
       episode
     });
 
     if (zurgResult.match) { // Only use good quality, skip fallbacks
       const file = zurgResult.match;
 
-      // Try to resolve Zurg path to direct RD link first
+      // Try to resolve Zurg path to direct RD link using user's own RD key
       const rdApiKey = getUserRdApiKey(userId);
       let streamUrl = null;
       let source = 'zurg';
@@ -1583,27 +1905,21 @@ router.post('/stream-url', async (req, res) => {
         }
       }
 
-      // Fall back to server proxy if RD resolution failed
-      if (!streamUrl) {
-        // Use server proxy endpoint that properly supports HTTP range requests
-        const streamId = Buffer.from(file.filePath).toString('base64url');
-        const serverHost = process.env.SERVER_HOST || 'lite.duckflix.tv';
-        const serverProtocol = process.env.SERVER_PROTOCOL || 'https';
-        streamUrl = `${serverProtocol}://${serverHost}/api/vod/stream/${streamId}`;
-        source = 'zurg-proxy';
-        logger.info(`Using server proxy for Zurg file`);
+      if (streamUrl) {
+        logger.info(`Zurg match found, streaming from: ${streamUrl.substring(0, 80)}...`);
+
+        return res.json({
+          streamUrl,
+          source,
+          fileName: file.fileName
+        });
       }
 
-      logger.info(`Zurg match found, streaming from: ${streamUrl.substring(0, 80)}...`);
-
-      return res.json({
-        streamUrl,
-        source,
-        fileName: file.fileName
-      });
+      // Zurg file not in user's RD library - skip proxy (would use admin's RD key)
+      logger.info(`Zurg match found but not in user's RD library, falling through to Prowlarr`);
     }
 
-    // Not in Zurg - fall back to Prowlarr search + RD
+    // Not in Zurg (or Zurg file not in user's RD library) - fall back to Prowlarr search + RD
     logger.info('Content not in Zurg, searching...');
 
     // Check if RD API key is configured for this user
@@ -1622,7 +1938,7 @@ router.post('/stream-url', async (req, res) => {
       title,
       year,
       type,
-      season,
+      season: searchSeason,
       episode
     });
 
@@ -1641,7 +1957,7 @@ router.post('/stream-url', async (req, res) => {
       streamResult = await completeDownloadFlow(
         rdApiKey,
         searchResult.magnetUrl,
-        season,
+        searchSeason,
         episode
       );
     } catch (rdError) {
@@ -1738,8 +2054,29 @@ router.post('/stream-url', async (req, res) => {
 /**
  * POST /api/vod/session/check
  * Check if user can start VOD playback
+ *
+ * This endpoint is fully synchronous (SQLite queries only) and should complete
+ * in <10ms. If it takes longer, the event loop is blocked by something else
+ * (likely FUSE mount I/O from Zurg search saturating the libuv thread pool).
  */
 router.post('/session/check', (req, res) => {
+  const reqStartMs = Date.now();
+
+  // Server-side timeout: if we haven't responded in 8s, something is blocking
+  // the event loop. Send an error so the client can retry immediately.
+  const timeoutHandle = setTimeout(() => {
+    if (!res.headersSent) {
+      const elapsed = Date.now() - reqStartMs;
+      logger.error(`[RD Session] CHECK TIMEOUT: ${elapsed}ms elapsed — event loop was blocked. ` +
+        `UV_THREADPOOL_SIZE=${process.env.UV_THREADPOOL_SIZE || '4(default)'}`);
+      res.status(503).json({
+        error: 'Session check timed out',
+        message: 'Server busy, please retry',
+        retryable: true
+      });
+    }
+  }, 8000);
+
   try {
     const userId = req.user.sub;
     const username = req.user.username;
@@ -1751,6 +2088,7 @@ router.post('/session/check', (req, res) => {
     const rdApiKey = getUserRdApiKey(userId);
 
     if (!rdApiKey) {
+      clearTimeout(timeoutHandle);
       logger.error(`[RD Session] User ${username} has no RD API key`);
       return res.status(403).json({
         error: 'No RD API key configured',
@@ -1762,6 +2100,7 @@ router.post('/session/check', (req, res) => {
     const sessionCheck = checkRdSession(rdApiKey, clientIp, userId);
 
     if (!sessionCheck.allowed) {
+      clearTimeout(timeoutHandle);
       const activeSession = sessionCheck.activeSession;
       logger.warn(`[RD Session] BLOCKED: ${username} attempted stream from ${clientIp}, but RD key in use by ${activeSession.username} on ${activeSession.ipAddress}`);
 
@@ -1778,13 +2117,21 @@ router.post('/session/check', (req, res) => {
     // Start new RD session
     startRdSession(rdApiKey, clientIp, userId, username);
 
-    logger.info(`[RD Session] APPROVED: ${username} on ${clientIp} with RD ${rdApiKey.slice(-6)}`);
+    clearTimeout(timeoutHandle);
+
+    const elapsed = Date.now() - reqStartMs;
+    if (elapsed > 100) {
+      logger.warn(`[RD Session] CHECK SLOW: ${elapsed}ms for ${username} (should be <10ms)`);
+    }
+
+    logger.info(`[RD Session] APPROVED: ${username} on ${clientIp} with RD ${rdApiKey.slice(-6)} (${elapsed}ms)`);
 
     res.json({
       success: true,
       message: 'Playback authorized'
     });
   } catch (error) {
+    clearTimeout(timeoutHandle);
     logger.error('[RD Session] Check error:', error);
     res.status(500).json({ error: 'Session check failed' });
   }
@@ -2106,7 +2453,11 @@ router.get('/subtitles/file/:id', async (req, res) => {
     const { id } = req.params;
     const filePath = opensubtitlesService.getSubtitleFilePath(parseInt(id));
 
-    if (!filePath || !require('fs').existsSync(filePath)) {
+    let fileExists = false;
+    if (filePath) {
+      try { await require('fs').promises.access(filePath); fileExists = true; } catch {}
+    }
+    if (!fileExists) {
       return res.status(404).json({ error: 'Subtitle file not found' });
     }
 

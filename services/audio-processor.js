@@ -18,9 +18,11 @@ const TRANSCODE_TIMEOUT = 600000; // 10 minutes for audio transcode
  * @param {string} inputUrl - HTTP URL or local file path
  * @param {string} outputPath - Local file path for output
  * @param {number} audioStreamIndex - Absolute stream index of the compatible audio track
+ * @param {Object} [options] - Additional options
+ * @param {string} [options.videoCodecName] - Raw video codec name (e.g. "hevc") for MP4 tag fixup
  * @returns {Promise<{success: boolean, outputPath: string, durationMs: number}>}
  */
-async function remuxWithCompatibleAudio(inputUrl, outputPath, audioStreamIndex) {
+async function remuxWithCompatibleAudio(inputUrl, outputPath, audioStreamIndex, options = {}) {
   const startTime = Date.now();
   logger.info(`[AudioProcessor] Remuxing with audio stream ${audioStreamIndex} -> ${path.basename(outputPath)}`);
 
@@ -34,8 +36,12 @@ async function remuxWithCompatibleAudio(inputUrl, outputPath, audioStreamIndex) 
       '-map', `0:${audioStreamIndex}`,
       '-map', '0:s?',
       '-c', 'copy',
-      outputPath
     ];
+    // Safari requires hvc1 tag for HEVC in MP4 (hev1 = black screen with audio)
+    if (outputPath.endsWith('.mp4') && (options.videoCodecName === 'hevc' || options.videoCodecName === 'h265')) {
+      args.push('-tag:v', 'hvc1');
+    }
+    args.push(outputPath);
 
     const proc = spawn('ffmpeg', args, {
       stdio: ['ignore', 'pipe', 'pipe']
@@ -89,9 +95,11 @@ async function remuxWithCompatibleAudio(inputUrl, outputPath, audioStreamIndex) 
  *
  * @param {string} inputUrl - HTTP URL or local file path
  * @param {string} outputPath - Local file path for output
+ * @param {Object} [options] - Additional options
+ * @param {string} [options.videoCodecName] - Raw video codec name (e.g. "hevc") for MP4 tag fixup
  * @returns {Promise<{success: boolean, outputPath: string, durationMs: number}>}
  */
-async function transcodeAudioToEac3(inputUrl, outputPath) {
+async function transcodeAudioToEac3(inputUrl, outputPath, options = {}) {
   const startTime = Date.now();
   logger.info(`[AudioProcessor] Transcoding audio to EAC3 -> ${path.basename(outputPath)}`);
 
@@ -108,8 +116,12 @@ async function transcodeAudioToEac3(inputUrl, outputPath) {
       '-c:s', 'copy',
       '-c:a', 'eac3',
       '-b:a', '640k',
-      outputPath
     ];
+    // Safari requires hvc1 tag for HEVC in MP4 (hev1 = black screen with audio)
+    if (outputPath.endsWith('.mp4') && (options.videoCodecName === 'hevc' || options.videoCodecName === 'h265')) {
+      args.push('-tag:v', 'hvc1');
+    }
+    args.push(outputPath);
 
     const proc = spawn('ffmpeg', args, {
       stdio: ['ignore', 'pipe', 'pipe']
