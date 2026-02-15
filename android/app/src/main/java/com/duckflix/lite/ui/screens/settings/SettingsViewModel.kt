@@ -39,12 +39,12 @@ class SettingsViewModel @Inject constructor(
 
     private fun loadUserInfo() {
         viewModelScope.launch {
-            // TODO: Load user info from repository
+            val user = authRepository.getCurrentUser()
             _uiState.value = _uiState.value.copy(
-                username = "admin", // TODO: Get from user session
-                rdExpiryDate = null,
+                username = user?.username,
+                rdExpiryDate = user?.rdExpiryDate,
                 serverUrl = "https://lite.duckflix.tv",
-                appVersion = "1.0.0"
+                appVersion = BuildConfig.VERSION_NAME
             )
         }
     }

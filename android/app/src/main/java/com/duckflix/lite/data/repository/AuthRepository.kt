@@ -90,6 +90,12 @@ class AuthRepository @Inject constructor(
         return encryptedPrefs.getString(KEY_TOKEN, null)
     }
 
+    suspend fun getCurrentUser(): UserEntity? {
+        val userId = encryptedPrefs.getInt(KEY_USER_ID, -1)
+        if (userId == -1) return null
+        return userDao.getUserById(userId)
+    }
+
     companion object {
         private const val KEY_TOKEN = "auth_token"
         private const val KEY_USER_ID = "user_id"
