@@ -321,5 +321,13 @@ interface DuckFlixApi {
         @Query("region") region: String = "US"
     ): ProvidersResponse
 
+    // App self-update
+    @GET("apk/version")
+    suspend fun getAppVersion(): com.duckflix.lite.data.remote.dto.AppVersionResponse
+
+    @Streaming
+    @GET("apk/latest")
+    suspend fun downloadLatestApk(): ResponseBody
+
     // TODO: Add remaining API endpoints (Prowlarr search UI, etc.)
 }

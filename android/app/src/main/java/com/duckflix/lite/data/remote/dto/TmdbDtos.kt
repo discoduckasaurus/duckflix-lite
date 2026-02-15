@@ -373,6 +373,16 @@ data class PersonCreditItem(
         }
 }
 
+// App self-update DTO
+@JsonClass(generateAdapter = true)
+data class AppVersionResponse(
+    val versionCode: Int,
+    val versionName: String,
+    val releaseNotes: String? = null,
+    val downloadUrl: String? = null,
+    val size: Long? = null
+)
+
 // Prefetch DTOs for seamless auto-play
 @JsonClass(generateAdapter = true)
 data class PrefetchNextRequest(

@@ -24,6 +24,7 @@ import com.duckflix.lite.ui.screens.player.VideoPlayerScreen
 import com.duckflix.lite.ui.screens.search.SearchScreen
 import com.duckflix.lite.ui.screens.settings.SettingsScreen
 import com.duckflix.lite.ui.screens.livetv.LiveTvScreen
+import com.duckflix.lite.ui.components.UpdateAvailableDialog
 
 sealed class Screen(val route: String) {
     object Login : Screen("login")
@@ -86,6 +87,11 @@ fun DuckFlixApp(
     val navController = rememberNavController()
     val isLoggedIn by viewModel.isLoggedIn.collectAsState()
 
+    // Update check state
+    val updateInfo by viewModel.updateInfo.collectAsState()
+    val isDownloading by viewModel.isDownloading.collectAsState()
+    val downloadProgress by viewModel.downloadProgress.collectAsState()
+
     // Navigate to Home when login status changes to true (auto-login)
     LaunchedEffect(isLoggedIn) {
         if (isLoggedIn) {
@@ -96,7 +102,22 @@ fun DuckFlixApp(
                     popUpTo(0) { inclusive = true }
                 }
             }
+            // Check for updates after login
+            viewModel.checkForUpdate()
         }
+    }
+
+    // Show update dialog
+    updateInfo?.let { info ->
+        UpdateAvailableDialog(
+            currentVersion = BuildConfig.VERSION_NAME,
+            newVersion = info.versionName,
+            releaseNotes = info.releaseNotes,
+            isDownloading = isDownloading,
+            downloadProgress = downloadProgress,
+            onUpdateNow = { viewModel.downloadAndInstall() },
+            onLater = { viewModel.dismissUpdate() }
+        )
     }
 
     // Start at login, will auto-navigate to Home if already logged in
