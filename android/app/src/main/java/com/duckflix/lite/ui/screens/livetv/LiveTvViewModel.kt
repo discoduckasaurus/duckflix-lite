@@ -265,8 +265,10 @@ class LiveTvViewModel @Inject constructor(
                 println("[LiveTV] Computed EPG window: start=$epgStart, end=$epgEnd, now=$now")
                 println("[LiveTV] EPG duration: ${(epgEnd - epgStart) / 60} minutes")
 
-                // Filter out deactivated channels
-                val activeChannels = response.channels.filter { it.isActive }
+                // Filter out deactivated channels and sort by sort_order
+                val activeChannels = response.channels
+                    .filter { it.isActive }
+                    .sortedBy { it.sortOrder }
                 println("[LiveTV] Filtered to ${activeChannels.size} active channels (${response.channels.size - activeChannels.size} deactivated)")
 
                 _uiState.value = _uiState.value.copy(
