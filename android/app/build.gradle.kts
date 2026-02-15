@@ -13,8 +13,8 @@ android {
         applicationId = "com.duckflix.lite"
         minSdk = 21  // Android 5.0 for wide compatibility
         targetSdk = 34
-        versionCode = 6
-        versionName = "2.1.2"
+        versionCode = 7
+        versionName = "2.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

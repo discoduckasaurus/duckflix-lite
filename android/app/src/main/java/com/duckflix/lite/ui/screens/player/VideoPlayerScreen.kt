@@ -9,7 +9,9 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -1299,46 +1301,22 @@ private fun SubtitlePanel(
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            // "None" option
-            com.duckflix.lite.ui.components.FocusableButton(
-                onClick = {
-                    onTrackSelected("none")
-                    onDismiss()
-                },
+            // Scrollable track list
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(firstTrackFocusRequester)
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "None",
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (subtitleTracks.none { it.isSelected }) {
-                        Text(
-                            text = "✓",
-                            color = MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-            }
-
-            // Subtitle tracks
-            subtitleTracks.forEach { track ->
+                // "None" option
                 com.duckflix.lite.ui.components.FocusableButton(
                     onClick = {
-                        onTrackSelected(track.id)
+                        onTrackSelected("none")
                         onDismiss()
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(firstTrackFocusRequester)
                 ) {
                     Row(
                         modifier = Modifier
@@ -1348,13 +1326,11 @@ private fun SubtitlePanel(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = track.label,
+                            text = "None",
                             style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
-                        if (track.isSelected) {
+                        if (subtitleTracks.none { it.isSelected }) {
                             Text(
                                 text = "✓",
                                 color = MaterialTheme.colorScheme.primary,
@@ -1363,9 +1339,41 @@ private fun SubtitlePanel(
                         }
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.weight(1f))
+                // Subtitle tracks
+                subtitleTracks.forEach { track ->
+                    com.duckflix.lite.ui.components.FocusableButton(
+                        onClick = {
+                            onTrackSelected(track.id)
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = track.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (track.isSelected) {
+                                Text(
+                                    text = "✓",
+                                    color = MaterialTheme.colorScheme.primary,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             // Divider
             HorizontalDivider(

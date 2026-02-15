@@ -12,6 +12,7 @@ import androidx.media3.common.Tracks
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.duckflix.lite.data.bandwidth.BandwidthTester
 import com.duckflix.lite.data.bandwidth.StutterDetector
@@ -346,8 +347,7 @@ class VideoPlayerViewModel @Inject constructor(
         // Simple configuration like main app - defaults work best for HEVC/x265
         val dataSourceFactory = DefaultDataSource.Factory(
             context,
-            DefaultHttpDataSource.Factory()
-                .setAllowCrossProtocolRedirects(true)
+            OkHttpDataSource.Factory(okHttpClient)
                 .setUserAgent("ExoPlayer/DuckFlix")
         )
 
@@ -2451,8 +2451,13 @@ class VideoPlayerViewModel @Inject constructor(
 
                 val subtitleConfigs = externalSubs.mapNotNull { subtitle ->
                     val url = subtitle.url ?: return@mapNotNull null
+                    val mimeType = when {
+                        url.endsWith(".srt", ignoreCase = true) -> "application/x-subrip"
+                        url.endsWith(".ass", ignoreCase = true) || url.endsWith(".ssa", ignoreCase = true) -> "text/x-ssa"
+                        else -> "text/vtt"
+                    }
                     MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(url))
-                        .setMimeType("text/vtt") // Assuming VTT format
+                        .setMimeType(mimeType)
                         .setLanguage(subtitle.languageCode ?: subtitle.language)
                         .setLabel(subtitle.label ?: subtitle.language)
                         .setId(subtitle.id?.toString() ?: "ext_${subtitle.language}")
