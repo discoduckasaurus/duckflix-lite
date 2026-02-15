@@ -7,3 +7,9 @@ logs/
 static/apk/*.apk
 *.log
 .DS_Store
+devbuild/
+duckflix-web/
+web/
+subtitles/
+transcoded/
+Human Assets/

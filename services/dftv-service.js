@@ -119,6 +119,48 @@ function cleanHlsDir() {
   }
 }
 
+/**
+ * Soft cleanup: read current manifest, keep referenced segments, delete only unreferenced ones.
+ * Falls back to full cleanHlsDir() if no manifest exists or on error.
+ */
+function softCleanHlsDir() {
+  try {
+    if (!fs.existsSync(HLS_MANIFEST)) {
+      cleanHlsDir();
+      return;
+    }
+
+    const manifest = fs.readFileSync(HLS_MANIFEST, 'utf-8');
+    const referencedFiles = new Set(['live.m3u8']);
+
+    for (const line of manifest.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed && !trimmed.startsWith('#')) {
+        // Extract just the filename (may be full path or relative)
+        referencedFiles.add(path.basename(trimmed));
+      }
+    }
+
+    const files = fs.readdirSync(HLS_DIR);
+    let removed = 0;
+    for (const file of files) {
+      if (!referencedFiles.has(file)) {
+        try {
+          fs.unlinkSync(path.join(HLS_DIR, file));
+          removed++;
+        } catch (e) { /* segment may already be gone */ }
+      }
+    }
+
+    if (removed > 0) {
+      logger.debug(`[DFTV] Soft cleanup: removed ${removed} unreferenced files, kept ${referencedFiles.size}`);
+    }
+  } catch (err) {
+    logger.debug(`[DFTV] Soft cleanup failed, falling back to full clean: ${err.message}`);
+    cleanHlsDir();
+  }
+}
+
 function stopFfmpeg() {
   if (transitionTimer) {
     clearTimeout(transitionTimer);
@@ -153,8 +195,8 @@ function startFfmpeg(filePath, seekOffsetSec, durationMs) {
     return;
   }
 
-  // Always clean HLS dir on new ffmpeg start — prevents stale manifest/segment accumulation
-  cleanHlsDir();
+  // Soft-clean HLS dir: remove unreferenced segments, keep ones clients may still be fetching
+  softCleanHlsDir();
 
   const generation = ++ffmpegGeneration;
 
@@ -295,11 +337,43 @@ async function getManifest() {
     return null;
   }
 
-  // Wait briefly for ffmpeg to generate initial manifest
-  const maxWait = 8000;
-  const start = Date.now();
-  while (!fs.existsSync(HLS_MANIFEST) && Date.now() - start < maxWait) {
-    await new Promise(resolve => setTimeout(resolve, 200));
+  // If manifest already exists, return immediately
+  if (fs.existsSync(HLS_MANIFEST)) {
+    return fs.readFileSync(HLS_MANIFEST, 'utf-8');
+  }
+
+  // Wait for ffmpeg to generate manifest using fs.watch (non-blocking)
+  try {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        watcher.close();
+        reject(new Error('timeout'));
+      }, 8000);
+
+      const watcher = fs.watch(HLS_DIR, (eventType, filename) => {
+        if (filename === 'live.m3u8') {
+          clearTimeout(timeout);
+          watcher.close();
+          resolve();
+        }
+      });
+
+      watcher.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+
+      // Re-check after setting up watcher (race condition: file may have appeared between existsSync and watch)
+      if (fs.existsSync(HLS_MANIFEST)) {
+        clearTimeout(timeout);
+        watcher.close();
+        resolve();
+      }
+    });
+  } catch (err) {
+    if (err.message !== 'timeout') {
+      logger.debug(`[DFTV] fs.watch error: ${err.message}`);
+    }
   }
 
   if (!fs.existsSync(HLS_MANIFEST)) {

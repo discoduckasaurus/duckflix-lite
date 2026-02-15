@@ -10,6 +10,8 @@ const { getTorrentInfo } = require('@duckflix/rd-client');
 
 // Active downloads: Map<userId_tmdbId, DownloadProgress>
 const activeDownloads = new Map();
+// Track polling timeouts so we can cancel them when downloads are removed
+const pollTimeouts = new Map(); // key -> timeoutId
 
 /**
  * DownloadProgress structure:
@@ -81,18 +83,27 @@ function startDownload(options) {
  * Poll RD for download progress
  */
 async function pollDownloadProgress(key) {
-  const download = activeDownloads.get(key);
-
-  if (!download) {
+  // Stop polling if download was removed
+  if (!activeDownloads.has(key)) {
+    pollTimeouts.delete(key);
     return;
   }
 
+  const download = activeDownloads.get(key);
+
   if (download.status === 'ready' || download.status === 'failed') {
+    pollTimeouts.delete(key);
     return;
   }
 
   try {
     const info = await getTorrentInfo(download.torrentId, download.rdApiKey);
+
+    // Re-check after async call — download may have been removed while we waited
+    if (!activeDownloads.has(key)) {
+      pollTimeouts.delete(key);
+      return;
+    }
 
     download.status = info.status;
     download.progress = info.progress || 0;
@@ -103,21 +114,29 @@ async function pollDownloadProgress(key) {
     if (info.status === 'downloaded') {
       download.status = 'ready';
       download.progress = 100;
+      pollTimeouts.delete(key);
       logger.info(`✅ Download ready: ${download.title}`);
-      // Note: streamUrl will be set when user requests it
     } else if (info.status === 'error' || info.status === 'dead' || info.status === 'virus') {
       download.status = 'failed';
       download.error = `RD torrent failed: ${info.status}`;
+      pollTimeouts.delete(key);
       logger.error(`❌ Download failed: ${download.title} - ${info.status}`);
     } else {
       // Continue polling
-      setTimeout(() => pollDownloadProgress(key), 3000);
+      const tid = setTimeout(() => pollDownloadProgress(key), 3000);
+      pollTimeouts.set(key, tid);
     }
   } catch (err) {
     logger.error(`Error polling download progress for ${key}:`, err.message);
 
+    if (!activeDownloads.has(key)) {
+      pollTimeouts.delete(key);
+      return;
+    }
+
     // Retry after delay
-    setTimeout(() => pollDownloadProgress(key), 5000);
+    const tid = setTimeout(() => pollDownloadProgress(key), 5000);
+    pollTimeouts.set(key, tid);
   }
 }
 
@@ -195,6 +214,14 @@ function updateDownloadStreamUrl(userId, tmdbId, season, episode, streamUrl, fil
  */
 function deleteDownload(userId, tmdbId, season, episode) {
   const key = getDownloadKey(userId, tmdbId, season, episode);
+
+  // Cancel any pending poll timeout before removing the download
+  const tid = pollTimeouts.get(key);
+  if (tid) {
+    clearTimeout(tid);
+    pollTimeouts.delete(key);
+  }
+
   const deleted = activeDownloads.delete(key);
 
   if (deleted) {

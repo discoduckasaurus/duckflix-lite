@@ -49,17 +49,6 @@ function reportBadLink({ hash, streamUrl, magnetUrl, source, reportedBy, reason 
     logger.info(`🚩 New bad link reported by ${reportedBy}: ${key.substring(0, 60)} - ${reason}`);
   }
 
-  // Schedule cleanup
-  setTimeout(() => {
-    if (badLinks.has(key)) {
-      const entry = badLinks.get(key);
-      if (Date.now() >= entry.expiresAt) {
-        badLinks.delete(key);
-        logger.info(`🧹 Expired bad link flag: ${key.substring(0, 60)}`);
-      }
-    }
-  }, BAD_LINK_TTL);
-
   return true;
 }
 

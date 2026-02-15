@@ -28,7 +28,7 @@ function authenticateToken(req, res, next) {
     req.user = decoded; // { sub: userId, username, isAdmin, iat, exp }
     next();
   } catch (error) {
-    logger.warn('Invalid token. Error:', error.message, 'Token length:', token?.length, 'First 20 chars:', token?.substring(0, 20));
+    logger.warn(`Invalid token. Error: ${error.message} | Token length: ${token?.length} | First 20 chars: ${token?.substring(0, 20)}`);
     return res.status(403).json({ error: 'Invalid or expired token' });
   }
 }

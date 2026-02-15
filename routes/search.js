@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const https = require('https');
 const { authenticateToken } = require('../middleware/auth');
 const { getSearchCriteria, updateSearchCriteria } = require('../services/zurg-search');
 const { db } = require('../db/init');
@@ -7,18 +8,62 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
-// Simple in-memory cache (5 minute TTL for search, 1 hour for trending)
+// Shared TMDB axios instance with keep-alive (reuses TCP/TLS connections)
+const TMDB_TIMEOUT = 10000;
+const tmdbApiKey = process.env.TMDB_API_KEY;
+const tmdb = axios.create({
+  baseURL: 'https://api.themoviedb.org/3',
+  timeout: TMDB_TIMEOUT,
+  httpsAgent: new https.Agent({ keepAlive: true, maxSockets: 15 }),
+  params: { api_key: tmdbApiKey }
+});
+
+// Cache TTLs
 const cache = new Map();
-const CACHE_TTL = 5 * 60 * 1000;
-const TRENDING_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const SEARCH_CACHE_TTL = 5 * 60 * 1000;       // 5 min — text search (user-specific queries)
+const BROWSE_CACHE_TTL = 15 * 60 * 1000;       // 15 min — discover, now-playing, upcoming, etc.
+const TRENDING_CACHE_TTL = 60 * 60 * 1000;     // 1 hour — trending, popular, top-rated, genres, providers
+
+// Request coalescing: prevents thundering herd when multiple users hit the same uncached endpoint
+const pendingRequests = new Map();
+
+/**
+ * Get cached data or fetch with request coalescing.
+ * If multiple callers request the same cacheKey simultaneously,
+ * only one TMDB call is made and the result is shared.
+ */
+async function cachedFetch(cacheKey, ttl, fetchFn) {
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < ttl) {
+    return cached.data;
+  }
+
+  // If there's already an in-flight request for this key, piggyback on it
+  if (pendingRequests.has(cacheKey)) {
+    return pendingRequests.get(cacheKey);
+  }
+
+  const promise = fetchFn()
+    .then(data => {
+      cache.set(cacheKey, { data, timestamp: Date.now() });
+      return data;
+    })
+    .finally(() => pendingRequests.delete(cacheKey));
+
+  pendingRequests.set(cacheKey, promise);
+  return promise;
+}
 
 // Evict expired cache entries every 10 minutes to prevent unbounded growth
 setInterval(() => {
   const now = Date.now();
   let evicted = 0;
   for (const [key, entry] of cache.entries()) {
-    const ttl = key.startsWith('search_') || key.startsWith('discover_') || key.startsWith('now_playing') || key.startsWith('upcoming') || key.startsWith('airing_today') || key.startsWith('season_') || key.startsWith('details_')
-      ? CACHE_TTL : TRENDING_CACHE_TTL;
+    const ttl = key.startsWith('search_') || key.startsWith('season_') || key.startsWith('details_')
+      ? SEARCH_CACHE_TTL
+      : key.startsWith('discover_') || key.startsWith('now_playing') || key.startsWith('upcoming') || key.startsWith('airing_today') || key.startsWith('on_the_air')
+        ? BROWSE_CACHE_TTL
+        : TRENDING_CACHE_TTL;
     if (now - entry.timestamp > ttl) {
       cache.delete(key);
       evicted++;
@@ -27,85 +72,44 @@ setInterval(() => {
   if (evicted > 0) logger.info(`[Cache] Evicted ${evicted} expired entries, ${cache.size} remaining`);
 }, 10 * 60 * 1000);
 
-// Timeout for all TMDB API calls — fail fast instead of hanging 90s on stalled connections
-const TMDB_TIMEOUT = 10000;
-
 // Minimum user reviews to surface content (filters obscure/placeholder entries)
 const MIN_VOTES = 60;
 
 
 router.get('/tmdb/trending', async (req, res) => {
   try {
-  console.log("[TRENDING] Request received:", req.query);
     const { type = 'all', timeWindow = 'week', allLanguages } = req.query;
     const showAllLanguages = allLanguages === 'true';
 
-    // Validate type parameter
     const validTypes = ['movie', 'tv', 'all'];
     if (!validTypes.includes(type)) {
-      return res.status(400).json({
-        error: 'Invalid type parameter. Must be one of: movie, tv, all'
-      });
+      return res.status(400).json({ error: 'Invalid type parameter. Must be one of: movie, tv, all' });
     }
 
-    // Validate timeWindow parameter
-    const validTimeWindows = ['week'];
-    if (!validTimeWindows.includes(timeWindow)) {
-      return res.status(400).json({
-        error: 'Invalid timeWindow parameter. Must be: week'
-      });
-    }
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
-    // Check cache first (1 hour TTL)
     const cacheKey = `trending_${type}_${timeWindow}_${showAllLanguages}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
-      return res.json(cached.data);
-    }
-
-    // Call TMDB trending API
-    const url = `https://api.themoviedb.org/3/trending/${type}/${timeWindow}`;
-
-    const response = await axios.get(url, {
-      params: {
-        api_key: tmdbApiKey
-      },
-      timeout: TMDB_TIMEOUT
+    const data = await cachedFetch(cacheKey, TRENDING_CACHE_TTL, async () => {
+      const response = await tmdb.get(`/trending/${type}/${timeWindow}`);
+      const results = response.data.results
+        .filter(item => {
+          const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
+          const isRated = item.vote_average && item.vote_average > 0;
+          const hasVotes = (item.vote_count || 0) >= MIN_VOTES;
+          const langOk = showAllLanguages || item.original_language === 'en';
+          return hasPoster && isRated && hasVotes && langOk;
+        })
+        .map(item => ({
+          id: item.id,
+          title: item.title || item.name,
+          year: (item.release_date || item.first_air_date || '').substring(0, 4),
+          posterPath: item.poster_path,
+          overview: item.overview,
+          voteAverage: item.vote_average,
+          mediaType: item.media_type || type
+        }));
+      return { results };
     });
 
-    // Format results consistently with search endpoint
-    const results = response.data.results
-      .filter(item => {
-        const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
-        const isRated = item.vote_average && item.vote_average > 0;
-        const hasVotes = (item.vote_count || 0) >= MIN_VOTES;
-        const langOk = showAllLanguages || item.original_language === 'en';
-        return hasPoster && isRated && hasVotes && langOk;
-      })
-      .map(item => ({
-        id: item.id,
-        title: item.title || item.name,
-        year: (item.release_date || item.first_air_date || '').substring(0, 4),
-        posterPath: item.poster_path,
-        overview: item.overview,
-        voteAverage: item.vote_average,
-        mediaType: item.media_type || type
-      }));
-
-    const responseData = { results };
-
-    // Cache the result (1 hour)
-    cache.set(cacheKey, {
-      data: responseData,
-      timestamp: Date.now()
-    });
-
-    res.json(responseData);
+    res.json(data);
   } catch (error) {
     logger.error('TMDB trending error:', error);
     res.status(500).json({ error: 'Failed to fetch trending content' });
@@ -140,47 +144,36 @@ function formatResults(results, { englishOnly = true } = {}) {
 }
 
 /**
+ * Helper: Build paginated response from TMDB response
+ */
+function paginatedResponse(response, formatOpts) {
+  const results = formatResults(response.data.results, formatOpts);
+  return {
+    results,
+    page: response.data.page,
+    totalPages: response.data.total_pages,
+    total_pages: response.data.total_pages,
+    totalResults: response.data.total_results,
+    total_results: response.data.total_results,
+    hasMore: response.data.page < response.data.total_pages
+  };
+}
+
+/**
  * GET /api/search/collections/popular
- * Get popular movies and TV shows
  */
 router.get('/collections/popular', async (req, res) => {
   try {
     const { type = 'movie', page = 1, allLanguages } = req.query;
     const contentType = type === 'tv' ? 'tv' : 'movie';
     const showAllLanguages = allLanguages === 'true';
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
     const cacheKey = `popular_${contentType}_${page}_${showAllLanguages}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    const response = await axios.get(`https://api.themoviedb.org/3/${contentType}/popular`, {
-      params: {
-        api_key: tmdbApiKey,
-        page
-      },
-      timeout: TMDB_TIMEOUT
+    const data = await cachedFetch(cacheKey, TRENDING_CACHE_TTL, async () => {
+      const response = await tmdb.get(`/${contentType}/popular`, { params: { page } });
+      return paginatedResponse(response, { englishOnly: !showAllLanguages });
     });
-
-    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
-    const responseData = {
-      results,
-      page: response.data.page,
-      totalPages: response.data.total_pages,
-      total_pages: response.data.total_pages,
-      totalResults: response.data.total_results,
-      total_results: response.data.total_results,
-      hasMore: response.data.page < response.data.total_pages
-    };
-
-    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
-    res.json(responseData);
+    res.json(data);
   } catch (error) {
     logger.error('Popular collection error:', error);
     res.status(500).json({ error: 'Failed to fetch popular content' });
@@ -189,46 +182,19 @@ router.get('/collections/popular', async (req, res) => {
 
 /**
  * GET /api/search/collections/top-rated
- * Get top rated movies and TV shows
  */
 router.get('/collections/top-rated', async (req, res) => {
   try {
     const { type = 'movie', page = 1, allLanguages } = req.query;
     const contentType = type === 'tv' ? 'tv' : 'movie';
     const showAllLanguages = allLanguages === 'true';
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
     const cacheKey = `top_rated_${contentType}_${page}_${showAllLanguages}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    const response = await axios.get(`https://api.themoviedb.org/3/${contentType}/top_rated`, {
-      params: {
-        api_key: tmdbApiKey,
-        page
-      },
-      timeout: TMDB_TIMEOUT
+    const data = await cachedFetch(cacheKey, TRENDING_CACHE_TTL, async () => {
+      const response = await tmdb.get(`/${contentType}/top_rated`, { params: { page } });
+      return paginatedResponse(response, { englishOnly: !showAllLanguages });
     });
-
-    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
-    const responseData = {
-      results,
-      page: response.data.page,
-      totalPages: response.data.total_pages,
-      total_pages: response.data.total_pages,
-      totalResults: response.data.total_results,
-      total_results: response.data.total_results,
-      hasMore: response.data.page < response.data.total_pages
-    };
-
-    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
-    res.json(responseData);
+    res.json(data);
   } catch (error) {
     logger.error('Top rated collection error:', error);
     res.status(500).json({ error: 'Failed to fetch top rated content' });
@@ -237,45 +203,18 @@ router.get('/collections/top-rated', async (req, res) => {
 
 /**
  * GET /api/search/collections/now-playing
- * Get movies currently in theaters
  */
 router.get('/collections/now-playing', async (req, res) => {
   try {
     const { page = 1, allLanguages } = req.query;
     const showAllLanguages = allLanguages === 'true';
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
     const cacheKey = `now_playing_${page}_${showAllLanguages}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    const response = await axios.get('https://api.themoviedb.org/3/movie/now_playing', {
-      params: {
-        api_key: tmdbApiKey,
-        page
-      },
-      timeout: TMDB_TIMEOUT
+    const data = await cachedFetch(cacheKey, BROWSE_CACHE_TTL, async () => {
+      const response = await tmdb.get('/movie/now_playing', { params: { page } });
+      return paginatedResponse(response, { englishOnly: !showAllLanguages });
     });
-
-    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
-    const responseData = {
-      results,
-      page: response.data.page,
-      totalPages: response.data.total_pages,
-      total_pages: response.data.total_pages,
-      totalResults: response.data.total_results,
-      total_results: response.data.total_results,
-      hasMore: response.data.page < response.data.total_pages
-    };
-
-    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
-    res.json(responseData);
+    res.json(data);
   } catch (error) {
     logger.error('Now playing collection error:', error);
     res.status(500).json({ error: 'Failed to fetch now playing movies' });
@@ -284,45 +223,18 @@ router.get('/collections/now-playing', async (req, res) => {
 
 /**
  * GET /api/search/collections/upcoming
- * Get upcoming movies
  */
 router.get('/collections/upcoming', async (req, res) => {
   try {
     const { page = 1, allLanguages } = req.query;
     const showAllLanguages = allLanguages === 'true';
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
     const cacheKey = `upcoming_${page}_${showAllLanguages}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    const response = await axios.get('https://api.themoviedb.org/3/movie/upcoming', {
-      params: {
-        api_key: tmdbApiKey,
-        page
-      },
-      timeout: TMDB_TIMEOUT
+    const data = await cachedFetch(cacheKey, BROWSE_CACHE_TTL, async () => {
+      const response = await tmdb.get('/movie/upcoming', { params: { page } });
+      return paginatedResponse(response, { englishOnly: !showAllLanguages });
     });
-
-    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
-    const responseData = {
-      results,
-      page: response.data.page,
-      totalPages: response.data.total_pages,
-      total_pages: response.data.total_pages,
-      totalResults: response.data.total_results,
-      total_results: response.data.total_results,
-      hasMore: response.data.page < response.data.total_pages
-    };
-
-    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
-    res.json(responseData);
+    res.json(data);
   } catch (error) {
     logger.error('Upcoming collection error:', error);
     res.status(500).json({ error: 'Failed to fetch upcoming movies' });
@@ -331,45 +243,18 @@ router.get('/collections/upcoming', async (req, res) => {
 
 /**
  * GET /api/search/collections/airing-today
- * Get TV shows airing today
  */
 router.get('/collections/airing-today', async (req, res) => {
   try {
     const { page = 1, allLanguages } = req.query;
     const showAllLanguages = allLanguages === 'true';
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
     const cacheKey = `airing_today_${page}_${showAllLanguages}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    const response = await axios.get('https://api.themoviedb.org/3/tv/airing_today', {
-      params: {
-        api_key: tmdbApiKey,
-        page
-      },
-      timeout: TMDB_TIMEOUT
+    const data = await cachedFetch(cacheKey, BROWSE_CACHE_TTL, async () => {
+      const response = await tmdb.get('/tv/airing_today', { params: { page } });
+      return paginatedResponse(response, { englishOnly: !showAllLanguages });
     });
-
-    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
-    const responseData = {
-      results,
-      page: response.data.page,
-      totalPages: response.data.total_pages,
-      total_pages: response.data.total_pages,
-      totalResults: response.data.total_results,
-      total_results: response.data.total_results,
-      hasMore: response.data.page < response.data.total_pages
-    };
-
-    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
-    res.json(responseData);
+    res.json(data);
   } catch (error) {
     logger.error('Airing today collection error:', error);
     res.status(500).json({ error: 'Failed to fetch airing today shows' });
@@ -378,45 +263,18 @@ router.get('/collections/airing-today', async (req, res) => {
 
 /**
  * GET /api/search/collections/on-the-air
- * Get TV shows currently on the air
  */
 router.get('/collections/on-the-air', async (req, res) => {
   try {
     const { page = 1, allLanguages } = req.query;
     const showAllLanguages = allLanguages === 'true';
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
     const cacheKey = `on_the_air_${page}_${showAllLanguages}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    const response = await axios.get('https://api.themoviedb.org/3/tv/on_the_air', {
-      params: {
-        api_key: tmdbApiKey,
-        page
-      },
-      timeout: TMDB_TIMEOUT
+    const data = await cachedFetch(cacheKey, BROWSE_CACHE_TTL, async () => {
+      const response = await tmdb.get('/tv/on_the_air', { params: { page } });
+      return paginatedResponse(response, { englishOnly: !showAllLanguages });
     });
-
-    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
-    const responseData = {
-      results,
-      page: response.data.page,
-      totalPages: response.data.total_pages,
-      total_pages: response.data.total_pages,
-      totalResults: response.data.total_results,
-      total_results: response.data.total_results,
-      hasMore: response.data.page < response.data.total_pages
-    };
-
-    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
-    res.json(responseData);
+    res.json(data);
   } catch (error) {
     logger.error('On the air collection error:', error);
     res.status(500).json({ error: 'Failed to fetch on the air shows' });
@@ -431,121 +289,52 @@ router.get('/collections/on-the-air', async (req, res) => {
 router.get('/collections/discover', async (req, res) => {
   try {
     const {
-      type = 'movie',
-      page = 1,
-      genre,
-      year,
-      minYear,
-      maxYear,
-      minRating,
-      maxRating,
-      minRuntime,
-      maxRuntime,
-      language,
-      allLanguages,
-      sortBy = 'popularity.desc',
-      watchProvider,
-      network,
-      watchRegion = 'US'
+      type = 'movie', page = 1, genre, year, minYear, maxYear,
+      minRating, maxRating, minRuntime, maxRuntime, language,
+      allLanguages, sortBy = 'popularity.desc', watchProvider,
+      network, watchRegion = 'US'
     } = req.query;
 
     const contentType = type === 'tv' ? 'tv' : 'movie';
     const showAllLanguages = allLanguages === 'true';
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
-    // Build cache key from all params
     const cacheKey = `discover_${contentType}_${JSON.stringify(req.query)}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    // Build query params
-    const params = {
-      api_key: tmdbApiKey,
-      page,
-      sort_by: sortBy,
-      'vote_count.gte': MIN_VOTES
-    };
+    const data = await cachedFetch(cacheKey, BROWSE_CACHE_TTL, async () => {
+      const params = { page, sort_by: sortBy, 'vote_count.gte': MIN_VOTES };
 
-    if (genre) params.with_genres = genre;
-    if (year) {
-      if (contentType === 'movie') {
-        params.primary_release_year = year;
-      } else {
-        params.first_air_date_year = year;
+      if (genre) params.with_genres = genre;
+      if (year) {
+        params[contentType === 'movie' ? 'primary_release_year' : 'first_air_date_year'] = year;
       }
-    }
-    if (minYear) {
-      if (contentType === 'movie') {
-        params['primary_release_date.gte'] = `${minYear}-01-01`;
-      } else {
-        params['first_air_date.gte'] = `${minYear}-01-01`;
+      if (minYear) {
+        params[contentType === 'movie' ? 'primary_release_date.gte' : 'first_air_date.gte'] = `${minYear}-01-01`;
       }
-    }
-    if (maxYear) {
-      if (contentType === 'movie') {
-        params['primary_release_date.lte'] = `${maxYear}-12-31`;
-      } else {
-        params['first_air_date.lte'] = `${maxYear}-12-31`;
+      if (maxYear) {
+        params[contentType === 'movie' ? 'primary_release_date.lte' : 'first_air_date.lte'] = `${maxYear}-12-31`;
       }
-    }
-    if (minRating) params['vote_average.gte'] = minRating;
-    if (maxRating) params['vote_average.lte'] = maxRating;
-    if (minRuntime) params['with_runtime.gte'] = minRuntime;
-    if (maxRuntime) params['with_runtime.lte'] = maxRuntime;
-    // Language filter: explicit language param > allLanguages toggle > default English
-    if (language) {
-      params.with_original_language = language;
-    } else if (!showAllLanguages) {
-      params.with_original_language = 'en';
-    }
+      if (minRating) params['vote_average.gte'] = minRating;
+      if (maxRating) params['vote_average.lte'] = maxRating;
+      if (minRuntime) params['with_runtime.gte'] = minRuntime;
+      if (maxRuntime) params['with_runtime.lte'] = maxRuntime;
+      if (language) {
+        params.with_original_language = language;
+      } else if (!showAllLanguages) {
+        params.with_original_language = 'en';
+      }
+      if (watchProvider) {
+        params.with_watch_providers = watchProvider;
+        params.watch_region = watchRegion;
+      }
+      if (network && contentType === 'tv') {
+        params.with_networks = network;
+      }
 
-    // Streaming provider filter (Netflix, HBO Max, Disney+, etc.)
-    if (watchProvider) {
-      params.with_watch_providers = watchProvider;
-      params.watch_region = watchRegion;
-    }
-
-    // Network filter (for TV shows - HBO, AMC, Netflix Originals, etc.)
-    if (network && contentType === 'tv') {
-      params.with_networks = network;
-    }
-
-    const response = await axios.get(`https://api.themoviedb.org/3/discover/${contentType}`, {
-      params,
-      timeout: TMDB_TIMEOUT
+      const response = await tmdb.get(`/discover/${contentType}`, { params });
+      const result = paginatedResponse(response, { englishOnly: false });
+      result.filters = { genre, year, minRating, maxRating, language, sortBy, watchProvider, network, watchRegion };
+      return result;
     });
-
-    // Language already filtered at TMDB API level for discover
-    const results = formatResults(response.data.results, { englishOnly: false });
-    const responseData = {
-      results,
-      page: response.data.page,
-      totalPages: response.data.total_pages,
-      total_pages: response.data.total_pages,
-      totalResults: response.data.total_results,
-      total_results: response.data.total_results,
-      hasMore: response.data.page < response.data.total_pages,
-      filters: {
-        genre,
-        year,
-        minRating,
-        maxRating,
-        language,
-        sortBy,
-        watchProvider,
-        network,
-        watchRegion
-      }
-    };
-
-    cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
-    res.json(responseData);
+    res.json(data);
   } catch (error) {
     logger.error('Discover collection error:', error);
     res.status(500).json({ error: 'Failed to discover content' });
@@ -560,24 +349,15 @@ router.get('/collections/providers', async (req, res) => {
   try {
     const { type = 'movie', region = 'US' } = req.query;
     const contentType = type === 'tv' ? 'tv' : 'movie';
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
     const cacheKey = `providers_${contentType}_${region}`;
+
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
       return res.json(cached.data);
     }
 
-    const response = await axios.get(`https://api.themoviedb.org/3/watch/providers/${contentType}`, {
-      params: {
-        api_key: tmdbApiKey,
-        watch_region: region
-      },
-      timeout: TMDB_TIMEOUT
+    const response = await tmdb.get(`/watch/providers/${contentType}`, {
+      params: { watch_region: region }
     });
 
     // Format providers from TMDB
@@ -634,11 +414,6 @@ router.get('/collections/providers', async (req, res) => {
  */
 router.get('/collections/networks', async (req, res) => {
   try {
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
     // TMDB doesn't have a networks list endpoint, so we provide common ones
     // These are the most popular TV networks/streaming originals
     const networks = [
@@ -682,27 +457,13 @@ router.get('/collections/genres', async (req, res) => {
   try {
     const { type = 'movie' } = req.query;
     const contentType = type === 'tv' ? 'tv' : 'movie';
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
     const cacheKey = `genres_${contentType}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    const response = await axios.get(`https://api.themoviedb.org/3/genre/${contentType}/list`, {
-      params: {
-        api_key: tmdbApiKey
-      },
-      timeout: TMDB_TIMEOUT
+    const data = await cachedFetch(cacheKey, TRENDING_CACHE_TTL, async () => {
+      const response = await tmdb.get(`/genre/${contentType}/list`);
+      return response.data;
     });
-
-    cache.set(cacheKey, { data: response.data, timestamp: Date.now() });
-    res.json(response.data);
+    res.json(data);
   } catch (error) {
     logger.error('Genres list error:', error);
     res.status(500).json({ error: 'Failed to fetch genres' });
@@ -787,81 +548,46 @@ router.get('/tmdb', async (req, res) => {
       return res.status(400).json({ error: 'Query parameter required' });
     }
 
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
-    // Check cache first
-    const cacheKey = `search_${type}_${query}_${showAllLanguages}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return res.json(cached.data);
-    }
-
     const searchType = type === 'tv' ? 'tv' : type === 'movie' ? 'movie' : 'multi';
-    const url = `https://api.themoviedb.org/3/search/${searchType}`;
+    const cacheKey = `search_${type}_${query}_${showAllLanguages}`;
 
-    const response = await axios.get(url, {
-      params: {
-        api_key: tmdbApiKey,
-        query,
-        include_adult: false
-      },
-      timeout: TMDB_TIMEOUT
-    });
-
-    const results = response.data.results
-      .filter(item => {
-        const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
-        const isRated = item.vote_average && item.vote_average > 0;
-        const hasVotes = (item.vote_count || 0) >= MIN_VOTES;
-        const langOk = showAllLanguages || item.original_language === 'en';
-        return hasPoster && isRated && hasVotes && langOk;
-      })
-      .map(item => {
-        const title = item.title || item.name;
-        const relevanceScore = calculateRelevanceScore(title, query);
-
-        return {
-          id: item.id,
-          title,
-          year: (item.release_date || item.first_air_date || '').substring(0, 4),
-          posterPath: item.poster_path,
-          overview: item.overview,
-          voteAverage: item.vote_average,
-          mediaType: item.media_type || searchType,
-          relevanceScore, // Add relevance score to each result
-          // Popularity bonus: rating * reviews (helps surface well-known content)
-          popularityBonus: Math.log10((item.vote_count || 1) + 1) * (item.vote_average || 0)
-        };
-      })
-      .sort((a, b) => {
-        // Primary sort: Relevance score
-        const relevanceDiff = b.relevanceScore - a.relevanceScore;
-        if (Math.abs(relevanceDiff) > 50) {
-          return relevanceDiff;
-        }
-
-        // Secondary sort: Popularity (for items with similar relevance)
-        const popularityDiff = b.popularityBonus - a.popularityBonus;
-        if (Math.abs(popularityDiff) > 5) {
-          return popularityDiff;
-        }
-
-        // Tertiary sort: Rating
-        return (b.voteAverage || 0) - (a.voteAverage || 0);
+    const data = await cachedFetch(cacheKey, SEARCH_CACHE_TTL, async () => {
+      const response = await tmdb.get(`/search/${searchType}`, {
+        params: { query, include_adult: false }
       });
 
-    const responseData = { results };
+      const results = response.data.results
+        .filter(item => {
+          const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
+          const isRated = item.vote_average && item.vote_average > 0;
+          const hasVotes = (item.vote_count || 0) >= MIN_VOTES;
+          const langOk = showAllLanguages || item.original_language === 'en';
+          return hasPoster && isRated && hasVotes && langOk;
+        })
+        .map(item => {
+          const title = item.title || item.name;
+          const relevanceScore = calculateRelevanceScore(title, query);
+          return {
+            id: item.id, title,
+            year: (item.release_date || item.first_air_date || '').substring(0, 4),
+            posterPath: item.poster_path, overview: item.overview,
+            voteAverage: item.vote_average, mediaType: item.media_type || searchType,
+            relevanceScore,
+            popularityBonus: Math.log10((item.vote_count || 1) + 1) * (item.vote_average || 0)
+          };
+        })
+        .sort((a, b) => {
+          const relevanceDiff = b.relevanceScore - a.relevanceScore;
+          if (Math.abs(relevanceDiff) > 50) return relevanceDiff;
+          const popularityDiff = b.popularityBonus - a.popularityBonus;
+          if (Math.abs(popularityDiff) > 5) return popularityDiff;
+          return (b.voteAverage || 0) - (a.voteAverage || 0);
+        });
 
-    // Cache the result
-    cache.set(cacheKey, {
-      data: responseData,
-      timestamp: Date.now()
+      return { results };
     });
 
-    res.json(responseData);
+    res.json(data);
   } catch (error) {
     logger.error('TMDB search error:', error);
     res.status(500).json({ error: 'Search failed' });
@@ -915,28 +641,18 @@ router.get('/tmdb/:id', async (req, res) => {
       return res.status(400).json({ error: 'ID parameter required' });
     }
 
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
-    // Check cache first
     const contentType = type === 'tv' ? 'tv' : 'movie';
     const cacheKey = `details_${contentType}_${id}`;
     const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL) {
       return res.json(cached.data);
     }
 
-    const url = `https://api.themoviedb.org/3/${contentType}/${id}`;
-
-    const response = await axios.get(url, {
+    const response = await tmdb.get(`/${contentType}/${id}`, {
       params: {
-        api_key: tmdbApiKey,
         append_to_response: type === 'tv' ? 'credits,videos,external_ids,seasons,images' : 'credits,videos,external_ids,images',
-        include_image_language: 'en,null' // Only English and language-neutral images
-      },
-      timeout: TMDB_TIMEOUT
+        include_image_language: 'en,null'
+      }
     });
 
     const data = response.data;
@@ -1004,43 +720,16 @@ router.get('/tmdb/:id', async (req, res) => {
 router.get('/person/:personId', async (req, res) => {
   try {
     const { personId } = req.params;
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
-    // Check cache first
     const cacheKey = `person_${personId}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    // Fetch person details
-    const url = `https://api.themoviedb.org/3/person/${personId}`;
-    const response = await axios.get(url, {
-      params: {
-        api_key: tmdbApiKey
-      },
-      timeout: TMDB_TIMEOUT
-    });
-
-    const data = response.data;
-    const result = {
-      id: data.id,
-      name: data.name,
-      biography: data.biography,
-      birthday: data.birthday,
-      placeOfBirth: data.place_of_birth,
-      profilePath: data.profile_path,
-      knownForDepartment: data.known_for_department
-    };
-
-    // Cache the result (1 hour)
-    cache.set(cacheKey, {
-      data: result,
-      timestamp: Date.now()
+    const result = await cachedFetch(cacheKey, TRENDING_CACHE_TTL, async () => {
+      const response = await tmdb.get(`/person/${personId}`);
+      const data = response.data;
+      return {
+        id: data.id, name: data.name, biography: data.biography,
+        birthday: data.birthday, placeOfBirth: data.place_of_birth,
+        profilePath: data.profile_path, knownForDepartment: data.known_for_department
+      };
     });
 
     res.json(result);
@@ -1061,26 +750,13 @@ router.get('/person/:personId/credits', async (req, res) => {
     const { allLanguages } = req.query;
     const showAllLanguages = allLanguages === 'true';
 
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
-    // Check cache first (1 hour TTL for person credits)
     const cacheKey = `person_credits_${personId}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
       return res.json(cached.data);
     }
 
-    // Fetch combined credits from TMDB
-    const url = `https://api.themoviedb.org/3/person/${personId}/combined_credits`;
-    const response = await axios.get(url, {
-      params: {
-        api_key: tmdbApiKey
-      },
-      timeout: TMDB_TIMEOUT
-    });
+    const response = await tmdb.get(`/person/${personId}/combined_credits`);
 
     const now = new Date();
     const currentYear = now.getFullYear();
@@ -1159,35 +835,14 @@ router.get('/person/:personId/credits', async (req, res) => {
 router.get('/tmdb/season/:showId/:seasonNumber', async (req, res) => {
   try {
     const { showId, seasonNumber } = req.params;
-
-    const tmdbApiKey = process.env.TMDB_API_KEY;
-    if (!tmdbApiKey) {
-      return res.status(500).json({ error: 'TMDB API key not configured' });
-    }
-
-    // Check cache first
     const cacheKey = `season_${showId}_${seasonNumber}`;
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-      return res.json(cached.data);
-    }
 
-    const url = `https://api.themoviedb.org/3/tv/${showId}/season/${seasonNumber}`;
-
-    const response = await axios.get(url, {
-      params: {
-        api_key: tmdbApiKey
-      },
-      timeout: TMDB_TIMEOUT
+    const data = await cachedFetch(cacheKey, SEARCH_CACHE_TTL, async () => {
+      const response = await tmdb.get(`/tv/${showId}/season/${seasonNumber}`);
+      return response.data;
     });
 
-    // Cache the result
-    cache.set(cacheKey, {
-      data: response.data,
-      timestamp: Date.now()
-    });
-
-    res.json(response.data);
+    res.json(data);
   } catch (error) {
     logger.error('TMDB season error:', error);
     res.status(500).json({ error: 'Failed to fetch season details' });

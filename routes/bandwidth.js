@@ -10,8 +10,8 @@ const router = express.Router();
 const LEGACY_PAYLOAD_SIZE = 25 * 1024 * 1024;
 const legacyPayload = crypto.randomBytes(LEGACY_PAYLOAD_SIZE);
 
-// Streaming test: reusable 1MB chunk written repeatedly
-const STREAM_CHUNK_SIZE = 1024 * 1024;
+// Streaming test: reusable 64KB chunk — small enough to flush through nginx
+const STREAM_CHUNK_SIZE = 64 * 1024;
 const streamChunk = crypto.randomBytes(STREAM_CHUNK_SIZE);
 
 // Default/max streaming duration
@@ -61,32 +61,44 @@ router.get('/test-stream', authenticateToken, (req, res) => {
     'Content-Type': 'application/octet-stream',
     'Cache-Control': 'no-store',
     'Transfer-Encoding': 'chunked',
+    'X-Accel-Buffering': 'no', // Tell nginx not to buffer this response
     'X-Test-Duration-Seconds': durationS
   });
+  res.flushHeaders();
 
   const startTime = Date.now();
   const endTime = startTime + (durationS * 1000);
   let totalBytes = 0;
+  let stopped = false;
+
+  function stop(reason) {
+    if (stopped) return;
+    stopped = true;
+    if (!res.writableEnded) res.end();
+    logger.info(`Bandwidth test ${reason}: ${Math.round(totalBytes / (1024 * 1024))}MB in ${((Date.now() - startTime) / 1000).toFixed(1)}s to ${req.user.username}`);
+  }
+
+  // Server-side timeout — if drain never fires, don't hang forever
+  const safetyTimeout = setTimeout(() => stop('timed out'), (durationS + 5) * 1000);
 
   function writeChunks() {
-    // Write as fast as the client can consume until time's up
-    while (Date.now() < endTime) {
+    while (!stopped && Date.now() < endTime) {
       const ok = res.write(streamChunk);
       totalBytes += STREAM_CHUNK_SIZE;
       if (!ok) {
-        // Backpressure: wait for drain then continue
         res.once('drain', writeChunks);
         return;
       }
     }
-    // Time's up
-    res.end();
-    logger.info(`Bandwidth test streamed ${Math.round(totalBytes / (1024 * 1024))}MB in ${durationS}s to ${req.user.username}`);
+    if (!stopped) {
+      clearTimeout(safetyTimeout);
+      stop('completed');
+    }
   }
 
-  // Handle client disconnect
   req.on('close', () => {
-    // Client disconnected early — that's fine
+    clearTimeout(safetyTimeout);
+    stop('client disconnected');
   });
 
   writeChunks();

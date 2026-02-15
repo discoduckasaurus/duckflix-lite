@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const fs = require('fs');
+const { pipeline } = require('stream');
 const { authenticateToken } = require('../middleware/auth');
 const liveTVService = require('../services/livetv-service');
 const { getNTVStreamUrl, NTV_DOMAINS } = require('../services/ntv-service');
@@ -8,6 +9,10 @@ const dftvService = require('../services/dftv-service');
 const logger = require('../utils/logger');
 
 const router = express.Router();
+
+// NTV resolved URL cache: ntvChannelId -> { url, resolvedAt }
+const ntvUrlCache = new Map();
+const NTV_URL_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Get a human-readable label for a stream URL (used for logging).
@@ -282,7 +287,13 @@ router.get('/stream/:channelId', async (req, res) => {
         channelSegmentActivity.set(channelId, activity);
 
         res.set('Content-Type', 'video/mp2t');
-        return fs.createReadStream(segPath).pipe(res);
+        const segStream = fs.createReadStream(segPath);
+        segStream.on('error', (err) => {
+          logger.debug(`[DFTV] Segment read error: ${err.message}`);
+          if (!res.headersSent) res.status(404).json({ error: 'Segment read failed' });
+          else res.destroy();
+        });
+        return segStream.pipe(res);
       }
 
       // Manifest request
@@ -304,6 +315,7 @@ router.get('/stream/:channelId', async (req, res) => {
         }).join('\n');
 
         res.set('Content-Type', 'application/vnd.apple.mpegurl');
+        res.set('Cache-Control', 'no-cache, no-store');
         return res.send(rewritten);
       } catch (err) {
         logger.error(`[DFTV] Manifest error: ${err.message}`);
@@ -325,6 +337,7 @@ router.get('/stream/:channelId', async (req, res) => {
           // Sub-playlist — fetch as text, rewrite URLs, serve as manifest
           const rewritten = await fetchAndRewriteManifest(targetUrl, channelId);
           res.set('Content-Type', 'application/vnd.apple.mpegurl');
+          res.set('Cache-Control', 'no-cache, no-store');
           return res.send(rewritten);
         }
 
@@ -341,11 +354,14 @@ router.get('/stream/:channelId', async (req, res) => {
           res.set('Content-Length', response.headers['content-length']);
         }
 
-        response.data.pipe(res);
+        // Destroy upstream connection if client disconnects mid-stream
+        res.on('close', () => response.data.destroy());
 
-        // Clean up upstream stream on client disconnect to prevent leaked connections
-        res.on('close', () => {
-          if (!response.data.destroyed) response.data.destroy();
+        // pipeline handles errors, cleanup, and backpressure automatically
+        pipeline(response.data, res, (err) => {
+          if (err && err.code !== 'ERR_STREAM_PREMATURE_CLOSE') {
+            logger.debug(`[LiveTV] Segment pipeline error for ${channelId}: ${err.message}`);
+          }
         });
 
         // Track segment activity (for manifest-only loop detection)
@@ -459,22 +475,27 @@ router.get('/stream/:channelId', async (req, res) => {
       }
 
       try {
-        // Resolve NTV marker URLs on-demand (tokens are ephemeral)
+        // Resolve NTV marker URLs on-demand (tokens are ephemeral, cached for 5 min)
         if (streamUrl.startsWith('ntv://')) {
           const ntvChannelId = streamUrl.substring(6);
-          const ntvMap = liveTVService.getNTVStreamMap ? liveTVService.getNTVStreamMap() : {};
-          // Find the NTV channel data from the stream map by matching channel_id
-          let ntvChannel = null;
-          for (const [, data] of Object.entries(ntvMap)) {
-            if (data.channel_id === ntvChannelId) {
-              ntvChannel = data;
-              break;
+          const cachedNtv = ntvUrlCache.get(ntvChannelId);
+          if (cachedNtv && (Date.now() - cachedNtv.resolvedAt) < NTV_URL_CACHE_TTL) {
+            streamUrl = cachedNtv.url;
+          } else {
+            const ntvMap = liveTVService.getNTVStreamMap ? liveTVService.getNTVStreamMap() : {};
+            let ntvChannel = null;
+            for (const [, data] of Object.entries(ntvMap)) {
+              if (data.channel_id === ntvChannelId) {
+                ntvChannel = data;
+                break;
+              }
             }
+            if (!ntvChannel) {
+              throw new Error(`NTV channel ${ntvChannelId} not found in stream map`);
+            }
+            streamUrl = await getNTVStreamUrl(ntvChannel);
+            ntvUrlCache.set(ntvChannelId, { url: streamUrl, resolvedAt: Date.now() });
           }
-          if (!ntvChannel) {
-            throw new Error(`NTV channel ${ntvChannelId} not found in stream map`);
-          }
-          streamUrl = await getNTVStreamUrl(ntvChannel);
         }
 
         let rewritten;
@@ -505,8 +526,14 @@ router.get('/stream/:channelId', async (req, res) => {
         channelActiveSource.set(channelId, { urlIndex: i, failCount: 0, failedAt: i > 0 ? Date.now() : undefined });
 
         res.set('Content-Type', 'application/vnd.apple.mpegurl');
+        res.set('Cache-Control', 'no-cache, no-store');
         return res.send(rewritten);
       } catch (error) {
+        // Clear NTV cache on failure so next attempt re-resolves
+        if (streamUrls[i].startsWith('ntv://')) {
+          ntvUrlCache.delete(streamUrls[i].substring(6));
+        }
+
         // Record failure in circuit breaker
         const cs = sourceFailures.get(circuitKey) || { count: 0, lastFailAt: 0 };
         cs.count++;
@@ -656,6 +683,42 @@ router.post('/dvr/recordings/schedule', (req, res) => {
     message: 'This feature will be available in Phase 5'
   });
 });
+
+// Prune stale entries from Live TV state Maps every 10 minutes
+const PRUNE_INTERVAL_MS = 10 * 60 * 1000;
+const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+
+setInterval(() => {
+  const now = Date.now();
+  let pruned = 0;
+
+  for (const [key, val] of channelSegmentActivity) {
+    const lastActive = val.lastSegmentAt || val.firstManifestAt || 0;
+    if (lastActive > 0 && (now - lastActive) > STALE_THRESHOLD_MS) {
+      channelSegmentActivity.delete(key);
+      channelActiveSource.delete(key);
+      pruned++;
+    }
+  }
+
+  for (const [key, val] of sourceFailures) {
+    if ((now - val.lastFailAt) > STALE_THRESHOLD_MS) {
+      sourceFailures.delete(key);
+      pruned++;
+    }
+  }
+
+  // Also prune NTV URL cache (entries older than TTL)
+  for (const [key, val] of ntvUrlCache) {
+    if ((now - val.resolvedAt) > NTV_URL_CACHE_TTL) {
+      ntvUrlCache.delete(key);
+    }
+  }
+
+  if (pruned > 0) {
+    logger.debug(`[LiveTV] Pruned ${pruned} stale state entries`);
+  }
+}, PRUNE_INTERVAL_MS);
 
 module.exports = router;
 module.exports.channelActiveSource = channelActiveSource;

@@ -16,7 +16,6 @@ const { detectEmbeddedSubtitles, getBestEmbeddedSubtitle } = require('../service
 const { standardizeLanguage } = require('../utils/language-standardizer');
 const { extractSubtitleStream, analyzeStreamCompatibility } = require('../services/ffprobe-service');
 const { remuxWithCompatibleAudio, transcodeAudioToEac3 } = require('../services/audio-processor');
-const { getSearchSeason } = require('../services/season-offset');
 const path = require('path');
 
 const TRANSCODED_DIR = path.join(__dirname, '..', 'transcoded');
@@ -858,11 +857,6 @@ async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, server
 async function processRdDownload(jobId, contentInfo) {
   const { tmdbId, title, year, type, season, episode, userId, serverHost, platform } = contentInfo;
 
-  // For shows with TMDB/TVDB season numbering mismatches (e.g. American Dad),
-  // compute the TVDB season number that torrent files actually use.
-  // Original `season` is kept for cache keys, TMDB API calls, and metadata.
-  const searchSeason = type === 'tv' ? getSearchSeason(tmdbId, season) : season;
-
   try {
     const rdApiKey = getUserRdApiKey(userId);
     if (!rdApiKey) {
@@ -1071,7 +1065,7 @@ async function processRdDownload(jobId, contentInfo) {
       title,
       year,
       type,
-      season: searchSeason,
+      season: season,
       episode,
       tmdbId,
       rdApiKey,
@@ -1222,7 +1216,7 @@ async function processRdDownload(jobId, contentInfo) {
           const downloadPromise = downloadFromRD(
             source.magnet,
             rdApiKey,
-            searchSeason,
+            season,
             episode,
             (rdProgress, rdMessage, rdMeta) => {
               // Don't update if job already completed or errored (orphaned downloads from
@@ -1554,7 +1548,6 @@ async function processRdDownload(jobId, contentInfo) {
  */
 async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, { excludedHashes = [], excludedFilePaths = [] }) {
   const { tmdbId, title, year, type, season, episode, userId, platform } = contentInfo;
-  const searchSeason = type === 'tv' ? getSearchSeason(tmdbId, season) : season;
 
   try {
     const rdApiKey = getUserRdApiKey(userId);
@@ -1586,7 +1579,7 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
         title,
         year,
         type,
-        season: searchSeason,
+        season: season,
         episode,
         tmdbId,
         rdApiKey,
@@ -1667,7 +1660,7 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
           const downloadPromise = downloadFromRD(
             source.magnet,
             rdApiKey,
-            searchSeason,
+            season,
             episode,
             (rdProgress, rdMessage) => {
               // Don't update if job already in terminal state (orphaned download protection)
@@ -1897,7 +1890,6 @@ router.post('/stream-url', async (req, res) => {
   try {
     const { tmdbId, title, year, type, season, episode } = req.body;
     const userId = req.user.sub;
-    const searchSeason = type === 'tv' ? getSearchSeason(tmdbId, season) : season;
 
     logger.info(`Getting stream URL for: ${title} (${year})`);
 
@@ -1906,7 +1898,7 @@ router.post('/stream-url', async (req, res) => {
       title,
       year,
       type, // Pass 'tv' or 'movie' directly - zurg-client expects 'tv' not 'episode'
-      season: searchSeason,
+      season: season,
       episode
     });
 
@@ -1960,7 +1952,7 @@ router.post('/stream-url', async (req, res) => {
       title,
       year,
       type,
-      season: searchSeason,
+      season: season,
       episode
     });
 
@@ -1979,7 +1971,7 @@ router.post('/stream-url', async (req, res) => {
       streamResult = await completeDownloadFlow(
         rdApiKey,
         searchResult.magnetUrl,
-        searchSeason,
+        season,
         episode
       );
     } catch (rdError) {

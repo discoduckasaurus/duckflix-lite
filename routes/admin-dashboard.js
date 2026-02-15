@@ -512,7 +512,7 @@ router.put('/loading-phrases', (req, res) => {
 // Scheduled Loading Phrases
 // =========================================
 
-const { HOLIDAYS, getHolidayDate, doesScheduleMatchDate } = require('../services/holiday-dates');
+const { HOLIDAYS, getHolidayDate, doesScheduleMatchDate, getTodayLocal } = require('../services/holiday-dates');
 
 /**
  * GET /api/admin/loading-phrases/schedules
@@ -536,9 +536,10 @@ router.get('/loading-phrases/schedules', (req, res) => {
       // Resolve next occurrence for display
       let nextDate = null;
       if (s.schedule_type === 'holiday') {
-        const year = new Date().getFullYear();
+        const todayLocal = getTodayLocal();
+        const year = parseInt(todayLocal.substring(0, 4), 10);
         const thisYear = getHolidayDate(s.holiday, year);
-        nextDate = thisYear >= new Date().toISOString().substring(0, 10) ? thisYear : getHolidayDate(s.holiday, year + 1);
+        nextDate = thisYear >= todayLocal ? thisYear : getHolidayDate(s.holiday, year + 1);
       } else if (s.scheduled_date) {
         nextDate = s.scheduled_date;
       }

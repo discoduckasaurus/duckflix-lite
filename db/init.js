@@ -78,20 +78,6 @@ function initDatabase() {
     // Column already exists
   }
 
-  // User sessions (IP tracking for VOD) - DEPRECATED: Use rd_sessions instead
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS user_sessions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      ip_address TEXT NOT NULL,
-      last_vod_playback_at TEXT,
-      last_heartbeat_at TEXT,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-      UNIQUE(user_id, ip_address)
-    )
-  `);
-
   // RD sessions (RD key + IP tracking to prevent concurrent streams)
   db.exec(`
     CREATE TABLE IF NOT EXISTS rd_sessions (
@@ -106,16 +92,6 @@ function initDatabase() {
       UNIQUE(rd_api_key, ip_address),
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
-  `);
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_user_ip
-    ON user_sessions(user_id, ip_address)
-  `);
-
-  db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_sessions_heartbeat
-    ON user_sessions(last_heartbeat_at)
   `);
 
   // EPG cache
@@ -456,6 +432,35 @@ function initDatabase() {
     logger.info('Added ordered_pairs column to loading_phrase_schedules');
   } catch (e) {}
 
+  // Rotten Tomatoes score cache
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS rt_scores (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tmdb_id INTEGER NOT NULL,
+      media_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      rt_url TEXT,
+      critics_score INTEGER,
+      audience_score INTEGER,
+      release_year INTEGER,
+      fetched_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      not_found INTEGER DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_rt_scores_lookup
+    ON rt_scores(tmdb_id, media_type)
+  `);
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_rt_scores_expiry
+    ON rt_scores(expires_at)
+  `);
+
   // DFTV pseudo-live channel
   db.prepare(`
     INSERT OR IGNORE INTO special_channels
@@ -502,63 +507,8 @@ async function createAdminUser() {
   logger.warn('⚠️  Admin has NO RD API key - add via admin panel to enable VOD');
 }
 
-/**
- * Create test user "Tawnia" for remote testing
- */
-async function createTestUser() {
-  const testUsername = 'Tawnia';
-  const testPassword = 'jjjjjj';
-  const testRdApiKey = 'IOGOUVDH4JSBH57UJAFDP3O375DCPSKP7ERWPURNCP3CCNUSFPKQ';
-
-  const existingUser = db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?)').get(testUsername);
-
-  if (existingUser) {
-    // Update existing user's RD API key
-    db.prepare(`
-      UPDATE users
-      SET rd_api_key = ?
-      WHERE LOWER(username) = LOWER(?)
-    `).run(testRdApiKey, testUsername);
-    logger.info(`Test user '${testUsername}' already exists, RD API key updated`);
-    return;
-  }
-
-  const passwordHash = await bcrypt.hash(testPassword, 10);
-
-  db.prepare(`
-    INSERT INTO users (username, password_hash, is_admin, rd_api_key)
-    VALUES (?, ?, 0, ?)
-  `).run(testUsername, passwordHash, testRdApiKey);
-
-  logger.info(`Test user '${testUsername}' created with password: ${testPassword}`);
-}
-
-/**
- * Clean up expired sessions (heartbeat older than timeout)
- */
-function cleanupExpiredSessions() {
-  const timeout = parseInt(process.env.VOD_SESSION_TIMEOUT_MS || '120000', 10);
-  const cutoffTime = new Date(Date.now() - timeout).toISOString();
-
-  const result = db.prepare(`
-    DELETE FROM user_sessions
-    WHERE last_heartbeat_at < ?
-  `).run(cutoffTime);
-
-  if (result.changes > 0) {
-    logger.info(`Cleaned up ${result.changes} expired sessions`);
-  }
-
-  return result.changes;
-}
-
-// Run cleanup every 5 minutes
-setInterval(cleanupExpiredSessions, 5 * 60 * 1000);
-
 module.exports = {
   db,
   initDatabase,
-  createAdminUser,
-  createTestUser,
-  cleanupExpiredSessions
+  createAdminUser
 };

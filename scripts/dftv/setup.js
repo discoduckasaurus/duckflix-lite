@@ -30,7 +30,6 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 
 const logger = require('../../utils/logger');
-const { getSearchSeason } = require('../../services/season-offset');
 const { searchZurg } = require('../../services/zurg-search');
 const { searchContent } = require('../../services/prowlarr-service');
 
@@ -387,8 +386,7 @@ async function searchSeriesPacks(show) {
  * Returns scored + deduped results tagged with packType='season'.
  */
 async function searchSeasonPacks(show, season) {
-  const searchSeason = show.hasSeasonOffset ? getSearchSeason(show.tmdbId, season) : season;
-  const sNum = String(searchSeason).padStart(2, '0');
+  const sNum = String(season).padStart(2, '0');
 
   logger.info(`[DFTV] Searching for season packs: ${show.title} S${sNum}`);
   const allResults = [];
@@ -396,12 +394,12 @@ async function searchSeasonPacks(show, season) {
 
   for (const alias of show.searchAliases) {
     // "Title S01" format (most common for season packs)
-    for (const query of [`${alias} S${sNum}`, `${alias} Season ${searchSeason}`]) {
+    for (const query of [`${alias} S${sNum}`, `${alias} Season ${season}`]) {
       try {
         const results = await searchContent({
           title: query,
           type: 'tv',
-          season: searchSeason,
+          season,
           episode: 1,
         });
         for (const r of results) {
@@ -413,8 +411,8 @@ async function searchSeasonPacks(show, season) {
 
           // Must look like a season pack, not an individual episode
           const hasSeasonMarker = titleLower.includes(`s${sNum}`) ||
-            titleLower.includes(`season ${searchSeason}`) ||
-            titleLower.includes(`season.${searchSeason}`);
+            titleLower.includes(`season ${season}`) ||
+            titleLower.includes(`season.${season}`);
           const hasEpisodeMarker = /s\d{1,2}e\d{1,2}/i.test(r.title);
 
           // Minimal size floor — just exclude tiny/fake results
@@ -426,7 +424,6 @@ async function searchSeasonPacks(show, season) {
               ...r,
               packType: 'season',
               targetSeason: season,
-              searchSeason,
               score: scoreSource(r, show, 'season'),
             });
           }
@@ -617,26 +614,8 @@ async function downloadPack(pack, show, catalog, showState, state) {
       continue;
     }
 
-    // Reverse season offset: file uses TVDB numbering
-    // Multiple TMDB seasons can map to same TVDB season (e.g. TMDB S11 and S13 both → TVDB S11)
-    // Find the one where the episode actually exists in the catalog
     let tmdbSeason = parsed.season;
-    let epData = null;
-    if (show.hasSeasonOffset) {
-      const allSeasons = [...new Set(catalog.map(e => e.season))].sort((a, b) => a - b);
-      for (const s of allSeasons) {
-        if (getSearchSeason(show.tmdbId, s) === parsed.season) {
-          const match = catalog.find(e => e.season === s && e.episode === parsed.episode);
-          if (match) {
-            tmdbSeason = s;
-            epData = match;
-            break;
-          }
-        }
-      }
-    } else {
-      epData = catalog.find(e => e.season === tmdbSeason && e.episode === parsed.episode);
-    }
+    let epData = catalog.find(e => e.season === tmdbSeason && e.episode === parsed.episode);
 
     if (!epData) {
       logger.debug(`[DFTV] No catalog match for S${tmdbSeason}E${parsed.episode} from "${filename}"`);
@@ -861,7 +840,6 @@ async function processShow(show, state) {
 
     for (const ep of remainingEps) {
       const key = getEpisodeKey(show.tmdbId, ep.season, ep.episode);
-      const searchSeason = show.hasSeasonOffset ? getSearchSeason(show.tmdbId, ep.season) : ep.season;
 
       // Check disk again (pack might have placed it)
       const existing = await findExistingFile(show, ep.season, ep.episode);
@@ -884,7 +862,7 @@ async function processShow(show, state) {
           title: show.title,
           year: ep.airDate ? ep.airDate.substring(0, 4) : '',
           type: 'episode',
-          season: searchSeason,
+          season: ep.season,
           episode: ep.episode,
           duration: ep.runtime,
         });
@@ -923,7 +901,7 @@ async function processShow(show, state) {
         const results = await searchContent({
           title: show.title,
           type: 'tv',
-          season: searchSeason,
+          season: ep.season,
           episode: ep.episode,
           tmdbId: show.tmdbId,
         });

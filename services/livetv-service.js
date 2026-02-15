@@ -3,6 +3,14 @@ const fs = require('fs');
 const { db } = require('../db/init');
 const logger = require('../utils/logger');
 
+// Pre-compiled prepared statements (avoids db.prepare() overhead on every call)
+const stmtGetM3uChannels = db.prepare(`SELECT epg_data FROM epg_cache WHERE channel_id = 'm3u_channels'`);
+const stmtGetSpecialChannel = db.prepare(`SELECT stream_url FROM special_channels WHERE id = ? AND is_active = 1`);
+
+// Stream URL cache: channelId -> { urls, cachedAt }
+const streamUrlCache = new Map();
+const STREAM_URL_CACHE_TTL = 30000; // 30 seconds
+
 // Load config files at module level
 const CHANNEL_CONFIG_PATH = path.join(__dirname, '..', 'db', 'channel-config.json');
 const BACKUP_STREAMS_PATH = path.join(__dirname, '..', 'db', 'backup-streams.json');
@@ -285,6 +293,12 @@ function getNTVStreamMap() {
  * @returns {string[]} Array of stream URLs to try in order
  */
 function getStreamUrls(channelId) {
+  // Check cache first
+  const cached = streamUrlCache.get(channelId);
+  if (cached && (Date.now() - cached.cachedAt) < STREAM_URL_CACHE_TTL) {
+    return cached.urls;
+  }
+
   const urls = [];
   const backup = backupStreams[channelId];
   const ntvMap = getNTVStreamMap();
@@ -303,11 +317,7 @@ function getStreamUrls(channelId) {
 
   // 3. Original M3U / special channel URL
   try {
-    const m3uData = db.prepare(`
-      SELECT epg_data
-      FROM epg_cache
-      WHERE channel_id = 'm3u_channels'
-    `).get();
+    const m3uData = stmtGetM3uChannels.get();
 
     if (m3uData) {
       const channels = JSON.parse(m3uData.epg_data);
@@ -324,11 +334,7 @@ function getStreamUrls(channelId) {
 
   // Check special channels
   try {
-    const specialChannel = db.prepare(`
-      SELECT stream_url
-      FROM special_channels
-      WHERE id = ? AND is_active = 1
-    `).get(channelId);
+    const specialChannel = stmtGetSpecialChannel.get(channelId);
 
     if (specialChannel?.stream_url && !urls.includes(specialChannel.stream_url)) {
       urls.push(specialChannel.stream_url);
@@ -367,6 +373,9 @@ function getStreamUrls(channelId) {
       logger.debug(`[StreamUrls] ${channelId}: deprioritized ${chConf.deprioritize.join(',')} (${keep.length} primary, ${demoted.length} demoted)`);
     }
   }
+
+  // Cache the result
+  streamUrlCache.set(channelId, { urls: [...urls], cachedAt: Date.now() });
 
   return urls;
 }

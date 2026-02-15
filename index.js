@@ -10,6 +10,24 @@ const cors = require('cors');
 const path = require('path');
 require('dotenv').config();
 
+// Guard against duplicate keys in .env (last value wins silently, can break auth)
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envLines = fs.readFileSync(envPath, 'utf8').split('\n');
+  const keys = {};
+  for (const line of envLines) {
+    const match = line.match(/^([A-Z_]+)=/);
+    if (match) {
+      const key = match[1];
+      if (keys[key]) {
+        console.error(`FATAL: Duplicate key "${key}" in .env (lines ${keys[key]} and ${envLines.indexOf(line) + 1}). Fix before starting.`);
+        process.exit(1);
+      }
+      keys[key] = envLines.indexOf(line) + 1;
+    }
+  }
+}
+
 const logger = require('./utils/logger');
 const { initDatabase, createAdminUser } = require('./db/init');
 const { startSyncJobs } = require('./services/epg-sync');
@@ -49,8 +67,9 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging
+// Request logging (skip high-frequency Live TV stream paths — livetv.js logs actionable events)
 app.use((req, res, next) => {
+  if (req.path.startsWith('/api/livetv/stream/')) return next();
   logger.info(`${req.method} ${req.path}`, {
     ip: req.ip,
     userAgent: req.get('user-agent')
@@ -135,22 +154,6 @@ app.get('/stream-proxy', async (req, res) => {
   }
 });
 
-// Dev build (test deployment at /devbuild)
-app.use('/devbuild', express.static(path.join(__dirname, 'devbuild')));
-app.get('/devbuild/*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'devbuild', 'index.html'));
-});
-
-// Web app (SPA - but never intercept API routes)
-app.use(express.static(path.join(__dirname, 'web')));
-app.get('*', (req, res, next) => {
-  // Don't serve SPA HTML for API routes — let them fall through to 404 JSON handler
-  if (req.path.startsWith('/api/')) {
-    return next();
-  }
-  res.sendFile(path.join(__dirname, 'web', 'index.html'));
-});
-
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found' });
@@ -204,6 +207,17 @@ async function start() {
         logger.error('[RD Cache] Cleanup failed:', error);
       }
     }, 60 * 60 * 1000); // 1 hour
+
+    // Start RT score cache cleanup job (runs daily)
+    logger.info('Starting RT score cache cleanup job...');
+    const rtService = require('./services/rottentomatoes-service');
+    setInterval(() => {
+      try {
+        rtService.cleanupExpired();
+      } catch (error) {
+        logger.error('[RT Cache] Cleanup failed:', error);
+      }
+    }, 24 * 60 * 60 * 1000); // Daily
 
     // Start RD expiry checker job (runs every 6 hours)
     logger.info('Starting RD expiry checker job...');
@@ -262,10 +276,11 @@ async function start() {
     }, 6 * 60 * 60 * 1000);
 
     // WAL checkpoint every 6 hours to prevent WAL file growth
+    // PASSIVE mode checkpoints without blocking concurrent readers (TRUNCATE requires exclusive access)
     setInterval(() => {
       try {
         const { db } = require('./db/init');
-        db.pragma('wal_checkpoint(TRUNCATE)');
+        db.pragma('wal_checkpoint(PASSIVE)');
         logger.info('[DB] WAL checkpoint completed');
       } catch (error) {
         logger.error('[DB] WAL checkpoint failed:', error);

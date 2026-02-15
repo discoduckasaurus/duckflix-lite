@@ -1,0 +1,1855 @@
+{
+  "movie_1084242": {
+    "tmdbId": 1084242,
+    "type": "movie",
+    "title": "Zootopia+2",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 125521,
+        "type": "movie",
+        "title": "Slayers Return",
+        "source": "continue-watching",
+        "posterPath": "/fNQx9YD4nxpcWvriVm1paIxbMwB.jpg",
+        "releaseDate": "1996-08-03",
+        "voteAverage": 6.5
+      },
+      {
+        "tmdbId": 647637,
+        "type": "movie",
+        "title": "Panda",
+        "source": "continue-watching",
+        "posterPath": "/xm8XaBxJ52iKxXvqZw2umgZrDn3.jpg",
+        "releaseDate": "2019-11-21",
+        "voteAverage": 5.6
+      },
+      {
+        "tmdbId": 482408,
+        "type": "movie",
+        "title": "Harry Potter: A History Of Magic",
+        "source": "continue-watching",
+        "posterPath": "/kkzDng2S8w2hT1gap7MdMdx7uUE.jpg",
+        "releaseDate": "2017-10-28",
+        "voteAverage": 7.3
+      },
+      {
+        "tmdbId": 137773,
+        "type": "movie",
+        "title": "Pokémon: The Mastermind of Mirage Pokémon",
+        "source": "continue-watching",
+        "posterPath": "/hJU76t41sf5BoKVHT3L3TtQP9xs.jpg",
+        "releaseDate": "2006-04-29",
+        "voteAverage": 6.8
+      },
+      {
+        "tmdbId": 615774,
+        "type": "movie",
+        "title": "Scooby-Doo! Return to Zombie Island",
+        "source": "continue-watching",
+        "posterPath": "/vd0oIoWhEm8o7EpS0kV7RaV0Flf.jpg",
+        "releaseDate": "2019-09-03",
+        "voteAverage": 7
+      },
+      {
+        "tmdbId": 283564,
+        "type": "movie",
+        "title": "SlugTerra: Return of the Elementals",
+        "source": "continue-watching",
+        "posterPath": "/ApN2lteDsoIU5dDHJXeqVD13vpd.jpg",
+        "releaseDate": "2014-08-02",
+        "voteAverage": 6.974
+      },
+      {
+        "tmdbId": 1248493,
+        "type": "movie",
+        "title": "Hole",
+        "source": "continue-watching",
+        "posterPath": "/5QCgSiM1PYJDQy0gGFHZxYLxyz2.jpg",
+        "releaseDate": "2024-02-20",
+        "voteAverage": 7.25
+      },
+      {
+        "tmdbId": 39105,
+        "type": "movie",
+        "title": "Dragon Ball Z: Bojack Unbound",
+        "source": "continue-watching",
+        "posterPath": "/iihTK9Af8G1ZzBjkIIAV4qQMkzF.jpg",
+        "releaseDate": "1993-07-10",
+        "voteAverage": 7.155
+      },
+      {
+        "tmdbId": 207516,
+        "type": "movie",
+        "title": "How to Train Your Dragon: Legends",
+        "source": "continue-watching",
+        "posterPath": "/4kEVqHV5egVoSl8OhDMImJozSaj.jpg",
+        "releaseDate": "2010-11-15",
+        "voteAverage": 7.715
+      },
+      {
+        "tmdbId": 45752,
+        "type": "movie",
+        "title": "Scooby-Doo! Camp Scare",
+        "source": "continue-watching",
+        "posterPath": "/zurVOCpOLwLTBknYlgcXHWE0xvu.jpg",
+        "releaseDate": "2010-09-14",
+        "voteAverage": 7.8
+      },
+      {
+        "tmdbId": 11291,
+        "type": "movie",
+        "title": "The Brothers Lionheart",
+        "source": "continue-watching",
+        "posterPath": "/giPbP2p6R2pnIIETAEmWWhZ4jVJ.jpg",
+        "releaseDate": "1977-09-23",
+        "voteAverage": 6.7
+      },
+      {
+        "tmdbId": 8277,
+        "type": "movie",
+        "title": "American Pie Presents: Beta House",
+        "source": "continue-watching",
+        "posterPath": "/j7eGbwVb9hTaRFWMlSa7C1OYp3T.jpg",
+        "releaseDate": "2007-12-19",
+        "voteAverage": 5.65
+      },
+      {
+        "tmdbId": 1010820,
+        "type": "movie",
+        "title": "Groot's Pursuit",
+        "source": "continue-watching",
+        "posterPath": "/z5AQHYTTx7DzG9CRd01ny9DtqNE.jpg",
+        "releaseDate": "2022-08-10",
+        "voteAverage": 7.104
+      },
+      {
+        "tmdbId": 979163,
+        "type": "movie",
+        "title": "Beyond Infinity: Buzz and the Journey to Lightyear",
+        "source": "continue-watching",
+        "posterPath": "/mnp0INIjyWt4AziWmTHgPk9IFoE.jpg",
+        "releaseDate": "2022-06-10",
+        "voteAverage": 7.031
+      },
+      {
+        "tmdbId": 16808,
+        "type": "movie",
+        "title": "Pokémon Ranger and the Temple of the Sea",
+        "source": "continue-watching",
+        "posterPath": "/jZOi06xHjsG1VqbiIwS8GkyrAOn.jpg",
+        "releaseDate": "2006-07-15",
+        "voteAverage": 6.4
+      },
+      {
+        "tmdbId": 81003,
+        "type": "movie",
+        "title": "Kung Fu Panda: Secrets of the Masters",
+        "source": "continue-watching",
+        "posterPath": "/xON7QZ6yHYt1S1Aji0wfGQ1a7ml.jpg",
+        "releaseDate": "2011-12-12",
+        "voteAverage": 6.465
+      },
+      {
+        "tmdbId": 392622,
+        "type": "movie",
+        "title": "What's New, Scooby-Doo? Vol. 7: Ready to Scare",
+        "source": "continue-watching",
+        "posterPath": "/hsWjtBhyFBINumzFqEtNl8FCgFQ.jpg",
+        "releaseDate": "2006-05-17",
+        "voteAverage": 9.854
+      },
+      {
+        "tmdbId": 47292,
+        "type": "movie",
+        "title": "Pokémon: Giratina and the Sky Warrior",
+        "source": "continue-watching",
+        "posterPath": "/e3T08IL68EVcrUPiJLVN9KSGlXs.jpg",
+        "releaseDate": "2008-07-19",
+        "voteAverage": 6.754
+      },
+      {
+        "tmdbId": 60979,
+        "type": "movie",
+        "title": "WWE WrestleMania XXVII",
+        "source": "continue-watching",
+        "posterPath": "/xTU9Cw4PIGKW2fE9eD40OBdzmJn.jpg",
+        "releaseDate": "2011-04-02",
+        "voteAverage": 7.4
+      },
+      {
+        "tmdbId": 8965,
+        "type": "movie",
+        "title": "Atlantis: Milo's Return",
+        "source": "continue-watching",
+        "posterPath": "/hyAbWGld5WLdrmUB9OHyewcJQGL.jpg",
+        "releaseDate": "2003-02-25",
+        "voteAverage": 6.335
+      }
+    ],
+    "fetchedAt": "2026-02-04T21:57:56.628Z"
+  },
+  "tv_106379": {
+    "tmdbId": 106379,
+    "type": "tv",
+    "title": "Fallout",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 126308,
+        "type": "tv",
+        "title": "Shōgun",
+        "source": "continue-watching",
+        "posterPath": "/7O4iVfOMQmdCSxhOg1WnzG1AgYT.jpg",
+        "releaseDate": "2024-02-27",
+        "voteAverage": 8.442
+      },
+      {
+        "tmdbId": 241259,
+        "type": "tv",
+        "title": "Baby Reindeer",
+        "source": "continue-watching",
+        "posterPath": "/tN9OcbkAOPwHSr1sgMornZtQZBx.jpg",
+        "releaseDate": "2024-04-11",
+        "voteAverage": 7.597
+      },
+      {
+        "tmdbId": 251091,
+        "type": "tv",
+        "title": "Star Wars: Tales of the Empire",
+        "source": "continue-watching",
+        "posterPath": "/qA28nLteurVboSSzltuyYt1lvlC.jpg",
+        "releaseDate": "2024-05-04",
+        "voteAverage": 7.376
+      },
+      {
+        "tmdbId": 138502,
+        "type": "tv",
+        "title": "X-Men '97",
+        "source": "continue-watching",
+        "posterPath": "/9Ycz7yYRf9V4jk3YXwcZhFtbNcF.jpg",
+        "releaseDate": "2024-03-20",
+        "voteAverage": 8.519
+      },
+      {
+        "tmdbId": 108545,
+        "type": "tv",
+        "title": "3 Body Problem",
+        "source": "continue-watching",
+        "posterPath": "/ykZ7hlShkdRQaL2aiieXdEMmrLb.jpg",
+        "releaseDate": "2024-03-21",
+        "voteAverage": 7.456
+      },
+      {
+        "tmdbId": 208825,
+        "type": "tv",
+        "title": "Parasyte: The Grey",
+        "source": "continue-watching",
+        "posterPath": "/9UPneQ4NF7g6WDNSFE5qyt88wJn.jpg",
+        "releaseDate": "2024-04-05",
+        "voteAverage": 7.441
+      },
+      {
+        "tmdbId": 102621,
+        "type": "tv",
+        "title": "KAOS",
+        "source": "continue-watching",
+        "posterPath": "/dDBTUSl3tRsOeKC1jZugBSFHy9I.jpg",
+        "releaseDate": "2024-08-29",
+        "voteAverage": 7.232
+      },
+      {
+        "tmdbId": 156484,
+        "type": "tv",
+        "title": "The 8 Show",
+        "source": "continue-watching",
+        "posterPath": "/umBNBnKThMmF1QQZixZ7rsYOowq.jpg",
+        "releaseDate": "2024-05-17",
+        "voteAverage": 7.235
+      },
+      {
+        "tmdbId": 205715,
+        "type": "tv",
+        "title": "Gen V",
+        "source": "continue-watching",
+        "posterPath": "/tEv842Nd5uMSavURG4aQO1pNtst.jpg",
+        "releaseDate": "2023-09-28",
+        "voteAverage": 7.694
+      },
+      {
+        "tmdbId": 125909,
+        "type": "tv",
+        "title": "Batman: Caped Crusader",
+        "source": "continue-watching",
+        "posterPath": "/imuZQcnPNKNygPw28TESUq4tNsb.jpg",
+        "releaseDate": "2024-08-01",
+        "voteAverage": 7.358
+      },
+      {
+        "tmdbId": 196322,
+        "type": "tv",
+        "title": "Dark Matter",
+        "source": "continue-watching",
+        "posterPath": "/c6MRUtPk0nEPQ9FBD9RdRKt2rIm.jpg",
+        "releaseDate": "2024-05-07",
+        "voteAverage": 7.777
+      },
+      {
+        "tmdbId": 125988,
+        "type": "tv",
+        "title": "Silo",
+        "source": "continue-watching",
+        "posterPath": "/c2OijvbFEXBW1onbzuvENr4CGQB.jpg",
+        "releaseDate": "2023-05-04",
+        "voteAverage": 8.124
+      },
+      {
+        "tmdbId": 76479,
+        "type": "tv",
+        "title": "The Boys",
+        "source": "continue-watching",
+        "posterPath": "/2zmTngn1tYC1AvfnrFLhxeD82hz.jpg",
+        "releaseDate": "2019-07-25",
+        "voteAverage": 8.442
+      },
+      {
+        "tmdbId": 158300,
+        "type": "tv",
+        "title": "Knuckles",
+        "source": "continue-watching",
+        "posterPath": "/sK6Nr6KNUA4WlAHyNBTioz9FK87.jpg",
+        "releaseDate": "2024-04-26",
+        "voteAverage": 7.306
+      },
+      {
+        "tmdbId": 217667,
+        "type": "tv",
+        "title": "Eric",
+        "source": "continue-watching",
+        "posterPath": "/9OV6McrRh1BAnrak3yVP9xYuUId.jpg",
+        "releaseDate": "2024-05-30",
+        "voteAverage": 6.987
+      },
+      {
+        "tmdbId": 132750,
+        "type": "tv",
+        "title": "Dead Boy Detectives",
+        "source": "continue-watching",
+        "posterPath": "/qGEjCjfBSUzaYNzOqUTx3XRniHH.jpg",
+        "releaseDate": "2024-04-25",
+        "voteAverage": 7.668
+      },
+      {
+        "tmdbId": 46518,
+        "type": "tv",
+        "title": "Masters of the Air",
+        "source": "continue-watching",
+        "posterPath": "/rSAmgcoA74371rplbqM27yVsd3y.jpg",
+        "releaseDate": "2024-01-25",
+        "voteAverage": 7.772
+      },
+      {
+        "tmdbId": 220801,
+        "type": "tv",
+        "title": "Fool Me Once",
+        "source": "continue-watching",
+        "posterPath": "/Ertv4WLEyHgi8zN4ldOKgPcGAZ.jpg",
+        "releaseDate": "2024-01-01",
+        "voteAverage": 7.131
+      },
+      {
+        "tmdbId": 233629,
+        "type": "tv",
+        "title": "Bodies",
+        "source": "continue-watching",
+        "posterPath": "/qWX71nLvoLsBNPEjddZMC75lq6I.jpg",
+        "releaseDate": "2023-10-19",
+        "voteAverage": 7.165
+      },
+      {
+        "tmdbId": 100088,
+        "type": "tv",
+        "title": "The Last of Us",
+        "source": "continue-watching",
+        "posterPath": "/dmo6TYuuJgaYinXBPjrgG9mB5od.jpg",
+        "releaseDate": "2023-01-15",
+        "voteAverage": 8.451
+      }
+    ],
+    "fetchedAt": "2026-02-07T18:37:48.937Z"
+  },
+  "tv_224372": {
+    "tmdbId": 224372,
+    "type": "tv",
+    "title": "A+Knight+of+the+Seven+Kingdoms",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 127235,
+        "type": "tv",
+        "title": "Invasion",
+        "source": "continue-watching",
+        "posterPath": "/1PdNB3rYTcf8VXc8rcmZ0SeYxSq.jpg",
+        "releaseDate": "2021-10-21",
+        "voteAverage": 7.152
+      },
+      {
+        "tmdbId": 1396,
+        "type": "tv",
+        "title": "Breaking Bad",
+        "source": "continue-watching",
+        "posterPath": "/ztkUQFLlC19CCMYHW9o1zWhJRNq.jpg",
+        "releaseDate": "2008-01-20",
+        "voteAverage": 8.937
+      },
+      {
+        "tmdbId": 66732,
+        "type": "tv",
+        "title": "Stranger Things",
+        "source": "continue-watching",
+        "posterPath": "/uOOtwVbSr4QDjAGIifLDwpb2Pdl.jpg",
+        "releaseDate": "2016-07-15",
+        "voteAverage": 8.581
+      },
+      {
+        "tmdbId": 48891,
+        "type": "tv",
+        "title": "Brooklyn Nine-Nine",
+        "source": "continue-watching",
+        "posterPath": "/A3SymGlOHefSKbz1bCOz56moupS.jpg",
+        "releaseDate": "2013-09-17",
+        "voteAverage": 8.218
+      },
+      {
+        "tmdbId": 13916,
+        "type": "tv",
+        "title": "Death Note",
+        "source": "continue-watching",
+        "posterPath": "/tCZFfYTIwrR7n94J6G14Y4hAFU6.jpg",
+        "releaseDate": "2006-10-04",
+        "voteAverage": 8.628
+      },
+      {
+        "tmdbId": 93405,
+        "type": "tv",
+        "title": "Squid Game",
+        "source": "continue-watching",
+        "posterPath": "/1QdXdRYfktUSONkl1oD5gc6Be0s.jpg",
+        "releaseDate": "2021-09-17",
+        "voteAverage": 7.858
+      },
+      {
+        "tmdbId": 119051,
+        "type": "tv",
+        "title": "Wednesday",
+        "source": "continue-watching",
+        "posterPath": "/36xXlhEpQqVVPuiZhfoQuaY4OlA.jpg",
+        "releaseDate": "2022-11-23",
+        "voteAverage": 8.359
+      },
+      {
+        "tmdbId": 19614,
+        "type": "tv",
+        "title": "It",
+        "source": "continue-watching",
+        "posterPath": "/4ybQ6gopB3H3cu0seVZLznDnIKo.jpg",
+        "releaseDate": "1990-11-18",
+        "voteAverage": 6.9
+      },
+      {
+        "tmdbId": 92830,
+        "type": "tv",
+        "title": "Obi-Wan Kenobi",
+        "source": "continue-watching",
+        "posterPath": "/4Lok3HBSfbQxibQZBygoVCwKKrZ.jpg",
+        "releaseDate": "2022-05-26",
+        "voteAverage": 7
+      },
+      {
+        "tmdbId": 57243,
+        "type": "tv",
+        "title": "Doctor Who",
+        "source": "continue-watching",
+        "posterPath": "/w8enSKCf6Zm0topeQ2XPccDqsqp.jpg",
+        "releaseDate": "2005-03-26",
+        "voteAverage": 7.6
+      },
+      {
+        "tmdbId": 85271,
+        "type": "tv",
+        "title": "WandaVision",
+        "source": "continue-watching",
+        "posterPath": "/frobUz2X5Pc8OiVZU8Oo5K3NKMM.jpg",
+        "releaseDate": "2021-01-15",
+        "voteAverage": 8.196
+      },
+      {
+        "tmdbId": 2691,
+        "type": "tv",
+        "title": "Two and a Half Men",
+        "source": "continue-watching",
+        "posterPath": "/xgfjxyV3g1S68opzuvG6G87muDp.jpg",
+        "releaseDate": "2003-09-22",
+        "voteAverage": 7.441
+      },
+      {
+        "tmdbId": 87108,
+        "type": "tv",
+        "title": "Chernobyl",
+        "source": "continue-watching",
+        "posterPath": "/hlLXt2tOPT6RRnjiUmoxyG1LTFi.jpg",
+        "releaseDate": "2019-05-06",
+        "voteAverage": 8.701
+      },
+      {
+        "tmdbId": 157239,
+        "type": "tv",
+        "title": "Alien: Earth",
+        "source": "continue-watching",
+        "posterPath": "/yueXS3q8BtoWekcHOATFHicLl3e.jpg",
+        "releaseDate": "2025-08-12",
+        "voteAverage": 7.354
+      },
+      {
+        "tmdbId": 52814,
+        "type": "tv",
+        "title": "Halo",
+        "source": "continue-watching",
+        "posterPath": "/4UmNhZCEu8Vt3byMvNxNEPyf8EY.jpg",
+        "releaseDate": "2022-03-24",
+        "voteAverage": 8.214
+      },
+      {
+        "tmdbId": 1668,
+        "type": "tv",
+        "title": "Friends",
+        "source": "continue-watching",
+        "posterPath": "/2koX1xLkpTQM4IZebYvKysFW1Nh.jpg",
+        "releaseDate": "1994-09-22",
+        "voteAverage": 8.417
+      },
+      {
+        "tmdbId": 71712,
+        "type": "tv",
+        "title": "The Good Doctor",
+        "source": "continue-watching",
+        "posterPath": "/luhKkdD80qe62fwop6sdrXK9jUT.jpg",
+        "releaseDate": "2017-09-25",
+        "voteAverage": 8.464
+      },
+      {
+        "tmdbId": 1431,
+        "type": "tv",
+        "title": "CSI: Crime Scene Investigation",
+        "source": "continue-watching",
+        "posterPath": "/i5hmoRjHNWady4AtAGICTUXknKH.jpg",
+        "releaseDate": "2000-10-06",
+        "voteAverage": 7.6
+      },
+      {
+        "tmdbId": 1399,
+        "type": "tv",
+        "title": "Game of Thrones",
+        "source": "continue-watching",
+        "posterPath": "/1XS1oqL89opfnbLl8WnZY1O1uJx.jpg",
+        "releaseDate": "2011-04-17",
+        "voteAverage": 8.46
+      },
+      {
+        "tmdbId": 71446,
+        "type": "tv",
+        "title": "Money Heist",
+        "source": "continue-watching",
+        "posterPath": "/reEMJA1uzscCbkpeRJeTT2bjqUp.jpg",
+        "releaseDate": "2017-05-02",
+        "voteAverage": 8.231
+      }
+    ],
+    "fetchedAt": "2026-02-07T18:42:37.917Z"
+  },
+  "tv_131927": {
+    "tmdbId": 131927,
+    "type": "tv",
+    "title": "Dexter:+New+Blood",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 219937,
+        "type": "tv",
+        "title": "Dexter: Original Sin",
+        "source": "continue-watching",
+        "posterPath": "/j5bP7spdfS0NpDLKDlqJYyJPi1j.jpg",
+        "releaseDate": "2024-12-15",
+        "voteAverage": 8.183
+      },
+      {
+        "tmdbId": 1405,
+        "type": "tv",
+        "title": "Dexter",
+        "source": "continue-watching",
+        "posterPath": "/q8dWfc4JwQuv3HayIZeO84jAXED.jpg",
+        "releaseDate": "2006-10-01",
+        "voteAverage": 8.226
+      },
+      {
+        "tmdbId": 259909,
+        "type": "tv",
+        "title": "Dexter: Resurrection",
+        "source": "continue-watching",
+        "posterPath": "/hIawSocuwqgNeRf3JuKuxgMHmSC.jpg",
+        "releaseDate": "2025-07-13",
+        "voteAverage": 8.498
+      },
+      {
+        "tmdbId": 129897,
+        "type": "tv",
+        "title": "Day of the Dead",
+        "source": "continue-watching",
+        "posterPath": "/iBeWa2Ds2uCjTOlMikiBqETsS2X.jpg",
+        "releaseDate": "2021-10-15",
+        "voteAverage": 6.825
+      },
+      {
+        "tmdbId": 126,
+        "type": "tv",
+        "title": "Unsolved Mysteries",
+        "source": "continue-watching",
+        "posterPath": "/1bOXbWqNsRU2ykPiE586I18coLf.jpg",
+        "releaseDate": "1988-10-05",
+        "voteAverage": 7.694
+      },
+      {
+        "tmdbId": 194567,
+        "type": "tv",
+        "title": "The Lazarus Project",
+        "source": "continue-watching",
+        "posterPath": "/xw7GkWtmPQDU8qzfKshFEN038sj.jpg",
+        "releaseDate": "2022-06-16",
+        "voteAverage": 7.143
+      },
+      {
+        "tmdbId": 72792,
+        "type": "tv",
+        "title": "Safe",
+        "source": "continue-watching",
+        "posterPath": "/lrA2SSoWp3zzb0MBdjWKCVN0qEF.jpg",
+        "releaseDate": "2018-05-10",
+        "voteAverage": 6.89
+      },
+      {
+        "tmdbId": 129677,
+        "type": "tv",
+        "title": "Top Secret UFO Projects Declassified",
+        "source": "continue-watching",
+        "posterPath": "/eB5aBU9TVZ3Lk7G7Ppy6Ym0rtAd.jpg",
+        "releaseDate": "2021-01-19",
+        "voteAverage": 7.266
+      },
+      {
+        "tmdbId": 117488,
+        "type": "tv",
+        "title": "Yellowjackets",
+        "source": "continue-watching",
+        "posterPath": "/xRnGrn7Z7SC0KIBodocoU1QgDZF.jpg",
+        "releaseDate": "2021-11-14",
+        "voteAverage": 7.462
+      },
+      {
+        "tmdbId": 122194,
+        "type": "tv",
+        "title": "CSI: Vegas",
+        "source": "continue-watching",
+        "posterPath": "/8DtOnaOQPiptM9umpV0Xntwv9t3.jpg",
+        "releaseDate": "2021-10-06",
+        "voteAverage": 7.8
+      },
+      {
+        "tmdbId": 117648,
+        "type": "tv",
+        "title": "Clarkson's Farm",
+        "source": "continue-watching",
+        "posterPath": "/yKc3FqwD2eanWBUwqcRH7bChE3V.jpg",
+        "releaseDate": "2021-06-11",
+        "voteAverage": 8.486
+      },
+      {
+        "tmdbId": 101591,
+        "type": "tv",
+        "title": "BMF",
+        "source": "continue-watching",
+        "posterPath": "/5gUlUufL3fom30qxKawwlWuD7kC.jpg",
+        "releaseDate": "2021-09-26",
+        "voteAverage": 7.965
+      },
+      {
+        "tmdbId": 119955,
+        "type": "tv",
+        "title": "Dr. Brain",
+        "source": "continue-watching",
+        "posterPath": "/3bYYLQAFWHsTtJyZb0vIReJJv07.jpg",
+        "releaseDate": "2021-11-04",
+        "voteAverage": 7.204
+      },
+      {
+        "tmdbId": 51001,
+        "type": "tv",
+        "title": "Chosen",
+        "source": "continue-watching",
+        "posterPath": "/guIOd4hzYw7yoW1haJbj4u5iTs9.jpg",
+        "releaseDate": "2022-01-27",
+        "voteAverage": 6.1
+      },
+      {
+        "tmdbId": 120909,
+        "type": "tv",
+        "title": "The Tourist",
+        "source": "continue-watching",
+        "posterPath": "/3jLF76FYBh5YHb4n1mQz1ayjDD4.jpg",
+        "releaseDate": "2022-01-01",
+        "voteAverage": 6.788
+      },
+      {
+        "tmdbId": 4477,
+        "type": "tv",
+        "title": "Becker",
+        "source": "continue-watching",
+        "posterPath": "/hno1hP545G5xS1l4mLBXaY7NIqn.jpg",
+        "releaseDate": "1998-11-02",
+        "voteAverage": 7.129
+      },
+      {
+        "tmdbId": 288055,
+        "type": "tv",
+        "title": "Star Wars: Tales of the Underworld",
+        "source": "continue-watching",
+        "posterPath": "/qv1hagzp08cDJF6C04LyJVhcI1x.jpg",
+        "releaseDate": "2025-05-04",
+        "voteAverage": 7.08
+      },
+      {
+        "tmdbId": 86893,
+        "type": "tv",
+        "title": "Tacoma FD",
+        "source": "continue-watching",
+        "posterPath": "/mH0d0dUdHYkmHLAkoTVXc1FUS9V.jpg",
+        "releaseDate": "2019-03-25",
+        "voteAverage": 7.688
+      },
+      {
+        "tmdbId": 131651,
+        "type": "tv",
+        "title": "Turning Point: 9/11 and the War on Terror",
+        "source": "continue-watching",
+        "posterPath": "/aWHyzSVVVlKcd6KIuZCMIvD5TPZ.jpg",
+        "releaseDate": "2021-09-01",
+        "voteAverage": 7.244
+      },
+      {
+        "tmdbId": 94252,
+        "type": "tv",
+        "title": "Human Resources",
+        "source": "continue-watching",
+        "posterPath": "/9uEmYSgYIMBEIN82VAlqZnatpxJ.jpg",
+        "releaseDate": "2022-03-18",
+        "voteAverage": 6.574
+      }
+    ],
+    "fetchedAt": "2026-02-07T18:45:47.014Z"
+  },
+  "movie_772462": {
+    "tmdbId": 772462,
+    "type": "movie",
+    "title": "Don't+Follow+Me",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 29514,
+        "type": "movie",
+        "title": "Two Evil Eyes",
+        "source": "continue-watching",
+        "posterPath": "/zVWaQfaSZ7AWE0XqbMT57szVmXo.jpg",
+        "releaseDate": "1990-01-25",
+        "voteAverage": 6.13
+      },
+      {
+        "tmdbId": 1099088,
+        "type": "movie",
+        "title": "Rewind 2: 1996",
+        "source": "continue-watching",
+        "posterPath": "/6OaIG3MlMjdDuOrnHQ1bsiUGNFa.jpg",
+        "releaseDate": "2022-12-23",
+        "voteAverage": 3.538
+      },
+      {
+        "tmdbId": 1133564,
+        "type": "movie",
+        "title": "Rewind 3: The Final Chapter",
+        "source": "continue-watching",
+        "posterPath": "/dkA7kdMnpYH4qHOtmLqLCBfn7Cs.jpg",
+        "releaseDate": "2023-08-17",
+        "voteAverage": 5.333
+      },
+      {
+        "tmdbId": 591275,
+        "type": "movie",
+        "title": "Fear Street: 1666",
+        "source": "continue-watching",
+        "posterPath": "/rmEPtz3Ufzol2VWUAZYzOFaBio3.jpg",
+        "releaseDate": "2021-07-14",
+        "voteAverage": 7.1
+      },
+      {
+        "tmdbId": 942,
+        "type": "movie",
+        "title": "Lethal Weapon 2",
+        "source": "continue-watching",
+        "posterPath": "/ZsUGxTnZ4TzTrHSAfUPJcliL1K.jpg",
+        "releaseDate": "1989-07-07",
+        "voteAverage": 7.025
+      },
+      {
+        "tmdbId": 66489,
+        "type": "movie",
+        "title": "Bad",
+        "source": "continue-watching",
+        "posterPath": "/jEO4qgv3KXRoEPg3wEJKX7ITD7O.jpg",
+        "releaseDate": "1977-05-04",
+        "voteAverage": 6.3
+      },
+      {
+        "tmdbId": 437544,
+        "type": "movie",
+        "title": "People",
+        "source": "continue-watching",
+        "posterPath": "/tXKAlTxGsiMkmomgXouIUU26gmt.jpg",
+        "releaseDate": "2016-04-22",
+        "voteAverage": 5.9
+      },
+      {
+        "tmdbId": 359628,
+        "type": "movie",
+        "title": "Assassination Classroom: Graduation",
+        "source": "continue-watching",
+        "posterPath": "/77fTE8nJY5ZMm7b4Nk8ntBC6ccf.jpg",
+        "releaseDate": "2016-03-25",
+        "voteAverage": 7.121
+      },
+      {
+        "tmdbId": 755812,
+        "type": "movie",
+        "title": "Miraculous World: New York, United HeroeZ",
+        "source": "continue-watching",
+        "posterPath": "/9YbyvcrHmY2SVbdfXpb8mC4Fy0g.jpg",
+        "releaseDate": "2020-09-25",
+        "voteAverage": 8.1
+      },
+      {
+        "tmdbId": 688335,
+        "type": "movie",
+        "title": "Close Encounters of the Fifth Kind",
+        "source": "continue-watching",
+        "posterPath": "/R0rmE1wDbxMb2W0MyDE3HKPhOR.jpg",
+        "releaseDate": "2020-04-07",
+        "voteAverage": 7.022
+      },
+      {
+        "tmdbId": 13649,
+        "type": "movie",
+        "title": "High School Musical 2",
+        "source": "continue-watching",
+        "posterPath": "/la2kiVWDm2vuB4APZDgCCmuBh4K.jpg",
+        "releaseDate": "2007-08-17",
+        "voteAverage": 6.507
+      },
+      {
+        "tmdbId": 866741,
+        "type": "movie",
+        "title": "Box",
+        "source": "continue-watching",
+        "posterPath": "/l6A2GHORl1g45IrINvk5dhFmdr0.jpg",
+        "releaseDate": "2021-07-16",
+        "voteAverage": 6.2
+      },
+      {
+        "tmdbId": 800823,
+        "type": "movie",
+        "title": "The Kids Are Alright: Destination Asturias",
+        "source": "continue-watching",
+        "posterPath": "/xxK9GyYqEN8224PxSdkOKYbLPZX.jpg",
+        "releaseDate": "2021-07-08",
+        "voteAverage": 5.638
+      },
+      {
+        "tmdbId": 484133,
+        "type": "movie",
+        "title": "Nude",
+        "source": "continue-watching",
+        "posterPath": "/699DbQ8eTecLmzjTLrao9D5bbpq.jpg",
+        "releaseDate": "2017-10-29",
+        "voteAverage": 9.4
+      },
+      {
+        "tmdbId": 21752,
+        "type": "movie",
+        "title": "If I Were You 2",
+        "source": "continue-watching",
+        "posterPath": "/jruDMExMKeUz7PHgkk4ROlWwCFO.jpg",
+        "releaseDate": "2009-02-01",
+        "voteAverage": 6.1
+      },
+      {
+        "tmdbId": 1117213,
+        "type": "movie",
+        "title": "Don't Blink",
+        "source": "continue-watching",
+        "posterPath": "/xwMLtlpYi4URmfXzTJktUnnfLEr.jpg",
+        "releaseDate": "2023-02-10",
+        "voteAverage": 6.5
+      },
+      {
+        "tmdbId": 789710,
+        "type": "movie",
+        "title": "Panda",
+        "source": "continue-watching",
+        "posterPath": "/2Cuc8hM5QEQLlVf9iQZjo99ujJv.jpg",
+        "releaseDate": "2020-10-01",
+        "voteAverage": 7
+      }
+    ],
+    "fetchedAt": "2026-02-07T18:55:52.185Z"
+  },
+  "tv_18202": {
+    "tmdbId": 18202,
+    "type": "tv",
+    "title": "Cougar+Town",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 4599,
+        "type": "tv",
+        "title": "Yes, Dear",
+        "source": "continue-watching",
+        "posterPath": "/bEcwkwonvM9OSnfYFtOmhRFHuoZ.jpg",
+        "releaseDate": "2000-10-02",
+        "voteAverage": 6.667
+      },
+      {
+        "tmdbId": 18637,
+        "type": "tv",
+        "title": "Accidentally on Purpose",
+        "source": "continue-watching",
+        "posterPath": "/tokyJacZ4Fhfafs23PGsyhYdEj1.jpg",
+        "releaseDate": "2009-09-21",
+        "voteAverage": 5.857
+      },
+      {
+        "tmdbId": 80459,
+        "type": "tv",
+        "title": "Stath Lets Flats",
+        "source": "continue-watching",
+        "posterPath": "/6jsY1d4IfHa9ytsgWn1lxSMdMAb.jpg",
+        "releaseDate": "2018-06-27",
+        "voteAverage": 6.578
+      },
+      {
+        "tmdbId": 71725,
+        "type": "tv",
+        "title": "Kevin (Probably) Saves the World",
+        "source": "continue-watching",
+        "posterPath": "/k3uUik3FsGN3sn4g8pXseRwdRSp.jpg",
+        "releaseDate": "2017-10-03",
+        "voteAverage": 6.9
+      },
+      {
+        "tmdbId": 67132,
+        "type": "tv",
+        "title": "Kevin Can Wait",
+        "source": "continue-watching",
+        "posterPath": "/rpuNe29T0ZnBhw7nHpDDgimfObe.jpg",
+        "releaseDate": "2016-09-19",
+        "voteAverage": 5.734
+      },
+      {
+        "tmdbId": 42878,
+        "type": "tv",
+        "title": "Anger Management",
+        "source": "continue-watching",
+        "posterPath": "/ekItnn6W73RN9muvLTbeRW8LHlo.jpg",
+        "releaseDate": "2012-06-28",
+        "voteAverage": 6.222
+      },
+      {
+        "tmdbId": 39357,
+        "type": "tv",
+        "title": "Suburgatory",
+        "source": "continue-watching",
+        "posterPath": "/eJiclykJKNv1FAlTubCdaY2KM2a.jpg",
+        "releaseDate": "2011-09-28",
+        "voteAverage": 6.715
+      },
+      {
+        "tmdbId": 61865,
+        "type": "tv",
+        "title": "When Calls the Heart",
+        "source": "continue-watching",
+        "posterPath": "/3d8XxE3qDLzeewtaC4DGamI6Ofa.jpg",
+        "releaseDate": "2014-01-11",
+        "voteAverage": 8.2
+      },
+      {
+        "tmdbId": 206246,
+        "type": "tv",
+        "title": "Trainwreck: Woodstock '99",
+        "source": "continue-watching",
+        "posterPath": "/hFWNQTiJ2VXfZeKrsykem0o9nWc.jpg",
+        "releaseDate": "2022-08-03",
+        "voteAverage": 7.296
+      },
+      {
+        "tmdbId": 71715,
+        "type": "tv",
+        "title": "Good Girls",
+        "source": "continue-watching",
+        "posterPath": "/wpgg6G3UHXepH2Zgpt4W60d6gxR.jpg",
+        "releaseDate": "2018-02-26",
+        "voteAverage": 7.8
+      },
+      {
+        "tmdbId": 14956,
+        "type": "tv",
+        "title": "Dollhouse",
+        "source": "continue-watching",
+        "posterPath": "/oq5WPzUn7R0YcIk7QGwpXqvgSWO.jpg",
+        "releaseDate": "2009-02-13",
+        "voteAverage": 7.222
+      },
+      {
+        "tmdbId": 51019,
+        "type": "tv",
+        "title": "Almost Human",
+        "source": "continue-watching",
+        "posterPath": "/7KNvabIPtsfR01H1bJwc1sobRUM.jpg",
+        "releaseDate": "2013-11-17",
+        "voteAverage": 7.408
+      },
+      {
+        "tmdbId": 7482,
+        "type": "tv",
+        "title": "Leverage",
+        "source": "continue-watching",
+        "posterPath": "/t5KJXooBqJLKUClpvYuSKNrcYGy.jpg",
+        "releaseDate": "2008-12-07",
+        "voteAverage": 7.59
+      },
+      {
+        "tmdbId": 37664,
+        "type": "tv",
+        "title": "The Secret Circle",
+        "source": "continue-watching",
+        "posterPath": "/3MwvNMhD9xpf1exlSfWgVm4sOF5.jpg",
+        "releaseDate": "2011-09-15",
+        "voteAverage": 7.3
+      },
+      {
+        "tmdbId": 75663,
+        "type": "tv",
+        "title": "Deadly Class",
+        "source": "continue-watching",
+        "posterPath": "/u2GSiPazSXpyNQz0yymOUCUm944.jpg",
+        "releaseDate": "2019-01-16",
+        "voteAverage": 7.406
+      },
+      {
+        "tmdbId": 745,
+        "type": "tv",
+        "title": "Spaced",
+        "source": "continue-watching",
+        "posterPath": "/igZWEYUohDxlLodq8RkeJa7jBna.jpg",
+        "releaseDate": "1999-09-24",
+        "voteAverage": 7.922
+      },
+      {
+        "tmdbId": 1215,
+        "type": "tv",
+        "title": "Californication",
+        "source": "continue-watching",
+        "posterPath": "/jPqOY8cq9KXQN4bD7zJGHCNvcb4.jpg",
+        "releaseDate": "2007-08-13",
+        "voteAverage": 7.639
+      },
+      {
+        "tmdbId": 2171,
+        "type": "tv",
+        "title": "Cold Case",
+        "source": "continue-watching",
+        "posterPath": "/5dmiNE8UdAqIyjjwZZWsjMhhV0b.jpg",
+        "releaseDate": "2003-09-28",
+        "voteAverage": 7.774
+      },
+      {
+        "tmdbId": 2617,
+        "type": "tv",
+        "title": "Step by Step",
+        "source": "continue-watching",
+        "posterPath": "/4XMxYOxNvxEkfxUKhs8AoGBQiVD.jpg",
+        "releaseDate": "1991-09-20",
+        "voteAverage": 7.741
+      },
+      {
+        "tmdbId": 2122,
+        "type": "tv",
+        "title": "King of the Hill",
+        "source": "continue-watching",
+        "posterPath": "/e2xyMapmYgv4AuSoSDv9Y4pQlD6.jpg",
+        "releaseDate": "1997-01-12",
+        "voteAverage": 7.383
+      }
+    ],
+    "fetchedAt": "2026-02-07T19:10:45.987Z"
+  },
+  "tv_206586": {
+    "tmdbId": 206586,
+    "type": "tv",
+    "title": "The+Walking+Dead:+The+Ones+Who+Live",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 194583,
+        "type": "tv",
+        "title": "The Walking Dead: Dead City",
+        "source": "continue-watching",
+        "posterPath": "/wq3vuQzQgbS83zX3malAFWMsSwX.jpg",
+        "releaseDate": "2023-06-18",
+        "voteAverage": 7.941
+      },
+      {
+        "tmdbId": 274023,
+        "type": "tv",
+        "title": "Investigation Alien",
+        "source": "continue-watching",
+        "posterPath": "/t2dShYTM1heqVXv4Pjk3mbBqFy2.jpg",
+        "releaseDate": "2024-11-08",
+        "voteAverage": 7.2
+      },
+      {
+        "tmdbId": 211684,
+        "type": "tv",
+        "title": "The Walking Dead: Daryl Dixon",
+        "source": "continue-watching",
+        "posterPath": "/sP5QdW9FN18XWcA4ROz3MPAQBTx.jpg",
+        "releaseDate": "2023-09-10",
+        "voteAverage": 8.019
+      },
+      {
+        "tmdbId": 4340,
+        "type": "tv",
+        "title": "Nightmares & Dreamscapes: From the Stories of Stephen King",
+        "source": "continue-watching",
+        "posterPath": "/30bZ3M79A3Lz2iwNmQnRpisylz1.jpg",
+        "releaseDate": "2006-07-12",
+        "voteAverage": 6.878
+      },
+      {
+        "tmdbId": 112388,
+        "type": "tv",
+        "title": "Beacon 23",
+        "source": "continue-watching",
+        "posterPath": "/navBdlLzcebb6ANZVg24Szfil9h.jpg",
+        "releaseDate": "2023-11-12",
+        "voteAverage": 5.787
+      },
+      {
+        "tmdbId": 285084,
+        "type": "tv",
+        "title": "Gone Girls: The Long Island Serial Killer",
+        "source": "continue-watching",
+        "posterPath": "/vWTep5omXCxFtf5hlUc8VlmFI0u.jpg",
+        "releaseDate": "2025-03-31",
+        "voteAverage": 7.364
+      },
+      {
+        "tmdbId": 5715,
+        "type": "tv",
+        "title": "The Lone Gunmen",
+        "source": "continue-watching",
+        "posterPath": "/3vTu54RlPi0y3AzzUaGeqNmsFs3.jpg",
+        "releaseDate": "2001-03-04",
+        "voteAverage": 6.739
+      },
+      {
+        "tmdbId": 104647,
+        "type": "tv",
+        "title": "The Salisbury Poisonings",
+        "source": "continue-watching",
+        "posterPath": "/80CObOtHNCdROSPuPNfETW4OOyA.jpg",
+        "releaseDate": "2020-06-14",
+        "voteAverage": 6.9
+      },
+      {
+        "tmdbId": 242845,
+        "type": "tv",
+        "title": "American Nightmare",
+        "source": "continue-watching",
+        "posterPath": "/y7dQEXvqzNxm3sFY3VV7PqKeHzB.jpg",
+        "releaseDate": "2024-01-17",
+        "voteAverage": 7.466
+      },
+      {
+        "tmdbId": 107119,
+        "type": "tv",
+        "title": "Monsterland",
+        "source": "continue-watching",
+        "posterPath": "/trfjxF8LN8NuXxSsmGToRCFMdoH.jpg",
+        "releaseDate": "2020-10-02",
+        "voteAverage": 6.409
+      },
+      {
+        "tmdbId": 206013,
+        "type": "tv",
+        "title": "Don't Hug Me I'm Scared",
+        "source": "continue-watching",
+        "posterPath": "/h8nblOde4ZT3H088hRcwfETf50p.jpg",
+        "releaseDate": "2022-09-30",
+        "voteAverage": 8.276
+      },
+      {
+        "tmdbId": 284605,
+        "type": "tv",
+        "title": "The Survivors",
+        "source": "continue-watching",
+        "posterPath": "/4Xgf1axYG97G7BYC661O27t9iYu.jpg",
+        "releaseDate": "2025-06-06",
+        "voteAverage": 6.669
+      },
+      {
+        "tmdbId": 194899,
+        "type": "tv",
+        "title": "Represent",
+        "source": "continue-watching",
+        "posterPath": "/7QqFilEkKSPiU2QsWShTjSf5wgM.jpg",
+        "releaseDate": "2023-01-20",
+        "voteAverage": 6.419
+      },
+      {
+        "tmdbId": 233436,
+        "type": "tv",
+        "title": "The Walking Dead: Red Machete",
+        "source": "continue-watching",
+        "posterPath": "/8gILQcNOrMFNzKqN307vih44G7a.jpg",
+        "releaseDate": "2017-10-22",
+        "voteAverage": 7.13
+      },
+      {
+        "tmdbId": 87518,
+        "type": "tv",
+        "title": "I Love You, Now Die: The Commonwealth v. Michelle Carter",
+        "source": "continue-watching",
+        "posterPath": "/5393uxK9aqVUNbrjyZgeqTlDTmD.jpg",
+        "releaseDate": "2019-07-09",
+        "voteAverage": 6.976
+      },
+      {
+        "tmdbId": 2210,
+        "type": "tv",
+        "title": "Tarzan",
+        "source": "continue-watching",
+        "posterPath": "/7VqtvdnT5INWyS2iIqNu49dDwC1.jpg",
+        "releaseDate": "2003-10-05",
+        "voteAverage": 7.389
+      },
+      {
+        "tmdbId": 95791,
+        "type": "tv",
+        "title": "We're Here",
+        "source": "continue-watching",
+        "posterPath": "/rJkSfDtebhMuHCSNWlRMnZntxEC.jpg",
+        "releaseDate": "2020-04-23",
+        "voteAverage": 5.4
+      },
+      {
+        "tmdbId": 58887,
+        "type": "tv",
+        "title": "Omar",
+        "source": "continue-watching",
+        "posterPath": "/yLxq3KAuKeRHtEVR64QLrSPft6J.jpg",
+        "releaseDate": "2012-07-20",
+        "voteAverage": 8.9
+      },
+      {
+        "tmdbId": 122287,
+        "type": "tv",
+        "title": "Love After World Domination",
+        "source": "continue-watching",
+        "posterPath": "/vHX5AFNNNNvkiZlxqS8WftUZOAH.jpg",
+        "releaseDate": "2022-04-08",
+        "voteAverage": 7.3
+      },
+      {
+        "tmdbId": 256657,
+        "type": "tv",
+        "title": "Pirates: Behind the Legends",
+        "source": "continue-watching",
+        "posterPath": "/ojxDHzrMSAmIdhsuOeYn62J14ig.jpg",
+        "releaseDate": "2024-06-09",
+        "voteAverage": 7
+      }
+    ],
+    "fetchedAt": "2026-02-10T23:05:48.344Z"
+  },
+  "tv_258190": {
+    "tmdbId": 258190,
+    "type": "tv",
+    "title": "Coldwater",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 93166,
+        "type": "tv",
+        "title": "The Capture",
+        "source": "continue-watching",
+        "posterPath": "/bCuTIRmnd6eBNZ9oBBQ2KAtErid.jpg",
+        "releaseDate": "2019-09-03",
+        "voteAverage": 7.8
+      },
+      {
+        "tmdbId": 250988,
+        "type": "tv",
+        "title": "House of Guinness",
+        "source": "continue-watching",
+        "posterPath": "/cDjJBbJcOj7PsWAveLFdSa4J8zJ.jpg",
+        "releaseDate": "2025-09-25",
+        "voteAverage": 7.564
+      },
+      {
+        "tmdbId": 211684,
+        "type": "tv",
+        "title": "The Walking Dead: Daryl Dixon",
+        "source": "continue-watching",
+        "posterPath": "/sP5QdW9FN18XWcA4ROz3MPAQBTx.jpg",
+        "releaseDate": "2023-09-10",
+        "voteAverage": 8.019
+      },
+      {
+        "tmdbId": 1396,
+        "type": "tv",
+        "title": "Breaking Bad",
+        "source": "continue-watching",
+        "posterPath": "/ztkUQFLlC19CCMYHW9o1zWhJRNq.jpg",
+        "releaseDate": "2008-01-20",
+        "voteAverage": 8.936
+      },
+      {
+        "tmdbId": 66732,
+        "type": "tv",
+        "title": "Stranger Things",
+        "source": "continue-watching",
+        "posterPath": "/uOOtwVbSr4QDjAGIifLDwpb2Pdl.jpg",
+        "releaseDate": "2016-07-15",
+        "voteAverage": 8.58
+      },
+      {
+        "tmdbId": 48891,
+        "type": "tv",
+        "title": "Brooklyn Nine-Nine",
+        "source": "continue-watching",
+        "posterPath": "/A3SymGlOHefSKbz1bCOz56moupS.jpg",
+        "releaseDate": "2013-09-17",
+        "voteAverage": 8.218
+      },
+      {
+        "tmdbId": 13916,
+        "type": "tv",
+        "title": "Death Note",
+        "source": "continue-watching",
+        "posterPath": "/tCZFfYTIwrR7n94J6G14Y4hAFU6.jpg",
+        "releaseDate": "2006-10-04",
+        "voteAverage": 8.629
+      },
+      {
+        "tmdbId": 119051,
+        "type": "tv",
+        "title": "Wednesday",
+        "source": "continue-watching",
+        "posterPath": "/36xXlhEpQqVVPuiZhfoQuaY4OlA.jpg",
+        "releaseDate": "2022-11-23",
+        "voteAverage": 8.358
+      },
+      {
+        "tmdbId": 19614,
+        "type": "tv",
+        "title": "It",
+        "source": "continue-watching",
+        "posterPath": "/4ybQ6gopB3H3cu0seVZLznDnIKo.jpg",
+        "releaseDate": "1990-11-18",
+        "voteAverage": 6.935
+      },
+      {
+        "tmdbId": 93405,
+        "type": "tv",
+        "title": "Squid Game",
+        "source": "continue-watching",
+        "posterPath": "/1QdXdRYfktUSONkl1oD5gc6Be0s.jpg",
+        "releaseDate": "2021-09-17",
+        "voteAverage": 7.858
+      },
+      {
+        "tmdbId": 92830,
+        "type": "tv",
+        "title": "Obi-Wan Kenobi",
+        "source": "continue-watching",
+        "posterPath": "/4Lok3HBSfbQxibQZBygoVCwKKrZ.jpg",
+        "releaseDate": "2022-05-26",
+        "voteAverage": 7.029
+      },
+      {
+        "tmdbId": 85271,
+        "type": "tv",
+        "title": "WandaVision",
+        "source": "continue-watching",
+        "posterPath": "/glKDfE6btIRcVB5zrjspRIs4r52.jpg",
+        "releaseDate": "2021-01-15",
+        "voteAverage": 8.196
+      },
+      {
+        "tmdbId": 57243,
+        "type": "tv",
+        "title": "Doctor Who",
+        "source": "continue-watching",
+        "posterPath": "/w8enSKCf6Zm0topeQ2XPccDqsqp.jpg",
+        "releaseDate": "2005-03-26",
+        "voteAverage": 7.6
+      },
+      {
+        "tmdbId": 1668,
+        "type": "tv",
+        "title": "Friends",
+        "source": "continue-watching",
+        "posterPath": "/2koX1xLkpTQM4IZebYvKysFW1Nh.jpg",
+        "releaseDate": "1994-09-22",
+        "voteAverage": 8.416
+      },
+      {
+        "tmdbId": 2691,
+        "type": "tv",
+        "title": "Two and a Half Men",
+        "source": "continue-watching",
+        "posterPath": "/xgfjxyV3g1S68opzuvG6G87muDp.jpg",
+        "releaseDate": "2003-09-22",
+        "voteAverage": 7.44
+      },
+      {
+        "tmdbId": 71712,
+        "type": "tv",
+        "title": "The Good Doctor",
+        "source": "continue-watching",
+        "posterPath": "/luhKkdD80qe62fwop6sdrXK9jUT.jpg",
+        "releaseDate": "2017-09-25",
+        "voteAverage": 8.464
+      },
+      {
+        "tmdbId": 52814,
+        "type": "tv",
+        "title": "Halo",
+        "source": "continue-watching",
+        "posterPath": "/4UmNhZCEu8Vt3byMvNxNEPyf8EY.jpg",
+        "releaseDate": "2022-03-24",
+        "voteAverage": 8.215
+      },
+      {
+        "tmdbId": 157239,
+        "type": "tv",
+        "title": "Alien: Earth",
+        "source": "continue-watching",
+        "posterPath": "/yueXS3q8BtoWekcHOATFHicLl3e.jpg",
+        "releaseDate": "2025-08-12",
+        "voteAverage": 7.344
+      },
+      {
+        "tmdbId": 71446,
+        "type": "tv",
+        "title": "Money Heist",
+        "source": "continue-watching",
+        "posterPath": "/reEMJA1uzscCbkpeRJeTT2bjqUp.jpg",
+        "releaseDate": "2017-05-02",
+        "voteAverage": 8.231
+      },
+      {
+        "tmdbId": 84773,
+        "type": "tv",
+        "title": "The Lord of the Rings: The Rings of Power",
+        "source": "continue-watching",
+        "posterPath": "/kf5Hz70tjNAHg4swGDzOr9BfoZ1.jpg",
+        "releaseDate": "2022-09-01",
+        "voteAverage": 7.3
+      }
+    ],
+    "fetchedAt": "2026-02-11T23:46:16.852Z"
+  },
+  "tv_1405": {
+    "tmdbId": 1405,
+    "type": "tv",
+    "title": "Dexter",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 131927,
+        "type": "tv",
+        "title": "Dexter: New Blood",
+        "source": "continue-watching",
+        "posterPath": "/9EBKgrFIsCFSV1RZKWhYUdbtGiv.jpg",
+        "releaseDate": "2021-11-07",
+        "voteAverage": 7.9
+      },
+      {
+        "tmdbId": 42009,
+        "type": "tv",
+        "title": "Black Mirror",
+        "source": "continue-watching",
+        "posterPath": "/seN6rRfN0I6n8iDXjlSMk1QjNcq.jpg",
+        "releaseDate": "2011-12-04",
+        "voteAverage": 8.3
+      },
+      {
+        "tmdbId": 8592,
+        "type": "tv",
+        "title": "Parks and Recreation",
+        "source": "continue-watching",
+        "posterPath": "/5IOj62y2Eb2ngyYmEn1IJ7bFhzH.jpg",
+        "releaseDate": "2009-04-09",
+        "voteAverage": 8.037
+      },
+      {
+        "tmdbId": 4607,
+        "type": "tv",
+        "title": "Lost",
+        "source": "continue-watching",
+        "posterPath": "/og6S0aTZU6YUJAbqxeKjCa3kY1E.jpg",
+        "releaseDate": "2004-09-22",
+        "voteAverage": 7.9
+      },
+      {
+        "tmdbId": 40008,
+        "type": "tv",
+        "title": "Hannibal",
+        "source": "continue-watching",
+        "posterPath": "/pbV2eLnKSIm1epSZt473UYfqaeZ.jpg",
+        "releaseDate": "2013-04-04",
+        "voteAverage": 8.3
+      },
+      {
+        "tmdbId": 72750,
+        "type": "tv",
+        "title": "Killing Eve",
+        "source": "continue-watching",
+        "posterPath": "/4wKhTVw8aGq5AZMa0Q1spERdi7n.jpg",
+        "releaseDate": "2018-04-08",
+        "voteAverage": 7.9
+      },
+      {
+        "tmdbId": 87108,
+        "type": "tv",
+        "title": "Chernobyl",
+        "source": "continue-watching",
+        "posterPath": "/hlLXt2tOPT6RRnjiUmoxyG1LTFi.jpg",
+        "releaseDate": "2019-05-06",
+        "voteAverage": 8.702
+      },
+      {
+        "tmdbId": 46648,
+        "type": "tv",
+        "title": "True Detective",
+        "source": "continue-watching",
+        "posterPath": "/cuV2O5ZyDLHSOWzg3nLVljp1ubw.jpg",
+        "releaseDate": "2014-01-12",
+        "voteAverage": 8.283
+      },
+      {
+        "tmdbId": 1215,
+        "type": "tv",
+        "title": "Californication",
+        "source": "continue-watching",
+        "posterPath": "/jPqOY8cq9KXQN4bD7zJGHCNvcb4.jpg",
+        "releaseDate": "2007-08-13",
+        "voteAverage": 7.638
+      },
+      {
+        "tmdbId": 1396,
+        "type": "tv",
+        "title": "Breaking Bad",
+        "source": "continue-watching",
+        "posterPath": "/ztkUQFLlC19CCMYHW9o1zWhJRNq.jpg",
+        "releaseDate": "2008-01-20",
+        "voteAverage": 8.936
+      },
+      {
+        "tmdbId": 19885,
+        "type": "tv",
+        "title": "Sherlock",
+        "source": "continue-watching",
+        "posterPath": "/7WTsnHkbA0FaG6R9twfFde0I9hl.jpg",
+        "releaseDate": "2010-07-25",
+        "voteAverage": 8.513
+      },
+      {
+        "tmdbId": 79788,
+        "type": "tv",
+        "title": "Watchmen",
+        "source": "continue-watching",
+        "posterPath": "/m8rWq3j73ZGhDuSCZWMMoE9ePH1.jpg",
+        "releaseDate": "2019-10-20",
+        "voteAverage": 7.639
+      },
+      {
+        "tmdbId": 219937,
+        "type": "tv",
+        "title": "Dexter: Original Sin",
+        "source": "continue-watching",
+        "posterPath": "/j5bP7spdfS0NpDLKDlqJYyJPi1j.jpg",
+        "releaseDate": "2024-12-15",
+        "voteAverage": 8.2
+      },
+      {
+        "tmdbId": 1425,
+        "type": "tv",
+        "title": "House of Cards",
+        "source": "continue-watching",
+        "posterPath": "/hKWxWjFwnMvkWQawbhvC0Y7ygQ8.jpg",
+        "releaseDate": "2013-02-01",
+        "voteAverage": 8.004
+      },
+      {
+        "tmdbId": 1418,
+        "type": "tv",
+        "title": "The Big Bang Theory",
+        "source": "continue-watching",
+        "posterPath": "/euKFiO5M125rpngFRBbSW83beeI.jpg",
+        "releaseDate": "2007-09-24",
+        "voteAverage": 7.913
+      },
+      {
+        "tmdbId": 1639,
+        "type": "tv",
+        "title": "Heroes",
+        "source": "continue-watching",
+        "posterPath": "/lf0TcOkheYUZKpeh7c8lqJHNk5O.jpg",
+        "releaseDate": "2006-09-25",
+        "voteAverage": 7.453
+      },
+      {
+        "tmdbId": 1940,
+        "type": "tv",
+        "title": "Entourage",
+        "source": "continue-watching",
+        "posterPath": "/kLKP8zrArBtBboGz3qJOuMGC7rL.jpg",
+        "releaseDate": "2004-07-18",
+        "voteAverage": 7.368
+      },
+      {
+        "tmdbId": 60622,
+        "type": "tv",
+        "title": "Fargo",
+        "source": "continue-watching",
+        "posterPath": "/6U9CPeD8obHzweikFhiLhpc7YBT.jpg",
+        "releaseDate": "2014-04-15",
+        "voteAverage": 8.292
+      },
+      {
+        "tmdbId": 1409,
+        "type": "tv",
+        "title": "Sons of Anarchy",
+        "source": "continue-watching",
+        "posterPath": "/kiy8BHtIHAslh81rvFcZ4wbNGdY.jpg",
+        "releaseDate": "2008-09-03",
+        "voteAverage": 8.416
+      },
+      {
+        "tmdbId": 4327,
+        "type": "tv",
+        "title": "Mr. Bean",
+        "source": "continue-watching",
+        "posterPath": "/pUNQV35kDaKuejnXGNiUeEBurNE.jpg",
+        "releaseDate": "1990-01-01",
+        "voteAverage": 7.979
+      }
+    ],
+    "fetchedAt": "2026-02-12T23:35:08.042Z"
+  },
+  "movie_1242898": {
+    "tmdbId": 1242898,
+    "type": "movie",
+    "title": "Predator:+Badlands",
+    "source": "continue-watching",
+    "recommendations": [
+      {
+        "tmdbId": 198556,
+        "type": "movie",
+        "title": "Main Krishna Hoon",
+        "source": "continue-watching",
+        "posterPath": "/4fddOiJPp4Mf0jFXcp2WE8qvNW2.jpg",
+        "releaseDate": "2013-01-25",
+        "voteAverage": 6.018
+      },
+      {
+        "tmdbId": 106845,
+        "type": "movie",
+        "title": "Re-Kill",
+        "source": "continue-watching",
+        "posterPath": "/wpofLYUv0aJmDNxyUZux0wTFXJH.jpg",
+        "releaseDate": "2015-10-16",
+        "voteAverage": 5.983
+      },
+      {
+        "tmdbId": 676685,
+        "type": "movie",
+        "title": "Panda Bear in Africa",
+        "source": "continue-watching",
+        "posterPath": "/wxpu7svVqA0ALYpofQBPujGelN3.jpg",
+        "releaseDate": "2024-03-15",
+        "voteAverage": 7.1
+      },
+      {
+        "tmdbId": 896,
+        "type": "movie",
+        "title": "The World of Apu",
+        "source": "continue-watching",
+        "posterPath": "/6Tz1Q69o2n3Zwb0ZffzPL0nFt2T.jpg",
+        "releaseDate": "1959-05-01",
+        "voteAverage": 8.1
+      },
+      {
+        "tmdbId": 19249,
+        "type": "movie",
+        "title": "Holiday on the Buses",
+        "source": "continue-watching",
+        "posterPath": "/3ewJwuY28E4RzCRf2lklwvzPrsK.jpg",
+        "releaseDate": "1973-05-19",
+        "voteAverage": 7.433
+      },
+      {
+        "tmdbId": 1086548,
+        "type": "movie",
+        "title": "Vera and the Pleasure of Others",
+        "source": "continue-watching",
+        "posterPath": "/e0ESGyso9K95glbbnTRenFfCC7l.jpg",
+        "releaseDate": "2024-09-26",
+        "voteAverage": 6.456
+      },
+      {
+        "tmdbId": 38384,
+        "type": "movie",
+        "title": "On the Beat",
+        "source": "continue-watching",
+        "posterPath": "/dLv9QzzQZabT4enXjWEjF8TW1DD.jpg",
+        "releaseDate": "1962-12-11",
+        "voteAverage": 7.683
+      },
+      {
+        "tmdbId": 109277,
+        "type": "movie",
+        "title": "Death Angel - Sonic German Beatdown - Live in Germany",
+        "source": "continue-watching",
+        "posterPath": "/p4mYjweSF3uw0QMiGG6DpGuTmyf.jpg",
+        "releaseDate": "2009-05-15",
+        "voteAverage": 6.2
+      },
+      {
+        "tmdbId": 21991,
+        "type": "movie",
+        "title": "State and Main",
+        "source": "continue-watching",
+        "posterPath": "/348hvpWeSGdAQlCrGvKbpC0FpQN.jpg",
+        "releaseDate": "2000-08-26",
+        "voteAverage": 6.249
+      },
+      {
+        "tmdbId": 408574,
+        "type": "movie",
+        "title": "Chihayafuru: Part II",
+        "source": "continue-watching",
+        "posterPath": "/fH9ze51RlYmbdMjO8csrfCb32TW.jpg",
+        "releaseDate": "2016-04-29",
+        "voteAverage": 7.7
+      },
+      {
+        "tmdbId": 520765,
+        "type": "movie",
+        "title": "Go!",
+        "source": "continue-watching",
+        "posterPath": "/jnOSpITigPAG2SvmoxTSFJy35sv.jpg",
+        "releaseDate": "2020-01-16",
+        "voteAverage": 6.822
+      },
+      {
+        "tmdbId": 262903,
+        "type": "movie",
+        "title": "Main Tera Hero",
+        "source": "continue-watching",
+        "posterPath": "/bupZH3i1SAaLLC0OgYMSLDZN63Q.jpg",
+        "releaseDate": "2014-04-04",
+        "voteAverage": 5.667
+      },
+      {
+        "tmdbId": 110552,
+        "type": "movie",
+        "title": "The Protector 2",
+        "source": "continue-watching",
+        "posterPath": "/hYTnLRJcIbYZEN9vfYN93fm8l5R.jpg",
+        "releaseDate": "2013-10-23",
+        "voteAverage": 6.156
+      },
+      {
+        "tmdbId": 51610,
+        "type": "movie",
+        "title": "The Wild Soccer Bunch 5",
+        "source": "continue-watching",
+        "posterPath": "/g9W0de9Pal6FKQGhfCTh8kzY5Q8.jpg",
+        "releaseDate": "2008-02-20",
+        "voteAverage": 5.4
+      },
+      {
+        "tmdbId": 1234821,
+        "type": "movie",
+        "title": "Jurassic World Rebirth",
+        "source": "continue-watching",
+        "posterPath": "/1RICxzeoNCAO5NpcRMIgg1XT6fm.jpg",
+        "releaseDate": "2025-07-01",
+        "voteAverage": 6.311
+      },
+      {
+        "tmdbId": 207933,
+        "type": "movie",
+        "title": "Stonehearst Asylum",
+        "source": "continue-watching",
+        "posterPath": "/fZxGCCQ0NAtraevqULJ84wSSjo0.jpg",
+        "releaseDate": "2014-10-23",
+        "voteAverage": 6.853
+      },
+      {
+        "tmdbId": 104480,
+        "type": "movie",
+        "title": "Divers at Work on the Wreck of the \"Maine\"",
+        "source": "continue-watching",
+        "posterPath": "/duiuY8xi0fPCBegpWyToUQiZYSX.jpg",
+        "releaseDate": "1898-01-01",
+        "voteAverage": 5.697
+      },
+      {
+        "tmdbId": 1028248,
+        "type": "movie",
+        "title": "As Good as Dead",
+        "source": "continue-watching",
+        "posterPath": "/qqQPxxRQqfLrq0ubfDQCwhJHZ91.jpg",
+        "releaseDate": "2022-12-16",
+        "voteAverage": 6.2
+      }
+    ],
+    "fetchedAt": "2026-02-14T23:41:42.614Z"
+  },
+  "movie_1315303": {
+    "tmdbId": 1315303,
+    "type": "movie",
+    "title": "Primate",
+    "source": "continue-watching",
+    "recommendations": [],
+    "fetchedAt": "2026-02-15T01:29:09.181Z"
+  }
+}

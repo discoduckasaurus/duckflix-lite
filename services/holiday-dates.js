@@ -170,8 +170,17 @@ function doesScheduleMatchDate(schedule, dateStr) {
   return false;
 }
 
+/**
+ * Get today's date as YYYY-MM-DD in America/Chicago (Central) timezone.
+ * Ensures scheduled phrases align with users' local date, not UTC.
+ */
+function getTodayLocal() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+}
+
 module.exports = {
   HOLIDAYS,
   getHolidayDate,
-  doesScheduleMatchDate
+  doesScheduleMatchDate,
+  getTodayLocal
 };

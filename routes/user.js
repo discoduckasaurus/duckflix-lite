@@ -6,7 +6,7 @@ const recommendationsService = require('../services/recommendations-service');
 const fs = require('fs');
 const path = require('path');
 
-const { doesScheduleMatchDate } = require('../services/holiday-dates');
+const { doesScheduleMatchDate, getTodayLocal } = require('../services/holiday-dates');
 
 const router = express.Router();
 
@@ -26,7 +26,7 @@ router.get('/loading-phrases', (req, res) => {
     res.set('Expires', '0');
 
     const userId = req.user.sub;
-    const today = new Date().toISOString().substring(0, 10); // YYYY-MM-DD
+    const today = getTodayLocal(); // YYYY-MM-DD in Central time
 
     // Check for active scheduled phrases
     const schedules = db.prepare('SELECT * FROM loading_phrase_schedules WHERE is_enabled = 1').all();
@@ -513,7 +513,10 @@ router.post('/watch-progress', async (req, res) => {
     const progress = loadWatchProgress(username);
     const isNew = !progress[itemId];
 
-    // Update progress
+    // Preserve existing episodeHistory when updating
+    const existingHistory = progress[itemId]?.episodeHistory || {};
+
+    // Update progress (top-level = current/latest episode for Continue Watching)
     progress[itemId] = {
       tmdbId,
       type,
@@ -525,8 +528,24 @@ router.post('/watch-progress', async (req, res) => {
       duration,
       season,
       episode,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      episodeHistory: existingHistory
     };
+
+    // For TV episodes, also record in per-episode history
+    if (type === 'tv' && season && episode) {
+      const completionThreshold = 0.95;
+      const isCompleted = duration > 0 && position >= (duration * completionThreshold);
+      const episodeKey = `${season}_${episode}`;
+      progress[itemId].episodeHistory[episodeKey] = {
+        season,
+        episode,
+        position,
+        duration,
+        completed: isCompleted,
+        updatedAt: new Date().toISOString()
+      };
+    }
 
     saveWatchProgress(username, progress);
 
@@ -699,6 +718,43 @@ router.get('/download-notifications', (req, res) => {
     logger.error('Download notifications error:', error);
     res.status(500).json({
       error: 'Failed to get notifications',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/user/watch-progress/:tmdbId/episodes
+ * Get per-episode watch progress for a TV show.
+ * Optional query param: ?season=N to filter by season.
+ */
+router.get('/watch-progress/:tmdbId/episodes', (req, res) => {
+  try {
+    const username = req.user.username;
+    const tmdbId = parseInt(req.params.tmdbId);
+    const seasonFilter = req.query.season ? parseInt(req.query.season) : null;
+
+    const progress = loadWatchProgress(username);
+    const itemId = `tv_${tmdbId}`;
+    const item = progress[itemId];
+
+    if (!item || !item.episodeHistory) {
+      return res.json({ episodes: [] });
+    }
+
+    let episodes = Object.values(item.episodeHistory);
+
+    if (seasonFilter !== null) {
+      episodes = episodes.filter(ep => ep.season === seasonFilter);
+    }
+
+    episodes.sort((a, b) => a.season !== b.season ? a.season - b.season : a.episode - b.episode);
+
+    res.json({ episodes });
+  } catch (error) {
+    logger.error('Episode progress load error:', error);
+    res.status(500).json({
+      error: 'Failed to load episode progress',
       message: error.message
     });
   }
