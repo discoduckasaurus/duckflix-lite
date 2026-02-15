@@ -590,13 +590,13 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
     try {
       const preferredLang = 'en';
 
-      // Step 1: Check cache first (OpenSubtitles downloads are cached indefinitely)
+      // Step 1: Check cache — only trust OpenSubtitles-sourced cache (embedded subs may be corrupted)
       const cached = opensubtitlesService.getCachedSubtitle(tmdbId, type, season, episode, preferredLang);
       let cachedFileExists = false;
       if (cached) {
         try { await require('fs').promises.access(cached.file_path); cachedFileExists = true; } catch {}
       }
-      if (cached && cachedFileExists) {
+      if (cached && cachedFileExists && cached.opensubtitles_file_id) {
         const langResult = standardizeLanguage(cached.language);
         downloadJobManager.updateJob(jobId, {
           subtitles: [{
@@ -608,11 +608,42 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
             source: 'cache'
           }]
         });
-        logger.info(`Using cached subtitle for ${title} (${langResult.standardized || cached.language})`);
+        logger.info(`Using cached OpenSubtitles subtitle for ${title} (${langResult.standardized || cached.language})`);
         return;
       }
 
-      // Step 2: Check embedded subtitles
+      // Step 2: Try OpenSubtitles API first (higher quality than embedded)
+      try {
+        const subtitle = await opensubtitlesService.getSubtitle({
+          tmdbId,
+          title,
+          year,
+          type,
+          season,
+          episode,
+          languageCode: preferredLang
+        });
+
+        if (subtitle) {
+          const langResult = standardizeLanguage(subtitle.language);
+          downloadJobManager.updateJob(jobId, {
+            subtitles: [{
+              id: subtitle.id,
+              language: langResult.standardized || subtitle.language,
+              languageCode: subtitle.languageCode,
+              format: subtitle.format,
+              url: `https://${serverHost}/api/vod/subtitles/file/${subtitle.id}`,
+              source: 'opensubtitles'
+            }]
+          });
+          logger.info(`Fetched subtitle from OpenSubtitles for ${title} (now cached)`);
+          return;
+        }
+      } catch (osErr) {
+        logger.debug(`OpenSubtitles unavailable for ${title}: ${osErr.message}`);
+      }
+
+      // Step 3: Fall back to embedded subtitles
       const embeddedResult = await detectEmbeddedSubtitles(streamUrl, preferredLang);
 
       if (embeddedResult.hasEmbedded && !embeddedResult.shouldFallbackToApi) {
@@ -629,63 +660,54 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
           });
           logger.info(`Using embedded subtitle: ${best.language} (stream ${best.index})`);
 
-          // Extract and cache embedded subtitle in background
-          (async () => {
-            try {
-              const tempPath = path.join(opensubtitlesService.SUBTITLES_DIR, `temp_${tmdbId}_${Date.now()}.srt`);
-              const extracted = await extractSubtitleStream(streamUrl, best.index, tempPath);
+          // Extract and cache embedded subtitle in background (only if no cached sub exists at all)
+          if (!cached) {
+            (async () => {
+              try {
+                const tempPath = path.join(opensubtitlesService.SUBTITLES_DIR, `temp_${tmdbId}_${Date.now()}.srt`);
+                const extracted = await extractSubtitleStream(streamUrl, best.index, tempPath);
 
-              if (extracted) {
-                const cachedSub = opensubtitlesService.cacheExtractedSubtitle({
-                  tmdbId,
-                  title,
-                  year,
-                  type,
-                  season,
-                  episode,
-                  language: best.language,
-                  languageCode: best.languageCode,
-                  extractedFilePath: tempPath
-                });
+                if (extracted) {
+                  const cachedSub = opensubtitlesService.cacheExtractedSubtitle({
+                    tmdbId,
+                    title,
+                    year,
+                    type,
+                    season,
+                    episode,
+                    language: best.language,
+                    languageCode: best.languageCode,
+                    extractedFilePath: tempPath
+                  });
 
-                if (cachedSub) {
-                  logger.info(`Extracted and cached embedded subtitle for future use: ${cachedSub.fileName}`);
+                  if (cachedSub) {
+                    logger.info(`Extracted and cached embedded subtitle for future use: ${cachedSub.fileName}`);
+                  }
                 }
+              } catch (extractErr) {
+                logger.debug(`Failed to extract embedded subtitle (non-critical): ${extractErr.message}`);
               }
-            } catch (extractErr) {
-              logger.debug(`Failed to extract embedded subtitle (non-critical): ${extractErr.message}`);
-            }
-          })();
+            })();
+          }
 
           return;
         }
       }
 
-      // Step 3: Fall back to OpenSubtitles API
-      logger.info(`Fetching from OpenSubtitles: ${embeddedResult.fallbackReason || 'no cache or embedded match'}`);
-      const subtitle = await opensubtitlesService.getSubtitle({
-        tmdbId,
-        title,
-        year,
-        type,
-        season,
-        episode,
-        languageCode: preferredLang
-      });
-
-      if (subtitle) {
-        const langResult = standardizeLanguage(subtitle.language);
+      // Step 4: Use embedded-cached subtitle as last resort (if it exists but wasn't from OpenSubtitles)
+      if (cached && cachedFileExists) {
+        const langResult = standardizeLanguage(cached.language);
         downloadJobManager.updateJob(jobId, {
           subtitles: [{
-            id: subtitle.id,
-            language: langResult.standardized || subtitle.language,
-            languageCode: subtitle.languageCode,
-            format: subtitle.format,
-            url: `https://${serverHost}/api/vod/subtitles/file/${subtitle.id}`,
-            source: 'opensubtitles'
+            id: cached.id,
+            language: langResult.standardized || cached.language,
+            languageCode: cached.language_code,
+            format: cached.format,
+            url: `https://${serverHost}/api/vod/subtitles/file/${cached.id}`,
+            source: 'cache'
           }]
         });
-        logger.info(`Fetched subtitle from OpenSubtitles for ${title} (now cached)`);
+        logger.info(`Using cached embedded subtitle as fallback for ${title}`);
       }
     } catch (err) {
       logger.warn('Failed to auto-fetch subtitles (background):', err.message);
@@ -2360,13 +2382,14 @@ router.get('/next-episode/:tmdbId/:season/:episode', async (req, res) => {
  */
 router.get('/subtitles/search', async (req, res) => {
   try {
-    const { tmdbId, title, year, type, season, episode, languageCode } = req.query;
+    const { tmdbId, title, year, type, season, episode, languageCode, force } = req.query;
 
     if (!tmdbId || !type) {
       return res.status(400).json({ error: 'tmdbId and type are required' });
     }
 
-    logger.info(`Subtitle search: ${title} (${tmdbId}) ${type} S${season}E${episode} (${languageCode || 'en'})`);
+    const forceDownload = force === 'true';
+    logger.info(`Subtitle search: ${title} (${tmdbId}) ${type} S${season}E${episode} (${languageCode || 'en'})${forceDownload ? ' [FORCE]' : ''}`);
 
     const subtitle = await opensubtitlesService.getSubtitle({
       tmdbId: parseInt(tmdbId),
@@ -2375,7 +2398,8 @@ router.get('/subtitles/search', async (req, res) => {
       type,
       season: season ? parseInt(season) : null,
       episode: episode ? parseInt(episode) : null,
-      languageCode: languageCode || 'en'
+      languageCode: languageCode || 'en',
+      force: forceDownload
     });
 
     res.json({
@@ -2405,13 +2429,14 @@ router.get('/subtitles/search', async (req, res) => {
  */
 router.post('/subtitles/search', async (req, res) => {
   try {
-    const { tmdbId, title, year, type, season, episode, languageCode } = req.body;
+    const { tmdbId, title, year, type, season, episode, languageCode, force } = req.body;
 
     if (!tmdbId || !type) {
       return res.status(400).json({ error: 'tmdbId and type are required' });
     }
 
-    logger.info(`Subtitle search: ${title} (${tmdbId}) ${type} S${season}E${episode} (${languageCode || 'en'})`);
+    const forceDownload = force === true || force === 'true';
+    logger.info(`Subtitle search: ${title} (${tmdbId}) ${type} S${season}E${episode} (${languageCode || 'en'})${forceDownload ? ' [FORCE]' : ''}`);
 
     const subtitle = await opensubtitlesService.getSubtitle({
       tmdbId: parseInt(tmdbId),
@@ -2420,7 +2445,8 @@ router.post('/subtitles/search', async (req, res) => {
       type,
       season: season ? parseInt(season) : null,
       episode: episode ? parseInt(episode) : null,
-      languageCode: languageCode || 'en'
+      languageCode: languageCode || 'en',
+      force: forceDownload
     });
 
     res.json({

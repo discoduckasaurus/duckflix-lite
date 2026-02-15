@@ -9,7 +9,7 @@ const OPENSUBTITLES_API_KEY = process.env.OPENSUBTITLES_API_KEY;
 const OPENSUBTITLES_USERNAME = process.env.OPENSUBTITLES_USERNAME;
 const OPENSUBTITLES_PASSWORD = process.env.OPENSUBTITLES_PASSWORD;
 const OPENSUBTITLES_BASE_URL = 'https://api.opensubtitles.com/api/v1';
-const SUBTITLES_DIR = path.join(__dirname, '..', 'subtitles');
+const SUBTITLES_DIR = process.env.SUBTITLES_DIR || '/mnt/nas/duckflix/subtitles';
 const MAX_STORAGE_BYTES = 100 * 1024 * 1024 * 1024; // 100GB
 const DAILY_DOWNLOAD_LIMIT = 1000; // VIP limit
 
@@ -480,22 +480,24 @@ function saveSubtitle({
  * @param {Object} params
  * @returns {Promise<Object>} Subtitle record with file info
  */
-async function getSubtitle({ tmdbId, title, year, type, season, episode, languageCode = 'en' }) {
-  // Check cache first
-  const cached = getCachedSubtitle(tmdbId, type, season, episode, languageCode);
-  if (cached && fs.existsSync(cached.file_path)) {
-    // Standardize language name from cache (older entries may have non-standard names)
-    const langResult = standardizeLanguage(cached.language);
-    return {
-      id: cached.id,
-      fileName: path.basename(cached.file_path),
-      filePath: cached.file_path,
-      fileSize: cached.file_size_bytes,
-      language: langResult.standardized || cached.language,
-      languageCode: cached.language_code,
-      format: cached.format,
-      cached: true
-    };
+async function getSubtitle({ tmdbId, title, year, type, season, episode, languageCode = 'en', force = false }) {
+  // Check cache first (skip if force download requested)
+  if (!force) {
+    const cached = getCachedSubtitle(tmdbId, type, season, episode, languageCode);
+    if (cached && fs.existsSync(cached.file_path)) {
+      // Standardize language name from cache (older entries may have non-standard names)
+      const langResult = standardizeLanguage(cached.language);
+      return {
+        id: cached.id,
+        fileName: path.basename(cached.file_path),
+        filePath: cached.file_path,
+        fileSize: cached.file_size_bytes,
+        language: langResult.standardized || cached.language,
+        languageCode: cached.language_code,
+        format: cached.format,
+        cached: true
+      };
+    }
   }
 
   // Check daily quota

@@ -30,11 +30,15 @@ setInterval(() => {
 // Timeout for all TMDB API calls — fail fast instead of hanging 90s on stalled connections
 const TMDB_TIMEOUT = 10000;
 
+// Minimum user reviews to surface content (filters obscure/placeholder entries)
+const MIN_VOTES = 60;
+
 
 router.get('/tmdb/trending', async (req, res) => {
   try {
   console.log("[TRENDING] Request received:", req.query);
-    const { type = 'all', timeWindow = 'week' } = req.query;
+    const { type = 'all', timeWindow = 'week', allLanguages } = req.query;
+    const showAllLanguages = allLanguages === 'true';
 
     // Validate type parameter
     const validTypes = ['movie', 'tv', 'all'];
@@ -58,7 +62,7 @@ router.get('/tmdb/trending', async (req, res) => {
     }
 
     // Check cache first (1 hour TTL)
-    const cacheKey = `trending_${type}_${timeWindow}`;
+    const cacheKey = `trending_${type}_${timeWindow}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
       return res.json(cached.data);
@@ -77,16 +81,11 @@ router.get('/tmdb/trending', async (req, res) => {
     // Format results consistently with search endpoint
     const results = response.data.results
       .filter(item => {
-        // Filter out garbage results: must have poster
         const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
-
-        // Filter out unrated (0 rating) - usually fake/placeholder entries
         const isRated = item.vote_average && item.vote_average > 0;
-
-        // Optional: Also require at least 1 vote to avoid completely unknown entries
-        const hasVotes = item.vote_count && item.vote_count > 0;
-
-        return hasPoster && isRated && hasVotes;
+        const hasVotes = (item.vote_count || 0) >= MIN_VOTES;
+        const langOk = showAllLanguages || item.original_language === 'en';
+        return hasPoster && isRated && hasVotes && langOk;
       })
       .map(item => ({
         id: item.id,
@@ -118,13 +117,14 @@ router.use(authenticateToken);
 /**
  * Helper: Format TMDB results consistently
  */
-function formatResults(results) {
+function formatResults(results, { englishOnly = true } = {}) {
   return results
     .filter(item => {
       const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
       const isRated = item.vote_average && item.vote_average > 0;
-      const hasVotes = item.vote_count && item.vote_count > 0;
-      return hasPoster && isRated && hasVotes;
+      const hasVotes = (item.vote_count || 0) >= MIN_VOTES;
+      const langOk = !englishOnly || item.original_language === 'en';
+      return hasPoster && isRated && hasVotes && langOk;
     })
     .map(item => ({
       id: item.id,
@@ -145,15 +145,16 @@ function formatResults(results) {
  */
 router.get('/collections/popular', async (req, res) => {
   try {
-    const { type = 'movie', page = 1 } = req.query;
+    const { type = 'movie', page = 1, allLanguages } = req.query;
     const contentType = type === 'tv' ? 'tv' : 'movie';
+    const showAllLanguages = allLanguages === 'true';
 
     const tmdbApiKey = process.env.TMDB_API_KEY;
     if (!tmdbApiKey) {
       return res.status(500).json({ error: 'TMDB API key not configured' });
     }
 
-    const cacheKey = `popular_${contentType}_${page}`;
+    const cacheKey = `popular_${contentType}_${page}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
       return res.json(cached.data);
@@ -167,12 +168,15 @@ router.get('/collections/popular', async (req, res) => {
       timeout: TMDB_TIMEOUT
     });
 
-    const results = formatResults(response.data.results);
+    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
     const responseData = {
       results,
       page: response.data.page,
       totalPages: response.data.total_pages,
-      totalResults: response.data.total_results
+      total_pages: response.data.total_pages,
+      totalResults: response.data.total_results,
+      total_results: response.data.total_results,
+      hasMore: response.data.page < response.data.total_pages
     };
 
     cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
@@ -189,15 +193,16 @@ router.get('/collections/popular', async (req, res) => {
  */
 router.get('/collections/top-rated', async (req, res) => {
   try {
-    const { type = 'movie', page = 1 } = req.query;
+    const { type = 'movie', page = 1, allLanguages } = req.query;
     const contentType = type === 'tv' ? 'tv' : 'movie';
+    const showAllLanguages = allLanguages === 'true';
 
     const tmdbApiKey = process.env.TMDB_API_KEY;
     if (!tmdbApiKey) {
       return res.status(500).json({ error: 'TMDB API key not configured' });
     }
 
-    const cacheKey = `top_rated_${contentType}_${page}`;
+    const cacheKey = `top_rated_${contentType}_${page}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
       return res.json(cached.data);
@@ -211,12 +216,15 @@ router.get('/collections/top-rated', async (req, res) => {
       timeout: TMDB_TIMEOUT
     });
 
-    const results = formatResults(response.data.results);
+    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
     const responseData = {
       results,
       page: response.data.page,
       totalPages: response.data.total_pages,
-      totalResults: response.data.total_results
+      total_pages: response.data.total_pages,
+      totalResults: response.data.total_results,
+      total_results: response.data.total_results,
+      hasMore: response.data.page < response.data.total_pages
     };
 
     cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
@@ -233,14 +241,15 @@ router.get('/collections/top-rated', async (req, res) => {
  */
 router.get('/collections/now-playing', async (req, res) => {
   try {
-    const { page = 1 } = req.query;
+    const { page = 1, allLanguages } = req.query;
+    const showAllLanguages = allLanguages === 'true';
 
     const tmdbApiKey = process.env.TMDB_API_KEY;
     if (!tmdbApiKey) {
       return res.status(500).json({ error: 'TMDB API key not configured' });
     }
 
-    const cacheKey = `now_playing_${page}`;
+    const cacheKey = `now_playing_${page}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
       return res.json(cached.data);
@@ -254,12 +263,15 @@ router.get('/collections/now-playing', async (req, res) => {
       timeout: TMDB_TIMEOUT
     });
 
-    const results = formatResults(response.data.results);
+    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
     const responseData = {
       results,
       page: response.data.page,
       totalPages: response.data.total_pages,
-      totalResults: response.data.total_results
+      total_pages: response.data.total_pages,
+      totalResults: response.data.total_results,
+      total_results: response.data.total_results,
+      hasMore: response.data.page < response.data.total_pages
     };
 
     cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
@@ -276,14 +288,15 @@ router.get('/collections/now-playing', async (req, res) => {
  */
 router.get('/collections/upcoming', async (req, res) => {
   try {
-    const { page = 1 } = req.query;
+    const { page = 1, allLanguages } = req.query;
+    const showAllLanguages = allLanguages === 'true';
 
     const tmdbApiKey = process.env.TMDB_API_KEY;
     if (!tmdbApiKey) {
       return res.status(500).json({ error: 'TMDB API key not configured' });
     }
 
-    const cacheKey = `upcoming_${page}`;
+    const cacheKey = `upcoming_${page}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
       return res.json(cached.data);
@@ -297,12 +310,15 @@ router.get('/collections/upcoming', async (req, res) => {
       timeout: TMDB_TIMEOUT
     });
 
-    const results = formatResults(response.data.results);
+    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
     const responseData = {
       results,
       page: response.data.page,
       totalPages: response.data.total_pages,
-      totalResults: response.data.total_results
+      total_pages: response.data.total_pages,
+      totalResults: response.data.total_results,
+      total_results: response.data.total_results,
+      hasMore: response.data.page < response.data.total_pages
     };
 
     cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
@@ -319,14 +335,15 @@ router.get('/collections/upcoming', async (req, res) => {
  */
 router.get('/collections/airing-today', async (req, res) => {
   try {
-    const { page = 1 } = req.query;
+    const { page = 1, allLanguages } = req.query;
+    const showAllLanguages = allLanguages === 'true';
 
     const tmdbApiKey = process.env.TMDB_API_KEY;
     if (!tmdbApiKey) {
       return res.status(500).json({ error: 'TMDB API key not configured' });
     }
 
-    const cacheKey = `airing_today_${page}`;
+    const cacheKey = `airing_today_${page}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
       return res.json(cached.data);
@@ -340,12 +357,15 @@ router.get('/collections/airing-today', async (req, res) => {
       timeout: TMDB_TIMEOUT
     });
 
-    const results = formatResults(response.data.results);
+    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
     const responseData = {
       results,
       page: response.data.page,
       totalPages: response.data.total_pages,
-      totalResults: response.data.total_results
+      total_pages: response.data.total_pages,
+      totalResults: response.data.total_results,
+      total_results: response.data.total_results,
+      hasMore: response.data.page < response.data.total_pages
     };
 
     cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
@@ -362,14 +382,15 @@ router.get('/collections/airing-today', async (req, res) => {
  */
 router.get('/collections/on-the-air', async (req, res) => {
   try {
-    const { page = 1 } = req.query;
+    const { page = 1, allLanguages } = req.query;
+    const showAllLanguages = allLanguages === 'true';
 
     const tmdbApiKey = process.env.TMDB_API_KEY;
     if (!tmdbApiKey) {
       return res.status(500).json({ error: 'TMDB API key not configured' });
     }
 
-    const cacheKey = `on_the_air_${page}`;
+    const cacheKey = `on_the_air_${page}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
       return res.json(cached.data);
@@ -383,12 +404,15 @@ router.get('/collections/on-the-air', async (req, res) => {
       timeout: TMDB_TIMEOUT
     });
 
-    const results = formatResults(response.data.results);
+    const results = formatResults(response.data.results, { englishOnly: !showAllLanguages });
     const responseData = {
       results,
       page: response.data.page,
       totalPages: response.data.total_pages,
-      totalResults: response.data.total_results
+      total_pages: response.data.total_pages,
+      totalResults: response.data.total_results,
+      total_results: response.data.total_results,
+      hasMore: response.data.page < response.data.total_pages
     };
 
     cache.set(cacheKey, { data: responseData, timestamp: Date.now() });
@@ -411,11 +435,14 @@ router.get('/collections/discover', async (req, res) => {
       page = 1,
       genre,
       year,
+      minYear,
+      maxYear,
       minRating,
       maxRating,
       minRuntime,
       maxRuntime,
       language,
+      allLanguages,
       sortBy = 'popularity.desc',
       watchProvider,
       network,
@@ -423,6 +450,7 @@ router.get('/collections/discover', async (req, res) => {
     } = req.query;
 
     const contentType = type === 'tv' ? 'tv' : 'movie';
+    const showAllLanguages = allLanguages === 'true';
 
     const tmdbApiKey = process.env.TMDB_API_KEY;
     if (!tmdbApiKey) {
@@ -440,7 +468,8 @@ router.get('/collections/discover', async (req, res) => {
     const params = {
       api_key: tmdbApiKey,
       page,
-      sort_by: sortBy
+      sort_by: sortBy,
+      'vote_count.gte': MIN_VOTES
     };
 
     if (genre) params.with_genres = genre;
@@ -451,11 +480,30 @@ router.get('/collections/discover', async (req, res) => {
         params.first_air_date_year = year;
       }
     }
+    if (minYear) {
+      if (contentType === 'movie') {
+        params['primary_release_date.gte'] = `${minYear}-01-01`;
+      } else {
+        params['first_air_date.gte'] = `${minYear}-01-01`;
+      }
+    }
+    if (maxYear) {
+      if (contentType === 'movie') {
+        params['primary_release_date.lte'] = `${maxYear}-12-31`;
+      } else {
+        params['first_air_date.lte'] = `${maxYear}-12-31`;
+      }
+    }
     if (minRating) params['vote_average.gte'] = minRating;
     if (maxRating) params['vote_average.lte'] = maxRating;
     if (minRuntime) params['with_runtime.gte'] = minRuntime;
     if (maxRuntime) params['with_runtime.lte'] = maxRuntime;
-    if (language) params.with_original_language = language;
+    // Language filter: explicit language param > allLanguages toggle > default English
+    if (language) {
+      params.with_original_language = language;
+    } else if (!showAllLanguages) {
+      params.with_original_language = 'en';
+    }
 
     // Streaming provider filter (Netflix, HBO Max, Disney+, etc.)
     if (watchProvider) {
@@ -473,12 +521,16 @@ router.get('/collections/discover', async (req, res) => {
       timeout: TMDB_TIMEOUT
     });
 
-    const results = formatResults(response.data.results);
+    // Language already filtered at TMDB API level for discover
+    const results = formatResults(response.data.results, { englishOnly: false });
     const responseData = {
       results,
       page: response.data.page,
       totalPages: response.data.total_pages,
+      total_pages: response.data.total_pages,
       totalResults: response.data.total_results,
+      total_results: response.data.total_results,
+      hasMore: response.data.page < response.data.total_pages,
       filters: {
         genre,
         year,
@@ -728,7 +780,8 @@ function calculateRelevanceScore(title, searchQuery) {
  */
 router.get('/tmdb', async (req, res) => {
   try {
-    const { query, type = 'multi' } = req.query;
+    const { query, type = 'multi', allLanguages } = req.query;
+    const showAllLanguages = allLanguages === 'true';
 
     if (!query) {
       return res.status(400).json({ error: 'Query parameter required' });
@@ -740,7 +793,7 @@ router.get('/tmdb', async (req, res) => {
     }
 
     // Check cache first
-    const cacheKey = `search_${type}_${query}`;
+    const cacheKey = `search_${type}_${query}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
       return res.json(cached.data);
@@ -760,16 +813,11 @@ router.get('/tmdb', async (req, res) => {
 
     const results = response.data.results
       .filter(item => {
-        // Filter out garbage results: must have poster
         const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
-
-        // Filter out unrated (0 rating) - usually fake/placeholder entries
         const isRated = item.vote_average && item.vote_average > 0;
-
-        // Optional: Also require at least 1 vote to avoid completely unknown entries
-        const hasVotes = item.vote_count && item.vote_count > 0;
-
-        return hasPoster && isRated && hasVotes;
+        const hasVotes = (item.vote_count || 0) >= MIN_VOTES;
+        const langOk = showAllLanguages || item.original_language === 'en';
+        return hasPoster && isRated && hasVotes && langOk;
       })
       .map(item => {
         const title = item.title || item.name;
@@ -826,6 +874,33 @@ router.get('/tmdb', async (req, res) => {
  * Supports type: 'movie', 'tv', or 'all' (default: 'all')
  * Supports timeWindow: 'week' (7-day trending)
  */
+
+/**
+ * GET /api/search/tmdb/rt-scores/:tmdbId
+ * Get Rotten Tomatoes scores for a title
+ * Must be above /tmdb/:id to avoid Express catching "rt-scores" as :id
+ */
+router.get('/tmdb/rt-scores/:tmdbId', authenticateToken, async (req, res) => {
+  try {
+    const tmdbId = parseInt(req.params.tmdbId, 10);
+    const { type, title, year } = req.query;
+
+    if (!tmdbId || !type || !title) {
+      return res.status(400).json({ error: 'tmdbId, type, and title are required' });
+    }
+
+    const mediaType = type === 'tv' ? 'tv' : 'movie';
+    const releaseYear = year ? parseInt(year, 10) : null;
+
+    const rtService = require('../services/rottentomatoes-service');
+    const result = await rtService.getScores(tmdbId, mediaType, title, releaseYear);
+
+    res.json(result);
+  } catch (error) {
+    logger.error('[RT] Endpoint error:', error.message);
+    res.status(500).json({ error: 'Failed to fetch RT scores' });
+  }
+});
 
 /**
  * GET /api/search/tmdb/:id
@@ -983,6 +1058,8 @@ router.get('/person/:personId', async (req, res) => {
 router.get('/person/:personId/credits', async (req, res) => {
   try {
     const { personId } = req.params;
+    const { allLanguages } = req.query;
+    const showAllLanguages = allLanguages === 'true';
 
     const tmdbApiKey = process.env.TMDB_API_KEY;
     if (!tmdbApiKey) {
@@ -990,7 +1067,7 @@ router.get('/person/:personId/credits', async (req, res) => {
     }
 
     // Check cache first (1 hour TTL for person credits)
-    const cacheKey = `person_credits_${personId}`;
+    const cacheKey = `person_credits_${personId}_${showAllLanguages}`;
     const cached = cache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < TRENDING_CACHE_TTL) {
       return res.json(cached.data);
@@ -1014,11 +1091,11 @@ router.get('/person/:personId/credits', async (req, res) => {
     // Filter and score credits
     const scoredCredits = allCredits
       .filter(item => {
-        // Must have poster and rating
         const hasPoster = item.poster_path && item.poster_path.trim().length > 0;
         const isRated = item.vote_average && item.vote_average > 0;
-        const hasVotes = item.vote_count && item.vote_count > 0;
-        return hasPoster && isRated && hasVotes;
+        const hasVotes = (item.vote_count || 0) >= MIN_VOTES;
+        const langOk = showAllLanguages || item.original_language === 'en';
+        return hasPoster && isRated && hasVotes && langOk;
       })
       .map(item => {
         // Calculate recency score (0-100)
