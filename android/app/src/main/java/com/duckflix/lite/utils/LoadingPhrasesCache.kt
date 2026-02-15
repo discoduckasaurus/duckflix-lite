@@ -12,7 +12,9 @@ object LoadingPhrasesCache {
     private const val PREFS_NAME = "loading_phrases_cache"
     private const val KEY_PHRASES_A = "phrases_a"
     private const val KEY_PHRASES_B = "phrases_b"
+    private const val KEY_LAST_FETCHED = "last_fetched_at"
     private const val SEPARATOR = "|||"
+    private const val STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000L // 24 hours
 
     var phrasesA: List<String> = emptyList()
         private set
@@ -56,19 +58,29 @@ object LoadingPhrasesCache {
         this.phrasesB = phrasesB
         this.hasFetchedFromApi = true
 
-        // Persist to SharedPreferences
+        // Persist to SharedPreferences with fetch timestamp
         prefs?.edit()?.apply {
             putString(KEY_PHRASES_A, phrasesA.joinToString(SEPARATOR))
             putString(KEY_PHRASES_B, phrasesB.joinToString(SEPARATOR))
+            putLong(KEY_LAST_FETCHED, System.currentTimeMillis())
             apply()
         }
         println("[LoadingPhrases] Cached ${phrasesA.size} A, ${phrasesB.size} B phrases to storage")
     }
 
     /**
-     * Check if we need to retry fetching phrases from API
+     * Check if we need to fetch phrases from API.
+     * Returns true if we haven't fetched this session, or if the cache is older than 24 hours.
      */
-    fun needsRetry(): Boolean = !hasFetchedFromApi
+    fun needsRetry(): Boolean {
+        if (!hasFetchedFromApi) {
+            val lastFetched = prefs?.getLong(KEY_LAST_FETCHED, 0L) ?: 0L
+            if (lastFetched == 0L) return true // Never fetched
+            val age = System.currentTimeMillis() - lastFetched
+            return age >= STALE_THRESHOLD_MS
+        }
+        return false
+    }
 
     fun setDefaults() {
         phrasesA = listOf(

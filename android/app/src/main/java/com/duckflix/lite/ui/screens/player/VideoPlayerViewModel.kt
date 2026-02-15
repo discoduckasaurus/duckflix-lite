@@ -105,7 +105,8 @@ data class PlayerUiState(
     val introDismissed: Boolean = false,
     val recapDismissed: Boolean = false,
     val creditsDismissed: Boolean = false,
-    val isSeeking: Boolean = false // Track if user is actively seeking (hide skip buttons during seek)
+    val isSeeking: Boolean = false, // Track if user is actively seeking (hide skip buttons during seek)
+    val isForceEnglishLoading: Boolean = false
 )
 
 @HiltViewModel
@@ -1113,6 +1114,9 @@ class VideoPlayerViewModel @Inject constructor(
 
     private fun startPlayback(streamUrl: String, fileName: String?) {
         println("[DEBUG] startPlayback: Setting media item")
+        // Clear subtitle state from previous content
+        embeddedSubtitleInfo = emptyMap()
+        isAddingSubtitles = false
         println("[DEBUG] Stream URL length: ${streamUrl.length}, starts with https: ${streamUrl.startsWith("https")}")
         println("[DEBUG] Stream URL (truncated): ${streamUrl.take(100)}...")
         currentStreamUrl = streamUrl
@@ -1135,6 +1139,13 @@ class VideoPlayerViewModel @Inject constructor(
         }
 
         _player?.apply {
+            // Reset subtitle track state so previous "disabled" doesn't carry over
+            trackSelectionParameters = trackSelectionParameters
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                .build()
+
             playWhenReady = true  // Set BEFORE prepare to start immediately when ready
             setMediaItem(mediaItem)
             prepare()
@@ -1215,10 +1226,18 @@ class VideoPlayerViewModel @Inject constructor(
                 duration = duration,
                 lastWatchedAt = System.currentTimeMillis(),
                 isCompleted = isCompleted,
-                season = season,
-                episode = episode
+                season = season ?: 0,
+                episode = episode ?: 0
             )
             watchProgressDao.saveProgress(progress)
+
+            // Enforce 150MB cap (~500K rows at ~300 bytes each)
+            try {
+                val count = watchProgressDao.getCount()
+                if (count > 500_000) {
+                    watchProgressDao.deleteOldest(count - 500_000)
+                }
+            } catch (_: Exception) { }
 
             // Sync to server for recommendations
             try {
@@ -2280,6 +2299,55 @@ class VideoPlayerViewModel @Inject constructor(
                 // Non-critical - playback continues without subtitles
             }
         }
+    }
+
+    /**
+     * Force-fetch English subtitles from OpenSubtitles (bypasses cache, costs 1 daily quota)
+     */
+    fun forceEnglishSubtitles() {
+        viewModelScope.launch {
+            _uiState.value = _uiState.value.copy(isForceEnglishLoading = true)
+            try {
+                println("[SUBTITLES] Force-fetching English subtitles for $contentTitle")
+
+                val request = com.duckflix.lite.data.remote.dto.SubtitleSearchRequest(
+                    tmdbId = tmdbId,
+                    title = contentTitle,
+                    year = year,
+                    type = contentType,
+                    season = season,
+                    episode = episode,
+                    languageCode = "en",
+                    force = true
+                )
+
+                val response = api.forceSearchSubtitle(request)
+
+                if (response.success && response.subtitle != null) {
+                    println("[SUBTITLES] Force English subtitle found, adding to player...")
+                    addExternalSubtitles(listOf(response.subtitle))
+                    // Auto-select the newly added subtitle after a short delay for tracks to update
+                    delay(500)
+                    autoSelectLastSubtitle()
+                } else {
+                    println("[SUBTITLES] Force English subtitle not found")
+                }
+            } catch (e: Exception) {
+                println("[SUBTITLES] Failed to force-fetch English subtitles: ${e.message}")
+            } finally {
+                _uiState.value = _uiState.value.copy(isForceEnglishLoading = false)
+            }
+        }
+    }
+
+    /**
+     * Auto-select the last (most recently added) subtitle track
+     */
+    private fun autoSelectLastSubtitle() {
+        val tracks = _uiState.value.subtitleTracks
+        val lastTrack = tracks.lastOrNull() ?: return
+        println("[SUBTITLES] Auto-selecting newly added subtitle: ${lastTrack.label}")
+        selectSubtitleTrack(lastTrack.id)
     }
 
     /**

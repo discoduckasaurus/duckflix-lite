@@ -41,9 +41,12 @@ data class RecordingEntity(
     val status: String
 )
 
-@Entity(tableName = "watch_progress")
+@Entity(
+    tableName = "watch_progress",
+    primaryKeys = ["tmdbId", "season", "episode"]
+)
 data class WatchProgressEntity(
-    @PrimaryKey val tmdbId: Int,
+    val tmdbId: Int,
     val title: String,
     val type: String, // "movie" or "tv"
     val year: String?,
@@ -52,8 +55,8 @@ data class WatchProgressEntity(
     val duration: Long, // milliseconds
     val lastWatchedAt: Long, // timestamp
     val isCompleted: Boolean = false,
-    val season: Int? = null, // TV shows only
-    val episode: Int? = null // TV shows only
+    val season: Int = 0, // 0 for movies, season number for TV
+    val episode: Int = 0 // 0 for movies, episode number for TV
 )
 
 @Entity(tableName = "recent_searches")

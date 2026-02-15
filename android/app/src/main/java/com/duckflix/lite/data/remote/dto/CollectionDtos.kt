@@ -1,6 +1,5 @@
 package com.duckflix.lite.data.remote.dto
 
-import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
 /**
@@ -37,14 +36,15 @@ data class CollectionItem(
 
 /**
  * Response from collection endpoints (popular, top-rated, now-playing, discover).
- * Pagination fields are optional as some endpoints may not include them.
+ * Server returns both camelCase and snake_case pagination fields plus hasMore boolean.
  */
 @JsonClass(generateAdapter = true)
 data class CollectionResponse(
     val results: List<CollectionItem>,
     val page: Int = 1,
-    @Json(name = "total_pages") val totalPages: Int = 1,
-    @Json(name = "total_results") val totalResults: Int = 0
+    val totalPages: Int = 1,
+    val totalResults: Int = 0,
+    val hasMore: Boolean = false
 )
 
 @JsonClass(generateAdapter = true)

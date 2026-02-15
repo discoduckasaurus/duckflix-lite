@@ -49,7 +49,9 @@ interface DuckFlixApi {
     @GET("search/tmdb")
     suspend fun searchTmdb(
         @Query("query") query: String,
-        @Query("type") type: String = "movie"
+        @Query("type") type: String = "movie",
+        @Query("page") page: Int = 1,
+        @Query("allLanguages") allLanguages: Boolean = true // Search should find all languages
     ): TmdbSearchResponse
 
     // TMDB Details
@@ -58,6 +60,15 @@ interface DuckFlixApi {
         @Path("id") id: Int,
         @Query("type") type: String = "movie"
     ): TmdbDetailResponse
+
+    // Rotten Tomatoes Scores
+    @GET("search/tmdb/rt-scores/{tmdbId}")
+    suspend fun getRTScores(
+        @Path("tmdbId") tmdbId: Int,
+        @Query("type") type: String,
+        @Query("title") title: String,
+        @Query("year") year: Int? = null
+    ): com.duckflix.lite.data.remote.dto.RTScoresResponse
 
     // TMDB Season Details
     @GET("search/tmdb/season/{showId}/{seasonNumber}")
@@ -126,14 +137,17 @@ interface DuckFlixApi {
     // Recommendations - personalized content based on watch history
     @GET("user/recommendations")
     suspend fun getRecommendations(
-        @Query("limit") limit: Int = 20
+        @Query("limit") limit: Int = 20,
+        @Query("page") page: Int = 1
     ): RecommendationsResponse
 
     // Trending content from TMDB (requires authentication)
     @GET("user/trending")
     suspend fun getTrending(
         @Query("mediaType") mediaType: String = "movie", // "movie" or "tv"
-        @Query("timeWindow") timeWindow: String = "week" // "day" or "week"
+        @Query("timeWindow") timeWindow: String = "week", // "day" or "week"
+        @Query("page") page: Int = 1,
+        @Query("allLanguages") allLanguages: Boolean? = null // null = server default (English only)
     ): TrendingResponse
 
     // Watch progress sync
@@ -149,6 +163,13 @@ interface DuckFlixApi {
     // Continue Watching (includes download states)
     @GET("user/watch-progress")
     suspend fun getContinueWatching(): com.duckflix.lite.data.remote.dto.ContinueWatchingResponse
+
+    // Per-episode watch progress for a TV show
+    @GET("user/watch-progress/{tmdbId}/episodes")
+    suspend fun getEpisodeProgress(
+        @Path("tmdbId") tmdbId: Int,
+        @Query("season") season: Int
+    ): com.duckflix.lite.data.remote.dto.EpisodeProgressResponse
 
     // Dismiss failed download
     @DELETE("user/failed-download/{jobId}")
@@ -218,7 +239,10 @@ interface DuckFlixApi {
     suspend fun getPersonDetails(@Path("personId") personId: Int): com.duckflix.lite.data.remote.dto.PersonDetailsResponse
 
     @GET("search/person/{personId}/credits")
-    suspend fun getPersonCredits(@Path("personId") personId: Int): com.duckflix.lite.data.remote.dto.PersonCreditsResponse
+    suspend fun getPersonCredits(
+        @Path("personId") personId: Int,
+        @Query("allLanguages") allLanguages: Boolean? = null
+    ): com.duckflix.lite.data.remote.dto.PersonCreditsResponse
 
     // Report bad stream
     @POST("vod/report-bad")
@@ -227,6 +251,10 @@ interface DuckFlixApi {
     // Subtitle search
     @POST("vod/subtitles/search")
     suspend fun searchSubtitles(@Body request: com.duckflix.lite.data.remote.dto.SubtitleSearchRequest): com.duckflix.lite.data.remote.dto.SubtitleSearchResponse
+
+    // Force subtitle search (returns single subtitle)
+    @POST("vod/subtitles/search")
+    suspend fun forceSearchSubtitle(@Body request: com.duckflix.lite.data.remote.dto.SubtitleSearchRequest): com.duckflix.lite.data.remote.dto.ForceSubtitleResponse
 
     // Live TV
     @GET("livetv/channels")
@@ -243,20 +271,23 @@ interface DuckFlixApi {
     @GET("search/collections/popular")
     suspend fun getPopular(
         @Query("type") type: String, // "movie" or "tv"
-        @Query("page") page: Int = 1
+        @Query("page") page: Int = 1,
+        @Query("allLanguages") allLanguages: Boolean? = null
     ): CollectionResponse
 
     // Top Rated content
     @GET("search/collections/top-rated")
     suspend fun getTopRated(
         @Query("type") type: String, // "movie" or "tv"
-        @Query("page") page: Int = 1
+        @Query("page") page: Int = 1,
+        @Query("allLanguages") allLanguages: Boolean? = null
     ): CollectionResponse
 
     // Now Playing (movies in theaters)
     @GET("search/collections/now-playing")
     suspend fun getNowPlaying(
-        @Query("page") page: Int = 1
+        @Query("page") page: Int = 1,
+        @Query("allLanguages") allLanguages: Boolean? = null
     ): CollectionResponse
 
     // Discover with filters
@@ -273,7 +304,8 @@ interface DuckFlixApi {
         @Query("maxRuntime") maxRuntime: Int? = null,
         @Query("sortBy") sortBy: String? = null,
         @Query("watchProvider") watchProvider: Int? = null,
-        @Query("page") page: Int = 1
+        @Query("page") page: Int = 1,
+        @Query("allLanguages") allLanguages: Boolean? = null
     ): CollectionResponse
 
     // Genres list

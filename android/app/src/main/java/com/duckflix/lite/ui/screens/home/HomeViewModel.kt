@@ -23,11 +23,20 @@ data class HomeUiState(
     val continueWatching: List<ContinueWatchingItem> = emptyList(),
     val watchlist: List<WatchlistEntity> = emptyList(),
     val recommendations: List<RecommendationItem> = emptyList(),
+    val recommendationsPage: Int = 1,
+    val recommendationsHasMore: Boolean = false,
     val trendingMovies: List<TrendingResult> = emptyList(),
+    val trendingMoviesPage: Int = 1,
+    val trendingMoviesHasMore: Boolean = false,
     val trendingTV: List<TrendingResult> = emptyList(),
+    val trendingTVPage: Int = 1,
+    val trendingTVHasMore: Boolean = false,
     val isLoadingRecommendations: Boolean = false,
     val isLoadingTrendingMovies: Boolean = false,
     val isLoadingTrendingTV: Boolean = false,
+    val isLoadingMoreRecommendations: Boolean = false,
+    val isLoadingMoreTrendingMovies: Boolean = false,
+    val isLoadingMoreTrendingTV: Boolean = false,
     val recommendationsError: String? = null,
     val trendingMoviesError: String? = null,
     val trendingTVError: String? = null,
@@ -177,75 +186,111 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun loadRecommendations() {
+    fun loadMoreRecommendations() {
+        val state = _uiState.value
+        if (state.isLoadingMoreRecommendations || state.isLoadingRecommendations) return
+        if (!state.recommendationsHasMore && state.recommendations.size < state.recommendationsPage * 20) return
+        loadRecommendations(resetPage = false)
+    }
+
+    fun loadMoreTrendingMovies() {
+        val state = _uiState.value
+        if (state.isLoadingMoreTrendingMovies || state.isLoadingTrendingMovies) return
+        if (!state.trendingMoviesHasMore && state.trendingMovies.size < state.trendingMoviesPage * 20) return
+        loadTrendingMovies(resetPage = false)
+    }
+
+    fun loadMoreTrendingTV() {
+        val state = _uiState.value
+        if (state.isLoadingMoreTrendingTV || state.isLoadingTrendingTV) return
+        if (!state.trendingTVHasMore && state.trendingTV.size < state.trendingTVPage * 20) return
+        loadTrendingTV(resetPage = false)
+    }
+
+    private fun loadRecommendations(resetPage: Boolean = true) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isLoadingRecommendations = true,
+            val state = _uiState.value
+            val page = if (resetPage) 1 else state.recommendationsPage + 1
+
+            _uiState.value = state.copy(
+                isLoadingRecommendations = resetPage,
+                isLoadingMoreRecommendations = !resetPage,
                 recommendationsError = null
             )
             try {
-                println("[HomeViewModel] Loading recommendations...")
-                val response = api.getRecommendations(limit = 20)
-                println("[HomeViewModel] Recommendations loaded: ${response.recommendations.size} items")
+                val response = api.getRecommendations(limit = 20, page = page)
+                val newItems = if (resetPage) response.recommendations else state.recommendations + response.recommendations
                 _uiState.value = _uiState.value.copy(
-                    recommendations = response.recommendations,
-                    isLoadingRecommendations = false
+                    recommendations = newItems,
+                    recommendationsPage = page,
+                    recommendationsHasMore = response.hasMore,
+                    isLoadingRecommendations = false,
+                    isLoadingMoreRecommendations = false
                 )
             } catch (e: Exception) {
-                println("[HomeViewModel] Recommendations error: ${e.message}")
-                e.printStackTrace()
                 _uiState.value = _uiState.value.copy(
                     isLoadingRecommendations = false,
+                    isLoadingMoreRecommendations = false,
                     recommendationsError = e.message
                 )
             }
         }
     }
 
-    private fun loadTrendingMovies() {
+    private fun loadTrendingMovies(resetPage: Boolean = true) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isLoadingTrendingMovies = true,
+            val state = _uiState.value
+            val page = if (resetPage) 1 else state.trendingMoviesPage + 1
+
+            _uiState.value = state.copy(
+                isLoadingTrendingMovies = resetPage,
+                isLoadingMoreTrendingMovies = !resetPage,
                 trendingMoviesError = null
             )
             try {
-                println("[HomeViewModel] Loading trending movies...")
-                val response = api.getTrending(mediaType = "movie", timeWindow = "week")
-                println("[HomeViewModel] Trending movies loaded: ${response.results.size} items")
+                val response = api.getTrending(mediaType = "movie", timeWindow = "week", page = page)
+                val newItems = if (resetPage) response.results else state.trendingMovies + response.results
                 _uiState.value = _uiState.value.copy(
-                    trendingMovies = response.results,
-                    isLoadingTrendingMovies = false
+                    trendingMovies = newItems,
+                    trendingMoviesPage = page,
+                    trendingMoviesHasMore = response.hasMore,
+                    isLoadingTrendingMovies = false,
+                    isLoadingMoreTrendingMovies = false
                 )
             } catch (e: Exception) {
-                println("[HomeViewModel] Trending movies error: ${e.message}")
-                e.printStackTrace()
                 _uiState.value = _uiState.value.copy(
                     isLoadingTrendingMovies = false,
+                    isLoadingMoreTrendingMovies = false,
                     trendingMoviesError = e.message
                 )
             }
         }
     }
 
-    private fun loadTrendingTV() {
+    private fun loadTrendingTV(resetPage: Boolean = true) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isLoadingTrendingTV = true,
+            val state = _uiState.value
+            val page = if (resetPage) 1 else state.trendingTVPage + 1
+
+            _uiState.value = state.copy(
+                isLoadingTrendingTV = resetPage,
+                isLoadingMoreTrendingTV = !resetPage,
                 trendingTVError = null
             )
             try {
-                println("[HomeViewModel] Loading trending TV...")
-                val response = api.getTrending(mediaType = "tv", timeWindow = "week")
-                println("[HomeViewModel] Trending TV loaded: ${response.results.size} items")
+                val response = api.getTrending(mediaType = "tv", timeWindow = "week", page = page)
+                val newItems = if (resetPage) response.results else state.trendingTV + response.results
                 _uiState.value = _uiState.value.copy(
-                    trendingTV = response.results,
-                    isLoadingTrendingTV = false
+                    trendingTV = newItems,
+                    trendingTVPage = page,
+                    trendingTVHasMore = response.hasMore,
+                    isLoadingTrendingTV = false,
+                    isLoadingMoreTrendingTV = false
                 )
             } catch (e: Exception) {
-                println("[HomeViewModel] Trending TV error: ${e.message}")
-                e.printStackTrace()
                 _uiState.value = _uiState.value.copy(
                     isLoadingTrendingTV = false,
+                    isLoadingMoreTrendingTV = false,
                     trendingTVError = e.message
                 )
             }

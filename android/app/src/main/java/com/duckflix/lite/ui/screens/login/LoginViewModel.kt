@@ -108,28 +108,11 @@ class LoginViewModel @Inject constructor(
     }
 
     private fun performBandwidthTest() {
-        viewModelScope.launch {
-            // Check if bandwidth test is needed (no measurement or stale)
-            val needsTest = bandwidthTester.needsTest()
+        // Set logged in immediately - don't block on bandwidth test
+        _uiState.update { it.copy(isLoggedIn = true) }
 
-            if (needsTest) {
-                _uiState.update { it.copy(isMeasuringBandwidth = true) }
-
-                // Perform streaming bandwidth test and report to server
-                val result = bandwidthTester.performTestAndReport(trigger = "startup")
-
-                _uiState.update {
-                    it.copy(
-                        isMeasuringBandwidth = false,
-                        isLoggedIn = true,
-                        bandwidthMbps = result?.recorded
-                    )
-                }
-            } else {
-                // Bandwidth measurement exists and is fresh, skip test
-                println("[Login] Bandwidth measurement is fresh, skipping test")
-                _uiState.update { it.copy(isLoggedIn = true) }
-            }
-        }
+        // Run bandwidth test in background (fire-and-forget)
+        // This won't block navigation or content loading
+        bandwidthTester.performTestAndReportInBackground("startup")
     }
 }

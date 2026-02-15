@@ -62,7 +62,7 @@ fun FocusableCard(
             .focusable(interactionSource = interactionSource),
         interactionSource = interactionSource,
         border = if (isFocused) {
-            BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+            BorderStroke(1.5.dp, Color.White)
         } else {
             null
         },
@@ -234,7 +234,7 @@ fun MediaCard(
             interactionSource = interactionSource,
             shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
             border = if (isFocused) {
-                BorderStroke(2.dp, borderColor.copy(alpha = 0.85f))
+                BorderStroke(1.5.dp, Color.White)
             } else {
                 null
             },

@@ -45,16 +45,20 @@ class DuckFlixApplication : Application() {
         // This runs before Hilt injection completes, so phrases are ready instantly
         LoadingPhrasesCache.initFromStorage(this)
 
-        // Refresh phrases from API in background
-        applicationScope.launch {
-            try {
-                val response = api.getLoadingPhrases()
-                LoadingPhrasesCache.setPhrases(response.phrasesA, response.phrasesB)
-                println("[DuckFlixApp] Loading phrases refreshed: ${response.phrasesA.size} A, ${response.phrasesB.size} B")
-            } catch (e: Exception) {
-                println("[DuckFlixApp] Failed to refresh loading phrases: ${e.message}")
-                // Cached or default phrases already loaded
+        // Refresh phrases from API in background (only if stale or never fetched)
+        if (LoadingPhrasesCache.needsRetry()) {
+            applicationScope.launch {
+                try {
+                    val response = api.getLoadingPhrases()
+                    LoadingPhrasesCache.setPhrases(response.phrasesA, response.phrasesB)
+                    println("[DuckFlixApp] Loading phrases refreshed: ${response.phrasesA.size} A, ${response.phrasesB.size} B")
+                } catch (e: Exception) {
+                    println("[DuckFlixApp] Failed to refresh loading phrases: ${e.message}")
+                    // Cached or default phrases already loaded
+                }
             }
+        } else {
+            println("[DuckFlixApp] Loading phrases cache is fresh, skipping API fetch")
         }
     }
 }

@@ -121,7 +121,7 @@ fun ProviderTile(
             interactionSource = interactionSource,
             shape = RoundedCornerShape(cornerRadius),
             border = if (isFocused) {
-                BorderStroke(2.dp, glowColor.copy(alpha = 0.85f))
+                BorderStroke(1.5.dp, Color.White)
             } else {
                 null
             },

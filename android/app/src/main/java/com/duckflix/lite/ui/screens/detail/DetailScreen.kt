@@ -36,8 +36,14 @@ import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
 import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.tween
 import coil.compose.AsyncImage
 import com.duckflix.lite.data.remote.dto.CastDto
+import com.duckflix.lite.data.remote.dto.RTScoresResponse
 import com.duckflix.lite.data.remote.dto.TmdbDetailResponse
 import com.duckflix.lite.ui.components.CircularBackButton
 import com.duckflix.lite.ui.components.ErrorScreen
@@ -70,6 +76,12 @@ fun DetailScreen(
                 }
             }
         }
+    }
+
+    // Refresh watch progress on resume (e.g., returning from player)
+    // This auto-selects the season of the last watched episode for TV shows
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.refreshWatchProgress()
     }
 
     BackHandler {
@@ -117,12 +129,14 @@ fun DetailScreen(
                 ContentDetailView(
                     content = uiState.content!!,
                     contentType = uiState.contentType,
+                    rtScores = uiState.rtScores,
                     zurgMatch = uiState.zurgMatch,
                     isCheckingZurg = uiState.isCheckingZurg,
                     seasons = uiState.seasons,
                     selectedSeason = uiState.selectedSeason,
                     isLoadingSeasons = uiState.isLoadingSeasons,
                     watchProgress = uiState.watchProgress,
+                    episodeProgressMap = uiState.episodeProgressMap,
                     isInWatchlist = uiState.isInWatchlist,
                     isLoadingRandomEpisode = uiState.isLoadingRandomEpisode,
                     randomEpisodeError = uiState.randomEpisodeError,
@@ -154,12 +168,14 @@ fun DetailScreen(
 private fun ContentDetailView(
     content: TmdbDetailResponse,
     contentType: String,
+    rtScores: RTScoresResponse?,
     zurgMatch: com.duckflix.lite.data.remote.dto.ZurgMatch?,
     isCheckingZurg: Boolean,
     seasons: Map<Int, com.duckflix.lite.data.remote.dto.TmdbSeasonResponse>,
     selectedSeason: Int?,
     isLoadingSeasons: Boolean,
     watchProgress: com.duckflix.lite.data.local.entity.WatchProgressEntity?,
+    episodeProgressMap: Map<Int, com.duckflix.lite.data.remote.dto.EpisodeProgressItem>,
     isInWatchlist: Boolean,
     isLoadingRandomEpisode: Boolean,
     randomEpisodeError: String?,
@@ -319,7 +335,7 @@ private fun ContentDetailView(
                         color = Color.White
                     )
 
-                    // --- Combined meta info line with | delimiters and gold star ---
+                    // --- Combined meta info line with | delimiters ---
                     val metaText = buildAnnotatedString {
                         val defaultStyle = SpanStyle(color = Color.White.copy(alpha = 0.8f))
                         val goldStyle = SpanStyle(color = Color(0xFFFFD700))
@@ -340,11 +356,29 @@ private fun ContentDetailView(
                             appendSeparator()
                             withStyle(defaultStyle) { append("$it min") }
                         }
-                        content.voteAverage?.let {
-                            appendSeparator()
-                            withStyle(goldStyle) { append("\u2605") }
-                            withStyle(defaultStyle) { append(" ${String.format("%.1f", it)}") }
+
+                        // RT scores replace TMDB rating when available
+                        val hasRT = rtScores != null && rtScores.available
+                        if (hasRT) {
+                            rtScores!!.criticsScore?.let { score ->
+                                appendSeparator()
+                                val icon = if (score >= 50) "\uD83C\uDF45" else "\uD83E\uDEDF" // tomato or splat
+                                withStyle(defaultStyle) { append("$icon $score%") }
+                            }
+                            rtScores.audienceScore?.let { score ->
+                                appendSeparator()
+                                val icon = if (score >= 50) "\uD83C\uDF7F" else "\uD83D\uDC4E" // popcorn or thumbs down
+                                withStyle(defaultStyle) { append("$icon $score%") }
+                            }
+                        } else {
+                            // Fall back to TMDB rating
+                            content.voteAverage?.let {
+                                appendSeparator()
+                                withStyle(goldStyle) { append("\u2605") }
+                                withStyle(defaultStyle) { append(" ${String.format("%.1f", it)}") }
+                            }
                         }
+
                         if (content.genreText.isNotEmpty()) {
                             appendSeparator()
                             withStyle(defaultStyle) { append(content.genreText) }
@@ -500,6 +534,7 @@ private fun ContentDetailView(
                     selectedSeason = selectedSeason,
                     isLoadingSeasons = isLoadingSeasons,
                     seriesPosterUrl = content.posterUrl,
+                    episodeProgressMap = episodeProgressMap,
                     onEpisodeClick = { season, episode, resumePos, posterUrl, episodeTitle ->
                         onPlayClick(content, contentType, season, episode, resumePos, posterUrl, content.logoUrl, episodeTitle)
                     }
@@ -665,6 +700,7 @@ private fun SeasonEpisodes(
     selectedSeason: Int,
     isLoadingSeasons: Boolean,
     seriesPosterUrl: String?,
+    episodeProgressMap: Map<Int, com.duckflix.lite.data.remote.dto.EpisodeProgressItem>,
     onEpisodeClick: (Int, Int, Long?, String?, String?) -> Unit // season, episode, resumePos, posterUrl, episodeTitle
 ) {
     val loadedSeason = loadedSeasons[selectedSeason]
@@ -694,6 +730,7 @@ private fun SeasonEpisodes(
                 episodes = loadedSeason.episodes,
                 seasonNumber = selectedSeason,
                 seriesPosterUrl = seriesPosterUrl,
+                episodeProgressMap = episodeProgressMap,
                 onEpisodeClick = onEpisodeClick
             )
         }
@@ -705,6 +742,7 @@ private fun EpisodeGrid(
     episodes: List<com.duckflix.lite.data.remote.dto.EpisodeDto>,
     seasonNumber: Int,
     seriesPosterUrl: String?, // Series poster for Continue Watching
+    episodeProgressMap: Map<Int, com.duckflix.lite.data.remote.dto.EpisodeProgressItem>,
     onEpisodeClick: (Int, Int, Long?, String?, String?) -> Unit // season, episode, resumePos, posterUrl, episodeTitle
 ) {
     val totalEpisodes = episodes.size
@@ -718,12 +756,22 @@ private fun EpisodeGrid(
             ) {
                 rowEpisodes.forEachIndexed { colIndex, episode ->
                     val episodeIndex = rowIndex * 3 + colIndex
+                    // Look up progress for this specific episode
+                    val epProgress = episodeProgressMap[episode.episodeNumber]
+                    val progressPercent = when {
+                        epProgress == null -> 0f
+                        epProgress.completed -> 1f
+                        epProgress.duration > 0 ->
+                            (epProgress.position.toFloat() / epProgress.duration).coerceIn(0f, 1f)
+                        else -> 0f
+                    }
                     Box(modifier = Modifier.weight(1f)) {
                         EpisodeCard(
                             episode = episode,
                             seriesPosterUrl = seriesPosterUrl,
                             index = episodeIndex,
                             totalItems = totalEpisodes,
+                            progressPercent = progressPercent,
                             onEpisodeClick = { resumePos, posterUrl, episodeTitle ->
                                 onEpisodeClick(seasonNumber, episode.episodeNumber, resumePos, posterUrl, episodeTitle)
                             }
@@ -746,6 +794,7 @@ private fun EpisodeCard(
     seriesPosterUrl: String?, // Series poster for Continue Watching (not episode still)
     index: Int = 0,
     totalItems: Int = 1,
+    progressPercent: Float = 0f, // 0f = no progress, 1f = complete
     onEpisodeClick: (Long?, String?, String?) -> Unit // resumePos, posterUrl, episodeTitle
 ) {
     val interactionSource = remember { MutableInteractionSource() }
@@ -794,11 +843,28 @@ private fun EpisodeCard(
                 }
             }
 
+            // Watch progress bar at top of info area
+            if (progressPercent > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .background(Color(0xFF333333))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .fillMaxWidth(progressPercent)
+                            .background(gradientColor)
+                    )
+                }
+            }
+
             // Info area at bottom
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(65.dp)
+                    .height(if (progressPercent > 0f) 62.dp else 65.dp)
                     .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Text(

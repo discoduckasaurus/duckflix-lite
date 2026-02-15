@@ -33,8 +33,9 @@ sealed class Screen(val route: String) {
     }
     object Home : Screen("home")
     object Search : Screen("search")
-    object Detail : Screen("detail/{tmdbId}?type={type}") {
-        fun createRoute(tmdbId: Int, type: String = "movie") = "detail/$tmdbId?type=$type"
+    object Detail : Screen("detail/{tmdbId}?type={type}&season={season}&episode={episode}") {
+        fun createRoute(tmdbId: Int, type: String = "movie", season: Int? = null, episode: Int? = null) =
+            "detail/$tmdbId?type=$type&season=${season ?: -1}&episode=${episode ?: -1}"
     }
     object ActorFilmography : Screen("actor/{personId}") {
         fun createRoute(personId: Int) = "actor/$personId"
@@ -190,6 +191,14 @@ fun DuckFlixApp(
                 navArgument("type") {
                     type = NavType.StringType
                     defaultValue = "movie"
+                },
+                navArgument("season") {
+                    type = NavType.IntType
+                    defaultValue = -1
+                },
+                navArgument("episode") {
+                    type = NavType.IntType
+                    defaultValue = -1
                 }
             )
         ) {

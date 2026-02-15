@@ -8,6 +8,8 @@ import com.duckflix.lite.data.local.dao.WatchlistDao
 import com.duckflix.lite.data.local.entity.WatchProgressEntity
 import com.duckflix.lite.data.local.entity.WatchlistEntity
 import com.duckflix.lite.data.remote.DuckFlixApi
+import com.duckflix.lite.data.remote.dto.EpisodeProgressItem
+import com.duckflix.lite.data.remote.dto.RTScoresResponse
 import com.duckflix.lite.data.remote.dto.TmdbDetailResponse
 import com.duckflix.lite.data.remote.dto.TmdbSeasonResponse
 import com.duckflix.lite.data.remote.dto.ZurgMatch
@@ -40,9 +42,11 @@ data class DetailUiState(
     val selectedSeason: Int? = null, // currently selected season number
     val isLoadingSeasons: Boolean = false,
     val watchProgress: WatchProgressEntity? = null,
+    val episodeProgressMap: Map<Int, EpisodeProgressItem> = emptyMap(), // episodeNumber -> progress for selected season
     val isInWatchlist: Boolean = false,
     val isLoadingRandomEpisode: Boolean = false,
-    val randomEpisodeError: String? = null
+    val randomEpisodeError: String? = null,
+    val rtScores: RTScoresResponse? = null
 )
 
 @HiltViewModel
@@ -55,6 +59,8 @@ class DetailViewModel @Inject constructor(
 
     private val tmdbId: Int = checkNotNull(savedStateHandle["tmdbId"])
     private val contentType: String = savedStateHandle["type"] ?: "movie"
+    private val initialSeason: Int? = savedStateHandle.get<Int>("season")?.takeIf { it >= 0 }
+    private val initialEpisode: Int? = savedStateHandle.get<Int>("episode")?.takeIf { it >= 0 }
 
     private val _uiState = MutableStateFlow(DetailUiState())
     val uiState: StateFlow<DetailUiState> = _uiState.asStateFlow()
@@ -146,7 +152,13 @@ class DetailViewModel @Inject constructor(
                 // Check Zurg availability
                 checkZurgAvailability(details)
 
-                // Don't auto-select season - let user choose from dropdown
+                // Fetch RT scores (non-blocking, fire-and-forget)
+                launch { fetchRTScores(details) }
+
+                // Auto-select season if provided via nav args
+                if (contentType == "tv" && initialSeason != null) {
+                    selectSeason(initialSeason)
+                }
             } catch (e: HttpException) {
                 // 4xx errors that weren't retried
                 _uiState.value = DetailUiState(
@@ -185,6 +197,22 @@ class DetailViewModel @Inject constructor(
         }
     }
 
+    private suspend fun fetchRTScores(content: TmdbDetailResponse) {
+        try {
+            val response = api.getRTScores(
+                tmdbId = content.id,
+                type = contentType,
+                title = content.title,
+                year = content.year?.toIntOrNull()
+            )
+            if (response.available) {
+                _uiState.value = _uiState.value.copy(rtScores = response)
+            }
+        } catch (e: Exception) {
+            // Silent failure — RT scores are supplementary
+        }
+    }
+
     fun clearError() {
         _uiState.value = _uiState.value.copy(error = null)
     }
@@ -196,6 +224,9 @@ class DetailViewModel @Inject constructor(
         if (!_uiState.value.seasons.containsKey(seasonNumber)) {
             loadSeason(seasonNumber)
         }
+
+        // Load per-episode progress for this season
+        loadSeasonProgress(seasonNumber)
     }
 
     fun resetToSeriesView() {
@@ -240,6 +271,56 @@ class DetailViewModel @Inject constructor(
                 _uiState.value = _uiState.value.copy(watchProgress = progress)
             } catch (e: Exception) {
                 // Progress loading failure is not critical
+            }
+        }
+    }
+
+    /**
+     * Called on resume (e.g., returning from player) to refresh watch progress
+     * and auto-select the season of the last watched episode for TV shows.
+     */
+    fun refreshWatchProgress() {
+        viewModelScope.launch {
+            try {
+                val progress = watchProgressDao.getProgress(tmdbId)
+                _uiState.value = _uiState.value.copy(watchProgress = progress)
+
+                // Auto-select the season matching the last watched episode
+                if (contentType == "tv" && progress != null && progress.season > 0) {
+                    selectSeason(progress.season)
+                } else if (contentType == "tv" && _uiState.value.selectedSeason != null) {
+                    // Refresh episode progress for currently selected season
+                    loadSeasonProgress(_uiState.value.selectedSeason!!)
+                }
+            } catch (e: Exception) {
+                // Progress loading failure is not critical
+            }
+        }
+    }
+
+    private fun loadSeasonProgress(seasonNumber: Int) {
+        viewModelScope.launch {
+            try {
+                val response = api.getEpisodeProgress(tmdbId, seasonNumber)
+                val progressMap = response.episodes.associateBy { it.episode }
+                _uiState.value = _uiState.value.copy(episodeProgressMap = progressMap)
+            } catch (e: Exception) {
+                // Fall back to local DB if server unavailable
+                try {
+                    val localProgress = watchProgressDao.getSeasonProgress(tmdbId, seasonNumber)
+                    if (localProgress.isNotEmpty()) {
+                        val progressMap = localProgress.associate { wp ->
+                            wp.episode to EpisodeProgressItem(
+                                season = wp.season,
+                                episode = wp.episode,
+                                position = wp.position,
+                                duration = wp.duration,
+                                completed = wp.isCompleted
+                            )
+                        }
+                        _uiState.value = _uiState.value.copy(episodeProgressMap = progressMap)
+                    }
+                } catch (_: Exception) { }
             }
         }
     }

@@ -51,13 +51,42 @@ interface RecordingDao {
 
 @Dao
 interface WatchProgressDao {
-    @Query("SELECT * FROM watch_progress WHERE tmdbId = :tmdbId")
+    // Get the most recently watched entry for a show (latest episode or movie progress)
+    @Query("SELECT * FROM watch_progress WHERE tmdbId = :tmdbId ORDER BY lastWatchedAt DESC LIMIT 1")
     suspend fun getProgress(tmdbId: Int): WatchProgressEntity?
 
-    @Query("SELECT * FROM watch_progress WHERE isCompleted = 0 ORDER BY lastWatchedAt DESC LIMIT 10")
+    // Get progress for a specific episode
+    @Query("SELECT * FROM watch_progress WHERE tmdbId = :tmdbId AND season = :season AND episode = :episode")
+    suspend fun getEpisodeProgress(tmdbId: Int, season: Int, episode: Int): WatchProgressEntity?
+
+    // Get all episode progress for a specific season of a show
+    @Query("SELECT * FROM watch_progress WHERE tmdbId = :tmdbId AND season = :season")
+    suspend fun getSeasonProgress(tmdbId: Int, season: Int): List<WatchProgressEntity>
+
+    // Continue Watching: most recent incomplete episode per show
+    @Query("""
+        SELECT wp.* FROM watch_progress wp
+        INNER JOIN (
+            SELECT tmdbId, MAX(lastWatchedAt) as maxWatched
+            FROM watch_progress
+            WHERE isCompleted = 0
+            GROUP BY tmdbId
+        ) latest ON wp.tmdbId = latest.tmdbId AND wp.lastWatchedAt = latest.maxWatched
+        ORDER BY wp.lastWatchedAt DESC
+        LIMIT 10
+    """)
     fun getContinueWatching(): Flow<List<WatchProgressEntity>>
 
-    @Query("SELECT * FROM watch_progress ORDER BY lastWatchedAt DESC LIMIT 20")
+    @Query("""
+        SELECT wp.* FROM watch_progress wp
+        INNER JOIN (
+            SELECT tmdbId, MAX(lastWatchedAt) as maxWatched
+            FROM watch_progress
+            GROUP BY tmdbId
+        ) latest ON wp.tmdbId = latest.tmdbId AND wp.lastWatchedAt = latest.maxWatched
+        ORDER BY wp.lastWatchedAt DESC
+        LIMIT 20
+    """)
     fun getRecentlyWatched(): Flow<List<WatchProgressEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -65,6 +94,17 @@ interface WatchProgressDao {
 
     @Query("DELETE FROM watch_progress WHERE tmdbId = :tmdbId")
     suspend fun deleteProgress(tmdbId: Int)
+
+    // Storage cap enforcement
+    @Query("SELECT COUNT(*) FROM watch_progress")
+    suspend fun getCount(): Int
+
+    @Query("""
+        DELETE FROM watch_progress WHERE rowid IN (
+            SELECT rowid FROM watch_progress ORDER BY lastWatchedAt ASC LIMIT :count
+        )
+    """)
+    suspend fun deleteOldest(count: Int)
 }
 
 @Dao

@@ -60,7 +60,7 @@ fun LogoButton(
             ) { onClick() }
             .then(
                 if (isFocused) {
-                    Modifier.border(2.dp, Color.White, CircleShape)
+                    Modifier.border(1.5.dp, Color.White, CircleShape)
                 } else {
                     Modifier
                 }

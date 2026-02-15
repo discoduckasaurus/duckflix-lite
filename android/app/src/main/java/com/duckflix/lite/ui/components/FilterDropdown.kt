@@ -78,7 +78,7 @@ fun <T> FilterDropdown(
     }
 
     val borderModifier = if (isFocused) {
-        Modifier.border(2.dp, gradientBrush, shape)
+        Modifier.border(1.5.dp, Color.White, shape)
     } else {
         Modifier
     }

@@ -23,7 +23,10 @@ data class AdvancedSearchUiState(
     val movieSelected: Boolean = false,
     val results: List<CollectionItem> = emptyList(),
     val totalResults: Int = 0,
+    val page: Int = 1,
+    val hasMore: Boolean = false,
     val isLoading: Boolean = false,
+    val isLoadingMore: Boolean = false,
     val error: String? = null
 )
 
@@ -82,16 +85,31 @@ class AdvancedSearchViewModel @Inject constructor(
     }
 
     /**
-     * Execute search with current query and TV/Movie filter
+     * Execute search with current query and TV/Movie filter (resets to page 1)
      */
     fun search() {
+        performSearch(resetPage = true)
+    }
+
+    /**
+     * Load more search results (next page)
+     */
+    fun loadMore() {
+        val state = _uiState.value
+        if (state.isLoadingMore || state.isLoading || state.query.isBlank()) return
+        if (!state.hasMore && state.results.size < state.page * 20) return
+        performSearch(resetPage = false)
+    }
+
+    private fun performSearch(resetPage: Boolean) {
         val state = _uiState.value
 
-        // Don't search if query is empty
         if (state.query.isBlank()) {
             _uiState.value = state.copy(
                 results = emptyList(),
                 totalResults = 0,
+                page = 1,
+                hasMore = false,
                 isLoading = false,
                 error = null
             )
@@ -99,33 +117,39 @@ class AdvancedSearchViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            val page = if (resetPage) 1 else state.page + 1
+
             _uiState.value = state.copy(
-                isLoading = true,
+                isLoading = resetPage,
+                isLoadingMore = !resetPage,
                 error = null
             )
 
             try {
                 val type = determineMediaType(state.tvSelected, state.movieSelected)
 
-                val searchResults = if (type == null) {
-                    // No type filter - search both movies and TV in parallel
-                    val movieDeferred = async { api.searchTmdb(query = state.query, type = "movie") }
-                    val tvDeferred = async { api.searchTmdb(query = state.query, type = "tv") }
-                    val movieResults = movieDeferred.await().results
-                    val tvResults = tvDeferred.await().results
-                    // Combine and interleave results (movie, tv, movie, tv...)
+                val searchResults: List<com.duckflix.lite.data.remote.dto.TmdbSearchResult>
+                val combinedHasMore: Boolean
+
+                if (type == null) {
+                    val movieDeferred = async { api.searchTmdb(query = state.query, type = "movie", page = page) }
+                    val tvDeferred = async { api.searchTmdb(query = state.query, type = "tv", page = page) }
+                    val movieResp = movieDeferred.await()
+                    val tvResp = tvDeferred.await()
                     val combined = mutableListOf<com.duckflix.lite.data.remote.dto.TmdbSearchResult>()
-                    val maxSize = maxOf(movieResults.size, tvResults.size)
+                    val maxSize = maxOf(movieResp.results.size, tvResp.results.size)
                     for (i in 0 until maxSize) {
-                        if (i < movieResults.size) combined.add(movieResults[i])
-                        if (i < tvResults.size) combined.add(tvResults[i])
+                        if (i < movieResp.results.size) combined.add(movieResp.results[i])
+                        if (i < tvResp.results.size) combined.add(tvResp.results[i])
                     }
-                    combined
+                    searchResults = combined
+                    combinedHasMore = movieResp.hasMore || tvResp.hasMore
                 } else {
-                    api.searchTmdb(query = state.query, type = type).results
+                    val resp = api.searchTmdb(query = state.query, type = type, page = page)
+                    searchResults = resp.results
+                    combinedHasMore = resp.hasMore
                 }
 
-                // Convert TmdbSearchResult to CollectionItem for unified display
                 val results = searchResults.map { result ->
                     CollectionItem(
                         id = result.id,
@@ -138,15 +162,21 @@ class AdvancedSearchViewModel @Inject constructor(
                     )
                 }
 
+                val newResults = if (resetPage) results else state.results + results
+
                 _uiState.value = _uiState.value.copy(
-                    results = results,
-                    totalResults = results.size,
-                    isLoading = false
+                    results = newResults,
+                    totalResults = newResults.size,
+                    page = page,
+                    hasMore = combinedHasMore,
+                    isLoading = false,
+                    isLoadingMore = false
                 )
             } catch (e: Exception) {
                 println("[SearchViewModel] Search error: ${e.message}")
                 _uiState.value = _uiState.value.copy(
                     isLoading = false,
+                    isLoadingMore = false,
                     error = "Search failed: ${e.message}"
                 )
             }

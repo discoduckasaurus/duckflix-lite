@@ -24,7 +24,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -60,17 +59,13 @@ fun FilterSlider(
         rangeSpan / 20f
     }
 
-    val gradientBrush = Brush.linearGradient(
-        colors = TvOsColors.gradientColors
-    )
-
     val backgroundModifier = Modifier.background(
         color = if (isFocused) Color(0xFF3A3A3A) else Color(0xFF2A2A2A),
         shape = shape
     )
 
     val borderModifier = if (isFocused) {
-        Modifier.border(2.dp, gradientBrush, shape)
+        Modifier.border(1.5.dp, Color.White, shape)
     } else {
         Modifier
     }
@@ -185,17 +180,13 @@ fun FilterSlider(
         rangeSpan / 20f
     }
 
-    val gradientBrush = Brush.linearGradient(
-        colors = TvOsColors.gradientColors
-    )
-
     val backgroundModifier = Modifier.background(
         color = if (isFocused) Color(0xFF3A3A3A) else Color(0xFF2A2A2A),
         shape = shape
     )
 
     val borderModifier = if (isFocused) {
-        Modifier.border(2.dp, gradientBrush, shape)
+        Modifier.border(1.5.dp, Color.White, shape)
     } else {
         Modifier
     }

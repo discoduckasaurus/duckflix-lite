@@ -60,7 +60,7 @@ fun FocusableButton(
     }
 
     val borderModifier = if (isFocused && enabled) {
-        Modifier.border(2.dp, gradientBrush, shape)
+        Modifier.border(1.5.dp, Color.White, shape)
     } else {
         Modifier
     }
@@ -115,12 +115,8 @@ fun FocusableOutlinedButton(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val shape = RoundedCornerShape(8.dp)
 
-    val gradientBrush = Brush.linearGradient(
-        colors = TvOsColors.gradientColors
-    )
-
     val borderModifier = if (isFocused && enabled) {
-        Modifier.border(2.dp, gradientBrush, shape)
+        Modifier.border(1.5.dp, Color.White, shape)
     } else {
         Modifier.border(1.dp, Color.White.copy(alpha = 0.4f), shape)
     }

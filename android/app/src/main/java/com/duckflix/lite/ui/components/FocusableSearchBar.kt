@@ -18,7 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
@@ -62,10 +61,6 @@ fun FocusableSearchBar(
     val cardFocusRequester = remember { FocusRequester() }
 
     val shape = RoundedCornerShape(12.dp)
-    val gradientBrush = Brush.linearGradient(
-        colors = TvOsColors.gradientColors
-    )
-
     LaunchedEffect(isEditing) {
         if (isEditing) {
             delay(50)
@@ -89,9 +84,9 @@ fun FocusableSearchBar(
         else -> Color(0xFF2A2A2A)
     }
 
-    // Border: gradient when focused or editing
+    // Border: white when focused or editing
     val borderModifier = if (isCardFocused || isEditing) {
-        Modifier.border(2.dp, gradientBrush, shape)
+        Modifier.border(1.5.dp, Color.White, shape)
     } else {
         Modifier
     }

@@ -13,7 +13,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import android.util.Log
 import javax.inject.Inject
+
+private const val TAG = "DiscoverViewModel"
 
 enum class MediaTypeFilter { ALL, MOVIE, TV }
 
@@ -90,13 +93,25 @@ data class DiscoverUiState(
 
     // Browse mode (no filters active) - shows category rows
     val trending: List<TrendingResult> = emptyList(),
+    val trendingPage: Int = 1,
+    val trendingHasMore: Boolean = false,
     val popular: List<CollectionItem> = emptyList(),
+    val popularPage: Int = 1,
+    val popularHasMore: Boolean = false,
     val topRated: List<CollectionItem> = emptyList(),
+    val topRatedPage: Int = 1,
+    val topRatedHasMore: Boolean = false,
     val nowPlaying: List<CollectionItem> = emptyList(),
+    val nowPlayingPage: Int = 1,
+    val nowPlayingHasMore: Boolean = false,
     val isLoadingTrending: Boolean = false,
     val isLoadingPopular: Boolean = false,
     val isLoadingTopRated: Boolean = false,
     val isLoadingNowPlaying: Boolean = false,
+    val isLoadingMoreTrending: Boolean = false,
+    val isLoadingMorePopular: Boolean = false,
+    val isLoadingMoreTopRated: Boolean = false,
+    val isLoadingMoreNowPlaying: Boolean = false,
     val trendingError: String? = null,
     val popularError: String? = null,
     val topRatedError: String? = null,
@@ -107,6 +122,7 @@ data class DiscoverUiState(
     val filterResultsPage: Int = 1,
     val filterResultsTotalPages: Int = 1,
     val filterResultsTotal: Int = 0,
+    val filterHasMore: Boolean = false,
     val isLoadingFilterResults: Boolean = false,
     val isLoadingMoreResults: Boolean = false,
     val filterError: String? = null
@@ -198,9 +214,13 @@ class DiscoverViewModel @Inject constructor(
     }
 
     fun setSelectedDecade(decade: Decade?) {
+        Log.d(TAG, "setSelectedDecade called with: $decade (current: ${_uiState.value.selectedDecade})")
         if (_uiState.value.selectedDecade != decade) {
+            Log.d(TAG, "Decade changed! Updating state and loading results")
             _uiState.value = _uiState.value.copy(selectedDecade = decade)
             loadFilterResults(resetPage = true)
+        } else {
+            Log.d(TAG, "Decade unchanged, skipping")
         }
     }
 
@@ -217,16 +237,23 @@ class DiscoverViewModel @Inject constructor(
             selectedDecade = null,
             sortBy = SortOption.POPULARITY_DESC,
             filterResults = emptyList(),
-            filterResultsPage = 1
+            filterResultsPage = 1,
+            filterHasMore = false
         )
         loadBrowseContent()
     }
 
     fun loadMoreResults() {
         val state = _uiState.value
-        if (state.isLoadingMoreResults || state.filterResultsPage >= state.filterResultsTotalPages) {
+        Log.d(TAG, "loadMoreResults called: page=${state.filterResultsPage}, hasMore=${state.filterHasMore}, isLoadingMore=${state.isLoadingMoreResults}")
+
+        if (state.isLoadingMoreResults || state.isLoadingFilterResults) return
+        // Use hasMore from server, fallback to size heuristic
+        if (!state.filterHasMore && state.filterResults.size < state.filterResultsPage * 20) {
+            Log.d(TAG, "Skipping loadMore: no more results")
             return
         }
+        Log.d(TAG, "Calling loadFilterResults for page ${state.filterResultsPage + 1}")
         loadFilterResults(resetPage = false)
     }
 
@@ -243,41 +270,90 @@ class DiscoverViewModel @Inject constructor(
             )
 
             try {
-                val type = when (state.mediaTypeFilter) {
-                    MediaTypeFilter.TV -> "tv"
-                    MediaTypeFilter.MOVIE -> "movie"
-                    MediaTypeFilter.ALL -> null
-                }
+                if (state.mediaTypeFilter == MediaTypeFilter.ALL) {
+                    // Parallel calls for movies and TV, mirroring browse row pattern
+                    val movieDeferred = async {
+                        api.discover(
+                            type = "movie",
+                            genre = state.selectedGenre,
+                            minYear = state.selectedDecade?.startYear,
+                            maxYear = state.selectedDecade?.endYear,
+                            sortBy = state.sortBy.getApiValue(MediaTypeFilter.MOVIE),
+                            page = page
+                        )
+                    }
+                    val tvDeferred = async {
+                        api.discover(
+                            type = "tv",
+                            genre = state.selectedGenre,
+                            minYear = state.selectedDecade?.startYear,
+                            maxYear = state.selectedDecade?.endYear,
+                            sortBy = state.sortBy.getApiValue(MediaTypeFilter.TV),
+                            page = page
+                        )
+                    }
 
-                val sortValue = state.sortBy.getApiValue(state.mediaTypeFilter)
+                    val movieResponse = movieDeferred.await()
+                    val tvResponse = tvDeferred.await()
 
-                println("[DiscoverViewModel] Calling discover: type=$type, genre=${state.selectedGenre}, minYear=${state.selectedDecade?.startYear}, maxYear=${state.selectedDecade?.endYear}, sortBy=$sortValue, page=$page")
+                    // Tag results with correct mediaType since server may not include it
+                    val movieResults = movieResponse.results.map { it.copy(mediaType = "movie") }
+                    val tvResults = tvResponse.results.map { it.copy(mediaType = "tv") }
+                    val interleaved = interleaveCollectionResults(movieResults, tvResults)
 
-                val response = api.discover(
-                    type = type,
-                    genre = state.selectedGenre,
-                    minYear = state.selectedDecade?.startYear,
-                    maxYear = state.selectedDecade?.endYear,
-                    sortBy = sortValue,
-                    page = page
-                )
+                    val newResults = if (resetPage) interleaved else state.filterResults + interleaved
 
-                val newResults = if (resetPage) {
-                    response.results
+                    val combinedHasMore = movieResponse.hasMore || tvResponse.hasMore
+
+                    _uiState.value = _uiState.value.copy(
+                        filterResults = newResults,
+                        filterResultsPage = page,
+                        filterResultsTotalPages = maxOf(movieResponse.totalPages, tvResponse.totalPages),
+                        filterResultsTotal = movieResponse.totalResults + tvResponse.totalResults,
+                        filterHasMore = combinedHasMore,
+                        isLoadingFilterResults = false,
+                        isLoadingMoreResults = false
+                    )
+
+                    Log.d(TAG, "RESPONSE (ALL): movies=${movieResults.size}, tv=${tvResults.size}, page $page, hasMore=$combinedHasMore")
                 } else {
-                    state.filterResults + response.results
+                    val type = when (state.mediaTypeFilter) {
+                        MediaTypeFilter.TV -> "tv"
+                        MediaTypeFilter.MOVIE -> "movie"
+                        MediaTypeFilter.ALL -> "movie"
+                    }
+
+                    val sortValue = state.sortBy.getApiValue(state.mediaTypeFilter)
+
+                    Log.d(TAG, "API CALL: type=$type, genre=${state.selectedGenre}, minYear=${state.selectedDecade?.startYear}, maxYear=${state.selectedDecade?.endYear}, sortBy=$sortValue, page=$page")
+
+                    val response = api.discover(
+                        type = type,
+                        genre = state.selectedGenre,
+                        minYear = state.selectedDecade?.startYear,
+                        maxYear = state.selectedDecade?.endYear,
+                        sortBy = sortValue,
+                        page = page
+                    )
+
+                    val newResults = if (resetPage) {
+                        response.results
+                    } else {
+                        state.filterResults + response.results
+                    }
+
+                    _uiState.value = _uiState.value.copy(
+                        filterResults = newResults,
+                        filterResultsPage = page,
+                        filterResultsTotalPages = response.totalPages,
+                        filterResultsTotal = response.totalResults,
+                        filterHasMore = response.hasMore,
+                        isLoadingFilterResults = false,
+                        isLoadingMoreResults = false
+                    )
+
+                    Log.d(TAG, "RESPONSE: ${response.results.size} items, page $page/${response.totalPages}, hasMore=${response.hasMore}")
                 }
-
-                _uiState.value = _uiState.value.copy(
-                    filterResults = newResults,
-                    filterResultsPage = page,
-                    filterResultsTotalPages = response.totalPages,
-                    filterResultsTotal = response.totalResults,
-                    isLoadingFilterResults = false,
-                    isLoadingMoreResults = false
-                )
-
-                println("[DiscoverViewModel] Filter results: ${response.results.size} items, page $page/${response.totalPages}")
             } catch (e: Exception) {
                 println("[DiscoverViewModel] Filter error: ${e.message}")
                 _uiState.value = _uiState.value.copy(
@@ -291,87 +367,204 @@ class DiscoverViewModel @Inject constructor(
 
     private fun loadBrowseContent() {
         val filter = _uiState.value.mediaTypeFilter
-        loadTrending(filter)
-        loadPopular(filter)
-        loadTopRated(filter)
+        loadTrending(filter, resetPage = true)
+        loadPopular(filter, resetPage = true)
+        loadTopRated(filter, resetPage = true)
         if (filter != MediaTypeFilter.TV) {
-            loadNowPlaying()
+            loadNowPlaying(resetPage = true)
         } else {
-            _uiState.value = _uiState.value.copy(nowPlaying = emptyList())
+            _uiState.value = _uiState.value.copy(nowPlaying = emptyList(), nowPlayingPage = 1, nowPlayingHasMore = false)
         }
     }
 
-    private fun loadTrending(filter: MediaTypeFilter) {
+    fun loadMoreTrending() {
+        val state = _uiState.value
+        if (state.isLoadingMoreTrending || state.isLoadingTrending) return
+        if (!state.trendingHasMore && state.trending.size < state.trendingPage * 20) return
+        loadTrending(state.mediaTypeFilter, resetPage = false)
+    }
+
+    fun loadMorePopular() {
+        val state = _uiState.value
+        if (state.isLoadingMorePopular || state.isLoadingPopular) return
+        if (!state.popularHasMore && state.popular.size < state.popularPage * 20) return
+        loadPopular(state.mediaTypeFilter, resetPage = false)
+    }
+
+    fun loadMoreTopRated() {
+        val state = _uiState.value
+        if (state.isLoadingMoreTopRated || state.isLoadingTopRated) return
+        if (!state.topRatedHasMore && state.topRated.size < state.topRatedPage * 20) return
+        loadTopRated(state.mediaTypeFilter, resetPage = false)
+    }
+
+    fun loadMoreNowPlaying() {
+        val state = _uiState.value
+        if (state.isLoadingMoreNowPlaying || state.isLoadingNowPlaying) return
+        if (!state.nowPlayingHasMore && state.nowPlaying.size < state.nowPlayingPage * 20) return
+        loadNowPlaying(resetPage = false)
+    }
+
+    private fun loadTrending(filter: MediaTypeFilter, resetPage: Boolean) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(
-                isLoadingTrending = true,
+            val state = _uiState.value
+            val page = if (resetPage) 1 else state.trendingPage + 1
+
+            _uiState.value = state.copy(
+                isLoadingTrending = resetPage,
+                isLoadingMoreTrending = !resetPage,
                 trendingError = null
             )
             try {
-                val results = when (filter) {
+                when (filter) {
                     MediaTypeFilter.ALL -> {
-                        val movieDeferred = async { api.getTrending(mediaType = "movie", timeWindow = "week") }
-                        val tvDeferred = async { api.getTrending(mediaType = "tv", timeWindow = "week") }
-                        interleaveResults(movieDeferred.await().results, tvDeferred.await().results)
+                        val movieDeferred = async { api.getTrending(mediaType = "movie", timeWindow = "week", page = page) }
+                        val tvDeferred = async { api.getTrending(mediaType = "tv", timeWindow = "week", page = page) }
+                        val movieResp = movieDeferred.await()
+                        val tvResp = tvDeferred.await()
+                        val interleaved = interleaveResults(movieResp.results, tvResp.results)
+                        val newItems = if (resetPage) interleaved else state.trending + interleaved
+                        _uiState.value = _uiState.value.copy(
+                            trending = newItems, trendingPage = page,
+                            trendingHasMore = movieResp.hasMore || tvResp.hasMore,
+                            isLoadingTrending = false, isLoadingMoreTrending = false
+                        )
                     }
-                    MediaTypeFilter.MOVIE -> api.getTrending(mediaType = "movie", timeWindow = "week").results
-                    MediaTypeFilter.TV -> api.getTrending(mediaType = "tv", timeWindow = "week").results
+                    else -> {
+                        val mediaType = if (filter == MediaTypeFilter.TV) "tv" else "movie"
+                        val resp = api.getTrending(mediaType = mediaType, timeWindow = "week", page = page)
+                        val newItems = if (resetPage) resp.results else state.trending + resp.results
+                        _uiState.value = _uiState.value.copy(
+                            trending = newItems, trendingPage = page,
+                            trendingHasMore = resp.hasMore,
+                            isLoadingTrending = false, isLoadingMoreTrending = false
+                        )
+                    }
                 }
-                _uiState.value = _uiState.value.copy(trending = results, isLoadingTrending = false)
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(isLoadingTrending = false, trendingError = e.message)
+                _uiState.value = _uiState.value.copy(
+                    isLoadingTrending = false, isLoadingMoreTrending = false, trendingError = e.message
+                )
             }
         }
     }
 
-    private fun loadPopular(filter: MediaTypeFilter) {
+    private fun loadPopular(filter: MediaTypeFilter, resetPage: Boolean) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoadingPopular = true, popularError = null)
+            val state = _uiState.value
+            val page = if (resetPage) 1 else state.popularPage + 1
+
+            _uiState.value = state.copy(
+                isLoadingPopular = resetPage,
+                isLoadingMorePopular = !resetPage,
+                popularError = null
+            )
             try {
-                val results = when (filter) {
+                when (filter) {
                     MediaTypeFilter.ALL -> {
-                        val movieDeferred = async { api.getPopular(type = "movie") }
-                        val tvDeferred = async { api.getPopular(type = "tv") }
-                        interleaveCollectionResults(movieDeferred.await().results, tvDeferred.await().results)
+                        val movieDeferred = async { api.getPopular(type = "movie", page = page) }
+                        val tvDeferred = async { api.getPopular(type = "tv", page = page) }
+                        val movieResp = movieDeferred.await()
+                        val tvResp = tvDeferred.await()
+                        val interleaved = interleaveCollectionResults(
+                            movieResp.results.map { it.copy(mediaType = "movie") },
+                            tvResp.results.map { it.copy(mediaType = "tv") }
+                        )
+                        val newItems = if (resetPage) interleaved else state.popular + interleaved
+                        _uiState.value = _uiState.value.copy(
+                            popular = newItems, popularPage = page,
+                            popularHasMore = movieResp.hasMore || tvResp.hasMore,
+                            isLoadingPopular = false, isLoadingMorePopular = false
+                        )
                     }
-                    MediaTypeFilter.MOVIE -> api.getPopular(type = "movie").results
-                    MediaTypeFilter.TV -> api.getPopular(type = "tv").results
+                    else -> {
+                        val type = if (filter == MediaTypeFilter.TV) "tv" else "movie"
+                        val resp = api.getPopular(type = type, page = page)
+                        val newItems = if (resetPage) resp.results else state.popular + resp.results
+                        _uiState.value = _uiState.value.copy(
+                            popular = newItems, popularPage = page,
+                            popularHasMore = resp.hasMore,
+                            isLoadingPopular = false, isLoadingMorePopular = false
+                        )
+                    }
                 }
-                _uiState.value = _uiState.value.copy(popular = results, isLoadingPopular = false)
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(isLoadingPopular = false, popularError = e.message)
+                _uiState.value = _uiState.value.copy(
+                    isLoadingPopular = false, isLoadingMorePopular = false, popularError = e.message
+                )
             }
         }
     }
 
-    private fun loadTopRated(filter: MediaTypeFilter) {
+    private fun loadTopRated(filter: MediaTypeFilter, resetPage: Boolean) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoadingTopRated = true, topRatedError = null)
+            val state = _uiState.value
+            val page = if (resetPage) 1 else state.topRatedPage + 1
+
+            _uiState.value = state.copy(
+                isLoadingTopRated = resetPage,
+                isLoadingMoreTopRated = !resetPage,
+                topRatedError = null
+            )
             try {
-                val results = when (filter) {
+                when (filter) {
                     MediaTypeFilter.ALL -> {
-                        val movieDeferred = async { api.getTopRated(type = "movie") }
-                        val tvDeferred = async { api.getTopRated(type = "tv") }
-                        interleaveCollectionResults(movieDeferred.await().results, tvDeferred.await().results)
+                        val movieDeferred = async { api.getTopRated(type = "movie", page = page) }
+                        val tvDeferred = async { api.getTopRated(type = "tv", page = page) }
+                        val movieResp = movieDeferred.await()
+                        val tvResp = tvDeferred.await()
+                        val interleaved = interleaveCollectionResults(
+                            movieResp.results.map { it.copy(mediaType = "movie") },
+                            tvResp.results.map { it.copy(mediaType = "tv") }
+                        )
+                        val newItems = if (resetPage) interleaved else state.topRated + interleaved
+                        _uiState.value = _uiState.value.copy(
+                            topRated = newItems, topRatedPage = page,
+                            topRatedHasMore = movieResp.hasMore || tvResp.hasMore,
+                            isLoadingTopRated = false, isLoadingMoreTopRated = false
+                        )
                     }
-                    MediaTypeFilter.MOVIE -> api.getTopRated(type = "movie").results
-                    MediaTypeFilter.TV -> api.getTopRated(type = "tv").results
+                    else -> {
+                        val type = if (filter == MediaTypeFilter.TV) "tv" else "movie"
+                        val resp = api.getTopRated(type = type, page = page)
+                        val newItems = if (resetPage) resp.results else state.topRated + resp.results
+                        _uiState.value = _uiState.value.copy(
+                            topRated = newItems, topRatedPage = page,
+                            topRatedHasMore = resp.hasMore,
+                            isLoadingTopRated = false, isLoadingMoreTopRated = false
+                        )
+                    }
                 }
-                _uiState.value = _uiState.value.copy(topRated = results, isLoadingTopRated = false)
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(isLoadingTopRated = false, topRatedError = e.message)
+                _uiState.value = _uiState.value.copy(
+                    isLoadingTopRated = false, isLoadingMoreTopRated = false, topRatedError = e.message
+                )
             }
         }
     }
 
-    private fun loadNowPlaying() {
+    private fun loadNowPlaying(resetPage: Boolean) {
         viewModelScope.launch {
-            _uiState.value = _uiState.value.copy(isLoadingNowPlaying = true, nowPlayingError = null)
+            val state = _uiState.value
+            val page = if (resetPage) 1 else state.nowPlayingPage + 1
+
+            _uiState.value = state.copy(
+                isLoadingNowPlaying = resetPage,
+                isLoadingMoreNowPlaying = !resetPage,
+                nowPlayingError = null
+            )
             try {
-                val results = api.getNowPlaying().results
-                _uiState.value = _uiState.value.copy(nowPlaying = results, isLoadingNowPlaying = false)
+                val resp = api.getNowPlaying(page = page)
+                val newItems = if (resetPage) resp.results else state.nowPlaying + resp.results
+                _uiState.value = _uiState.value.copy(
+                    nowPlaying = newItems, nowPlayingPage = page,
+                    nowPlayingHasMore = resp.hasMore,
+                    isLoadingNowPlaying = false, isLoadingMoreNowPlaying = false
+                )
             } catch (e: Exception) {
-                _uiState.value = _uiState.value.copy(isLoadingNowPlaying = false, nowPlayingError = e.message)
+                _uiState.value = _uiState.value.copy(
+                    isLoadingNowPlaying = false, isLoadingMoreNowPlaying = false, nowPlayingError = e.message
+                )
             }
         }
     }

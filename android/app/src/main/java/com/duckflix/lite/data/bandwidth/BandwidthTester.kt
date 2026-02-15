@@ -51,37 +51,43 @@ class BandwidthTester @Inject constructor(
     suspend fun measureBandwidthStream(duration: Int = DEFAULT_TEST_DURATION): BandwidthTestResult? =
         withContext(Dispatchers.IO) {
             try {
-                val response = api.downloadBandwidthTestStream(duration)
-                val inputStream = response.byteStream()
-                val buffer = ByteArray(65536) // 64KB buffer for efficiency
+                // Add timeout to prevent hanging if server doesn't send data
+                kotlinx.coroutines.withTimeoutOrNull((duration + 10) * 1000L) {
+                    val response = api.downloadBandwidthTestStream(duration)
+                    val inputStream = response.byteStream()
+                    val buffer = ByteArray(65536) // 64KB buffer for efficiency
 
-                var bytesDownloaded = 0L
-                var firstByteTime: Long? = null
-                var endTime: Long = 0
+                    var bytesDownloaded = 0L
+                    var firstByteTime: Long? = null
+                    var endTime: Long = 0
 
-                var bytesRead: Int
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    if (firstByteTime == null) {
-                        firstByteTime = System.nanoTime()
+                    var bytesRead: Int
+                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                        if (firstByteTime == null) {
+                            firstByteTime = System.nanoTime()
+                        }
+                        bytesDownloaded += bytesRead
+                        endTime = System.nanoTime()
                     }
-                    bytesDownloaded += bytesRead
-                    endTime = System.nanoTime()
-                }
 
-                inputStream.close()
+                    inputStream.close()
 
-                if (firstByteTime != null && bytesDownloaded > 0) {
-                    val elapsedNanos = endTime - firstByteTime
-                    val elapsedMs = elapsedNanos / 1_000_000
-                    val elapsedSeconds = elapsedNanos / 1_000_000_000.0
+                    if (firstByteTime != null && bytesDownloaded > 0) {
+                        val elapsedNanos = endTime - firstByteTime
+                        val elapsedMs = elapsedNanos / 1_000_000
+                        val elapsedSeconds = elapsedNanos / 1_000_000_000.0
 
-                    // Calculate Mbps: totalBytes * 8 / elapsedSeconds / 1,000,000
-                    val mbps = (bytesDownloaded * BITS_PER_BYTE) / elapsedSeconds / MBPS_DIVISOR
+                        // Calculate Mbps: totalBytes * 8 / elapsedSeconds / 1,000,000
+                        val mbps = (bytesDownloaded * BITS_PER_BYTE) / elapsedSeconds / MBPS_DIVISOR
 
-                    println("[Bandwidth] Stream test: ${bytesDownloaded} bytes in ${elapsedMs}ms = ${String.format("%.1f", mbps)} Mbps")
-                    BandwidthTestResult(mbps = mbps, durationMs = elapsedMs)
-                } else {
-                    println("[Bandwidth] Stream test failed: no bytes received")
+                        println("[Bandwidth] Stream test: ${bytesDownloaded} bytes in ${elapsedMs}ms = ${String.format("%.1f", mbps)} Mbps")
+                        BandwidthTestResult(mbps = mbps, durationMs = elapsedMs)
+                    } else {
+                        println("[Bandwidth] Stream test failed: no bytes received")
+                        null
+                    }
+                } ?: run {
+                    println("[Bandwidth] Stream test timed out after ${duration + 10} seconds")
                     null
                 }
             } catch (e: Exception) {

@@ -20,8 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -194,21 +192,6 @@ fun LiveTvScreen(
                                 text = "LIVE TV",
                                 style = MaterialTheme.typography.headlineMedium,
                                 color = Color.White
-                            )
-
-                            // Favorites filter chip
-                            FilterChip(
-                                selected = uiState.showFavoritesOnly,
-                                onClick = viewModel::toggleFavorites,
-                                label = {
-                                    Text(
-                                        text = if (uiState.showFavoritesOnly) "Favorites" else "All Channels"
-                                    )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    containerColor = Color(0xFF2A2A2A),
-                                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                                )
                             )
 
                             Spacer(modifier = Modifier.weight(1f))

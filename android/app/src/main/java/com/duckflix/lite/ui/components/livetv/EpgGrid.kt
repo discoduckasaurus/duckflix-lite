@@ -21,14 +21,22 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.duckflix.lite.data.remote.dto.LiveTvChannel
+import kotlinx.coroutines.launch
 
 /**
  * EPG Grid with synchronized horizontal scrolling between time bar and program cells
@@ -52,9 +60,17 @@ fun EpgGrid(
     // Shared horizontal scroll state for time bar and program grid
     val horizontalScrollState = rememberScrollState()
     val verticalListState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
 
     // Track whether initial focus has been requested (only once per screen load)
     val shouldRequestInitialFocus = remember { mutableStateOf(true) }
+
+    // Wrap-around navigation state
+    val pendingWrapIndex = remember { mutableStateOf<Int?>(null) }
+    val wrapTrigger = remember { mutableIntStateOf(0) }
+
+    // Combined trigger for ChannelRow focus (fullscreen return + wrap-around)
+    val effectiveFocusTrigger = focusTrigger + wrapTrigger.intValue
 
     // Scroll to current time on first load
     LaunchedEffect(epgStartTime, currentTime) {
@@ -75,16 +91,28 @@ fun EpgGrid(
         }
     }
 
-    // Reset focus request when returning from fullscreen (focusTrigger changes)
+    // Reset focus request and scroll to selected channel when returning from fullscreen
     LaunchedEffect(focusTrigger) {
         if (focusTrigger > 0) {
-            println("[EpgGrid] Focus trigger changed to $focusTrigger, resetting initial focus")
+            println("[EpgGrid] Focus trigger changed to $focusTrigger, restoring scroll + focus")
+            // Scroll to selected channel so it's visible before focus request
+            if (selectedChannel != null) {
+                val selectedIndex = channels.indexOfFirst { it.id == selectedChannel.id }
+                if (selectedIndex >= 0) {
+                    verticalListState.scrollToItem(selectedIndex)
+                }
+            }
             shouldRequestInitialFocus.value = true
         }
     }
 
-    // Debug logging
-    println("[EpgGrid] Rendering with ${channels.size} channels, epgStart=$epgStartTime, epgEnd=$epgEndTime")
+    // Clear wrap focus target after it's been applied
+    LaunchedEffect(wrapTrigger.intValue) {
+        if (pendingWrapIndex.value != null) {
+            kotlinx.coroutines.delay(500)
+            pendingWrapIndex.value = null
+        }
+    }
 
     Column(modifier = modifier) {
         // Time bar (sticky at top)
@@ -110,9 +138,6 @@ fun EpgGrid(
                 items = channels,
                 key = { _, channel -> channel.id }
             ) { index, channel ->
-                if (index < 3) {
-                    println("[EpgGrid] Rendering channel item $index: ${channel.effectiveDisplayName}")
-                }
                 val isSelected = channel.id == selectedChannel?.id
 
                 Row(
@@ -122,12 +147,42 @@ fun EpgGrid(
                         .background(
                             if (isSelected) Color(0xFF1A2A1A) else Color.Transparent
                         )
+                        .onPreviewKeyEvent { keyEvent ->
+                            if (keyEvent.type == KeyEventType.KeyDown) {
+                                when (keyEvent.key) {
+                                    Key.DirectionUp -> {
+                                        if (index == 0) {
+                                            // Wrap to last channel
+                                            coroutineScope.launch {
+                                                verticalListState.scrollToItem(channels.size - 1)
+                                                pendingWrapIndex.value = channels.size - 1
+                                                wrapTrigger.intValue++
+                                            }
+                                            true
+                                        } else false
+                                    }
+                                    Key.DirectionDown -> {
+                                        if (index == channels.size - 1) {
+                                            // Wrap to first channel
+                                            coroutineScope.launch {
+                                                verticalListState.scrollToItem(0)
+                                                pendingWrapIndex.value = 0
+                                                wrapTrigger.intValue++
+                                            }
+                                            true
+                                        } else false
+                                    }
+                                    else -> false
+                                }
+                            } else false
+                        }
                 ) {
                     // Channel info (sticky left column)
-                    // Request focus on selected channel, or first channel during initial load if no channel is selected
+                    // Request focus on: wrap target, selected channel, or first channel on initial load
                     val shouldFocus = when {
-                        isSelected -> true  // Focus selected channel (initial load after auto-select, or returning from fullscreen)
-                        index == 0 && shouldRequestInitialFocus.value && selectedChannel == null -> true  // Focus first channel on initial load before auto-select
+                        pendingWrapIndex.value == index -> true
+                        isSelected && shouldRequestInitialFocus.value -> true
+                        index == 0 && shouldRequestInitialFocus.value && selectedChannel == null -> true
                         else -> false
                     }
                     ChannelRow(
@@ -138,7 +193,7 @@ fun EpgGrid(
                         height = rowHeight,
                         displayNumber = index + 1,  // 1-based position in list
                         requestInitialFocus = shouldFocus,
-                        focusTrigger = focusTrigger  // Pass trigger to re-focus on return from fullscreen
+                        focusTrigger = effectiveFocusTrigger
                     )
 
                     // Program cells (horizontally scrollable)

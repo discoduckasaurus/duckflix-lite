@@ -115,10 +115,18 @@ data class SubtitleSearchRequest(
     val year: String?,
     val type: String,
     val season: Int? = null,
-    val episode: Int? = null
+    val episode: Int? = null,
+    val languageCode: String? = null,
+    val force: Boolean? = null
 )
 
 @JsonClass(generateAdapter = true)
 data class SubtitleSearchResponse(
     val subtitles: List<SubtitleDto>
+)
+
+@JsonClass(generateAdapter = true)
+data class ForceSubtitleResponse(
+    val success: Boolean,
+    val subtitle: SubtitleDto? = null
 )

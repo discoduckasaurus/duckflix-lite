@@ -12,8 +12,13 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import android.util.Log
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.runtime.Composable
@@ -99,8 +104,32 @@ fun TvOsGradientLazyRow(
     gradientAlpha: Float = 0.6f,
     verticalPadding: Dp = 24.dp.scaled(),
     itemSpacing: Dp = 24.dp.scaled(),  // ~20dp at small scale, scales up from there
+    onEndReached: (() -> Unit)? = null,
     content: LazyListScope.() -> Unit
 ) {
+    val listState = rememberLazyListState()
+
+    // Detect when near end of list to trigger load more using snapshotFlow for reliable observation
+    if (onEndReached != null) {
+        LaunchedEffect(listState) {
+            snapshotFlow {
+                val layoutInfo = listState.layoutInfo
+                val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                val totalItems = layoutInfo.totalItemsCount
+                val shouldLoad = totalItems > 0 && lastVisibleIndex >= totalItems - 3
+                Triple(lastVisibleIndex, totalItems, shouldLoad)
+            }
+            .distinctUntilChanged()
+            .collect { (lastVisible, total, shouldLoad) ->
+                Log.d("TvOsGradientLazyRow", "Scroll state: lastVisible=$lastVisible, total=$total, shouldLoad=$shouldLoad")
+                if (shouldLoad) {
+                    Log.d("TvOsGradientLazyRow", "TRIGGERING onEndReached!")
+                    onEndReached()
+                }
+            }
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -108,6 +137,7 @@ fun TvOsGradientLazyRow(
             .graphicsLayer { clip = false }
     ) {
         LazyRow(
+            state = listState,
             modifier = Modifier.graphicsLayer { clip = false },
             contentPadding = PaddingValues(start = 32.dp.scaled(), end = 200.dp),
             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(itemSpacing),

@@ -4,10 +4,10 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.focus.onFocusChanged
 import kotlinx.coroutines.launch
@@ -17,6 +17,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -52,6 +54,11 @@ fun VodContainerScreen(
     val topNavBringIntoView = remember { BringIntoViewRequester() }
     val coroutineScope = rememberCoroutineScope()
 
+    // Refresh data when screen becomes visible (handles stale Continue Watching data)
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        homeViewModel.refresh()
+    }
+
     BackHandler {
         navController.navigateUp()
     }
@@ -60,51 +67,50 @@ fun VodContainerScreen(
         modifier = Modifier
             .fillMaxSize()
             .graphicsLayer { clip = false }
-            .verticalScroll(rememberScrollState())
     ) {
-        // Top section with VodTabBar
+        // All content scrollable together (top bar scrolls with content)
         Column(
             modifier = Modifier
-                .bringIntoViewRequester(topNavBringIntoView)
-                .onFocusChanged { focusState ->
-                    if (focusState.hasFocus) {
-                        coroutineScope.launch {
-                            topNavBringIntoView.bringIntoView()
-                        }
-                    }
-                }
-        ) {
-            Spacer(modifier = Modifier.height(Dimens.screenPaddingVertical))
-
-            // Logo + VodTabBar row
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = Dimens.edgePadding, end = Dimens.edgePadding),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                LogoButton(
-                    onClick = { navController.navigateUp() },
-                    size = Dimens.tabBarHeight
-                )
-                VodTabBar(
-                    tabs = VodTab.entries,
-                    selectedTab = vodUiState.selectedTab,
-                    onTabSelected = { tab -> vodViewModel.selectTab(tab) },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-
-        // Content - NO horizontal padding here so LazyRows can extend edge-to-edge
-        // graphicsLayer { clip = false } prevents clipping of glow effects
-        Column(
-            modifier = Modifier
-                .padding(vertical = Dimens.spacingMedium)
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .graphicsLayer { clip = false },
             verticalArrangement = Arrangement.spacedBy(Dimens.spacingMedium)
         ) {
+            // Top section with VodTabBar (scrolls with content)
+            Column(
+                modifier = Modifier
+                    .bringIntoViewRequester(topNavBringIntoView)
+                    .onFocusChanged { focusState ->
+                        if (focusState.hasFocus) {
+                            coroutineScope.launch {
+                                topNavBringIntoView.bringIntoView()
+                            }
+                        }
+                    }
+            ) {
+                Spacer(modifier = Modifier.height(Dimens.screenPaddingVertical))
+
+                // Logo + VodTabBar row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = Dimens.edgePadding, end = Dimens.edgePadding),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    LogoButton(
+                        onClick = { navController.navigateUp() },
+                        size = Dimens.tabBarHeight
+                    )
+                    VodTabBar(
+                        tabs = VodTab.entries,
+                        selectedTab = vodUiState.selectedTab,
+                        onTabSelected = { tab -> vodViewModel.selectTab(tab) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
 
             // Tab content area with Crossfade animation
             Crossfade(
@@ -152,7 +158,7 @@ fun VodContainerScreen(
                                 }
                             },
                             onContinueWatchingDetails = { item ->
-                                navController.navigate(Screen.Detail.createRoute(item.tmdbId, item.type))
+                                navController.navigate(Screen.Detail.createRoute(item.tmdbId, item.type, item.season, item.episode))
                             },
                             onContinueWatchingRemove = { item ->
                                 if (item.isFailed && item.jobId != null) {

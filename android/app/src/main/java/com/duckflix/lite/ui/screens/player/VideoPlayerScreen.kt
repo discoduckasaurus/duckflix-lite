@@ -360,7 +360,9 @@ fun VideoPlayerScreen(
                         currentEpisode = uiState.currentEpisode,
                         episodeTitle = uiState.episodeTitle,
                         onSeekStart = viewModel::onSeekStart,
-                        onSeekEnd = viewModel::onSeekEnd
+                        onSeekEnd = viewModel::onSeekEnd,
+                        onForceEnglishSubtitles = viewModel::forceEnglishSubtitles,
+                        isForceEnglishLoading = uiState.isForceEnglishLoading
                     )
                 }
 
@@ -498,7 +500,9 @@ private fun PlayerControls(
     currentEpisode: Int? = null,
     episodeTitle: String? = null,
     onSeekStart: () -> Unit = {},
-    onSeekEnd: () -> Unit = {}
+    onSeekEnd: () -> Unit = {},
+    onForceEnglishSubtitles: () -> Unit = {},
+    isForceEnglishLoading: Boolean = false
 ) {
     val playPauseFocusRequester = remember { FocusRequester() }
     val autoplayButtonFocusRequester = remember { FocusRequester() }
@@ -906,6 +910,8 @@ private fun PlayerControls(
             SubtitlePanel(
                 subtitleTracks = subtitleTracks,
                 onTrackSelected = onSubtitleTrackSelected,
+                onForceEnglish = onForceEnglishSubtitles,
+                isForceEnglishLoading = isForceEnglishLoading,
                 onDismiss = onDismissSubtitlePanel
             )
         }
@@ -1247,6 +1253,8 @@ private fun AudioPanel(
 private fun SubtitlePanel(
     subtitleTracks: List<TrackInfo>,
     onTrackSelected: (String) -> Unit,
+    onForceEnglish: () -> Unit,
+    isForceEnglishLoading: Boolean,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1355,6 +1363,25 @@ private fun SubtitlePanel(
                         }
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            // Divider
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+            )
+
+            // Force English button
+            com.duckflix.lite.ui.components.FocusableButton(
+                onClick = onForceEnglish,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isForceEnglishLoading
+            ) {
+                Text(
+                    text = if (isForceEnglishLoading) "Downloading..." else "Force English",
+                    style = MaterialTheme.typography.titleMedium
+                )
             }
         }
     }

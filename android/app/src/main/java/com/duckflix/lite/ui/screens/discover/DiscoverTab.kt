@@ -1,9 +1,6 @@
 package com.duckflix.lite.ui.screens.discover
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,23 +9,14 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,7 +37,6 @@ import com.duckflix.lite.data.remote.dto.CollectionItem
 import com.duckflix.lite.data.remote.dto.GenreDto
 import com.duckflix.lite.data.remote.dto.TrendingResult
 import com.duckflix.lite.ui.components.FilterDropdown
-import com.duckflix.lite.ui.components.FilterToggleButton
 import com.duckflix.lite.ui.components.MediaCard
 import com.duckflix.lite.ui.theme.Dimens
 import com.duckflix.lite.ui.theme.TvOsColors
@@ -72,36 +59,27 @@ fun DiscoverTab(
 
     Column(
         modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Filter Row with TV/Movie toggles and Advanced Filters button
-        FilterRow(
+        // Single filter row with all controls inline
+        InlineFilterRow(
             currentFilter = uiState.mediaTypeFilter,
             onFilterChange = { viewModel.setMediaTypeFilter(it) },
-            advancedFiltersExpanded = uiState.advancedFiltersExpanded,
-            onToggleAdvancedFilters = { viewModel.toggleAdvancedFilters() },
+            availableGenres = uiState.availableGenres,
+            selectedGenre = uiState.selectedGenre,
+            onGenreChange = { viewModel.setSelectedGenre(it) },
+            decades = decades,
+            selectedDecade = uiState.selectedDecade,
+            onDecadeChange = { viewModel.setSelectedDecade(it) },
+            sortBy = uiState.sortBy,
+            onSortChange = { viewModel.setSortBy(it) },
             hasActiveFilters = uiState.hasActiveFilters,
             onClearFilters = { viewModel.clearFilters() }
         )
 
-        // Advanced Filter Row (collapsible)
-        AnimatedVisibility(
-            visible = uiState.advancedFiltersExpanded,
-            enter = expandVertically(),
-            exit = shrinkVertically()
-        ) {
-            AdvancedFilterRow(
-                uiState = uiState,
-                decades = decades,
-                onGenreChange = { viewModel.setSelectedGenre(it) },
-                onDecadeChange = { viewModel.setSelectedDecade(it) },
-                onSortChange = { viewModel.setSortBy(it) }
-            )
-        }
-
-        // Show either browse rows or filter results grid
+        // Show either browse rows or filter results rows
         if (uiState.showFilterResults) {
-            FilterResultsGrid(
+            FilterResultsRows(
                 uiState = uiState,
                 onContentClick = onContentClick,
                 onLoadMore = { viewModel.loadMoreResults() }
@@ -109,63 +87,97 @@ fun DiscoverTab(
         } else {
             BrowseContent(
                 uiState = uiState,
-                onContentClick = onContentClick
+                onContentClick = onContentClick,
+                onLoadMoreTrending = viewModel::loadMoreTrending,
+                onLoadMorePopular = viewModel::loadMorePopular,
+                onLoadMoreTopRated = viewModel::loadMoreTopRated,
+                onLoadMoreNowPlaying = viewModel::loadMoreNowPlaying
             )
         }
     }
 }
 
 @Composable
-private fun FilterRow(
+private fun InlineFilterRow(
     currentFilter: MediaTypeFilter,
     onFilterChange: (MediaTypeFilter) -> Unit,
-    advancedFiltersExpanded: Boolean,
-    onToggleAdvancedFilters: () -> Unit,
+    availableGenres: List<GenreDto>,
+    selectedGenre: Int?,
+    onGenreChange: (Int?) -> Unit,
+    decades: List<Decade>,
+    selectedDecade: Decade?,
+    onDecadeChange: (Decade?) -> Unit,
+    sortBy: SortOption,
+    onSortChange: (SortOption) -> Unit,
     hasActiveFilters: Boolean,
     onClearFilters: () -> Unit
 ) {
+    // Filter sort options based on media type
+    val availableSortOptions = remember(currentFilter) {
+        SortOption.entries.filter { it.isAvailable(currentFilter) }
+    }
+
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         contentPadding = PaddingValues(horizontal = Dimens.edgePadding, vertical = 4.dp)
     ) {
-        // TV toggle
+        // 3-stage media type toggle (All | Movies | TV)
         item {
-            FilterToggleButton(
-                label = "TV",
-                isSelected = currentFilter == MediaTypeFilter.TV,
-                onToggle = {
-                    val newFilter = when (currentFilter) {
-                        MediaTypeFilter.ALL -> MediaTypeFilter.TV
-                        MediaTypeFilter.TV -> MediaTypeFilter.ALL
-                        MediaTypeFilter.MOVIE -> MediaTypeFilter.ALL
-                    }
-                    onFilterChange(newFilter)
-                }
+            MediaTypeToggle(
+                currentFilter = currentFilter,
+                onFilterChange = onFilterChange
             )
         }
 
-        // Movie toggle
+        // Genre Dropdown
         item {
-            FilterToggleButton(
-                label = "Movie",
-                isSelected = currentFilter == MediaTypeFilter.MOVIE,
-                onToggle = {
-                    val newFilter = when (currentFilter) {
-                        MediaTypeFilter.ALL -> MediaTypeFilter.MOVIE
-                        MediaTypeFilter.MOVIE -> MediaTypeFilter.ALL
-                        MediaTypeFilter.TV -> MediaTypeFilter.ALL
-                    }
-                    onFilterChange(newFilter)
-                }
+            FilterDropdown(
+                label = "Genre",
+                options = listOf(null) + availableGenres,
+                selectedOptions = if (selectedGenre == null) {
+                    listOf(null)
+                } else {
+                    availableGenres.filter { it.id == selectedGenre }
+                },
+                onSelectionChange = { selected ->
+                    val genre = selected.firstOrNull()
+                    onGenreChange(if (genre is GenreDto) genre.id else null)
+                },
+                optionLabel = { if (it == null) "All Genres" else (it as? GenreDto)?.name ?: "Unknown" },
+                multiSelect = false
             )
         }
 
-        // Advanced Filters Button
+        // Decade Dropdown
         item {
-            AdvancedFiltersButton(
-                isExpanded = advancedFiltersExpanded,
-                hasActiveFilters = hasActiveFilters,
-                onClick = onToggleAdvancedFilters
+            FilterDropdown(
+                label = "Decade",
+                options = listOf(null) + decades,
+                selectedOptions = listOf(selectedDecade),
+                onSelectionChange = { selected ->
+                    onDecadeChange(selected.firstOrNull() as? Decade)
+                },
+                optionLabel = { if (it == null) "All Time" else (it as? Decade)?.displayName ?: "Unknown" },
+                multiSelect = false
+            )
+        }
+
+        // Sort Dropdown
+        item {
+            FilterDropdown(
+                label = "Sort",
+                options = availableSortOptions,
+                selectedOptions = listOf(sortBy),
+                onSelectionChange = { selected ->
+                    selected.firstOrNull()?.let { onSortChange(it) }
+                },
+                optionLabel = { option ->
+                    val sort = option as? SortOption
+                    if (sort == null) "Unknown"
+                    else if (sort.movieOnly) "${sort.displayName} (Movie)"
+                    else sort.displayName
+                },
+                multiSelect = false
             )
         }
 
@@ -178,68 +190,89 @@ private fun FilterRow(
     }
 }
 
+/**
+ * 3-stage toggle: All | Movies | TV
+ * Clicking cycles through the options
+ */
 @Composable
-private fun AdvancedFiltersButton(
-    isExpanded: Boolean,
-    hasActiveFilters: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
+private fun MediaTypeToggle(
+    currentFilter: MediaTypeFilter,
+    onFilterChange: (MediaTypeFilter) -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val isFocused by interactionSource.collectIsFocusedAsState()
     val shape = RoundedCornerShape(24.dp)
 
-    val gradientBrush = Brush.linearGradient(colors = TvOsColors.gradientColors)
-
-    val backgroundModifier = when {
-        isFocused -> Modifier.background(brush = gradientBrush, shape = shape)
-        isExpanded || hasActiveFilters -> Modifier.background(brush = gradientBrush, shape = shape)
-        else -> Modifier.background(color = Color(0xFF3A3A3A), shape = shape)
-    }
-
-    val borderModifier = if (isFocused) {
-        Modifier.border(2.dp, gradientBrush, shape)
-    } else Modifier
-
-    val textColor = when {
-        isFocused || isExpanded || hasActiveFilters -> Color.White
-        else -> Color.White.copy(alpha = 0.7f)
-    }
-
-    Box(
-        modifier = modifier
+    Row(
+        modifier = Modifier
             .height(48.dp)
             .tvOsScaleOnly(isFocused = isFocused, focusedScale = 1.03f)
             .clip(shape)
-            .then(backgroundModifier)
-            .then(borderModifier)
+            .background(color = Color(0xFF2A2A2A), shape = shape)
+            .then(if (isFocused) Modifier.border(1.5.dp, Color.White, shape) else Modifier)
             .focusable(interactionSource = interactionSource)
-            .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = {
+                    // Cycle through: ALL -> MOVIE -> TV -> ALL
+                    val nextFilter = when (currentFilter) {
+                        MediaTypeFilter.ALL -> MediaTypeFilter.MOVIE
+                        MediaTypeFilter.MOVIE -> MediaTypeFilter.TV
+                        MediaTypeFilter.TV -> MediaTypeFilter.ALL
+                    }
+                    onFilterChange(nextFilter)
+                }
+            ),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ToggleSegment(
+            text = "All",
+            isSelected = currentFilter == MediaTypeFilter.ALL,
+            isFirst = true
+        )
+        ToggleSegment(
+            text = "Movies",
+            isSelected = currentFilter == MediaTypeFilter.MOVIE
+        )
+        ToggleSegment(
+            text = "TV",
+            isSelected = currentFilter == MediaTypeFilter.TV,
+            isLast = true
+        )
+    }
+}
+
+@Composable
+private fun ToggleSegment(
+    text: String,
+    isSelected: Boolean,
+    isFirst: Boolean = false,
+    isLast: Boolean = false
+) {
+    val gradientBrush = Brush.linearGradient(colors = TvOsColors.gradientColors)
+    val shape = when {
+        isFirst -> RoundedCornerShape(topStart = 24.dp, bottomStart = 24.dp)
+        isLast -> RoundedCornerShape(topEnd = 24.dp, bottomEnd = 24.dp)
+        else -> RoundedCornerShape(0.dp)
+    }
+
+    Box(
+        modifier = Modifier
+            .height(48.dp)
+            .clip(shape)
+            .then(
+                if (isSelected) Modifier.background(brush = gradientBrush, shape = shape)
+                else Modifier
+            )
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Icon(
-                imageVector = Icons.Default.Settings,
-                contentDescription = null,
-                tint = textColor,
-                modifier = Modifier.size(18.dp)
-            )
-            Text(
-                text = "Filters",
-                style = MaterialTheme.typography.labelLarge,
-                color = textColor
-            )
-            Icon(
-                imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                contentDescription = if (isExpanded) "Collapse filters" else "Expand filters",
-                tint = textColor,
-                modifier = Modifier.size(18.dp)
-            )
-        }
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = if (isSelected) Color.White else Color.White.copy(alpha = 0.5f)
+        )
     }
 }
 
@@ -252,15 +285,13 @@ private fun ClearFiltersButton(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val shape = RoundedCornerShape(24.dp)
 
-    val gradientBrush = Brush.linearGradient(colors = TvOsColors.gradientColors)
-
     Box(
         modifier = modifier
             .height(48.dp)
             .tvOsScaleOnly(isFocused = isFocused, focusedScale = 1.03f)
             .clip(shape)
             .background(color = if (isFocused) Color(0xFFCC3333) else Color(0xFF882222), shape = shape)
-            .then(if (isFocused) Modifier.border(2.dp, gradientBrush, shape) else Modifier)
+            .then(if (isFocused) Modifier.border(1.5.dp, Color.White, shape) else Modifier)
             .focusable(interactionSource = interactionSource)
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick)
             .padding(horizontal = 16.dp),
@@ -286,104 +317,20 @@ private fun ClearFiltersButton(
 }
 
 @Composable
-private fun AdvancedFilterRow(
-    uiState: DiscoverUiState,
-    decades: List<Decade>,
-    onGenreChange: (Int?) -> Unit,
-    onDecadeChange: (Decade?) -> Unit,
-    onSortChange: (SortOption) -> Unit
-) {
-    // Filter sort options based on media type
-    val availableSortOptions = remember(uiState.mediaTypeFilter) {
-        SortOption.entries.filter { it.isAvailable(uiState.mediaTypeFilter) }
-    }
-
-    LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        contentPadding = PaddingValues(horizontal = Dimens.edgePadding, vertical = 4.dp)
-    ) {
-        // Genre Dropdown (single-select, with "All" option)
-        item {
-            FilterDropdown(
-                label = "Genre",
-                options = listOf(null) + uiState.availableGenres,
-                selectedOptions = if (uiState.selectedGenre == null) {
-                    listOf(null)
-                } else {
-                    uiState.availableGenres.filter { it.id == uiState.selectedGenre }
-                },
-                onSelectionChange = { selected ->
-                    val genre = selected.firstOrNull()
-                    onGenreChange(if (genre is GenreDto) genre.id else null)
-                },
-                optionLabel = { if (it == null) "All Genres" else (it as? GenreDto)?.name ?: "Unknown" },
-                multiSelect = false
-            )
-        }
-
-        // Decade Dropdown (single-select, with "All" option)
-        item {
-            FilterDropdown(
-                label = "Decade",
-                options = listOf(null) + decades,
-                selectedOptions = listOf(uiState.selectedDecade),
-                onSelectionChange = { selected ->
-                    onDecadeChange(selected.firstOrNull() as? Decade)
-                },
-                optionLabel = { if (it == null) "All Time" else (it as? Decade)?.displayName ?: "Unknown" },
-                multiSelect = false
-            )
-        }
-
-        // Sort Dropdown
-        item {
-            FilterDropdown(
-                label = "Sort",
-                options = availableSortOptions,
-                selectedOptions = listOf(uiState.sortBy),
-                onSelectionChange = { selected ->
-                    selected.firstOrNull()?.let { onSortChange(it) }
-                },
-                optionLabel = { option ->
-                    val sort = option as? SortOption
-                    if (sort == null) "Unknown"
-                    else if (sort.movieOnly) "${sort.displayName} (Movie)"
-                    else sort.displayName
-                },
-                multiSelect = false
-            )
-        }
-    }
-}
-
-@Composable
-private fun FilterResultsGrid(
+private fun FilterResultsRows(
     uiState: DiscoverUiState,
     onContentClick: (tmdbId: Int, mediaType: String) -> Unit,
     onLoadMore: () -> Unit
 ) {
-    val gridState = rememberLazyGridState()
-
-    // Detect when we're near the end to load more
-    val shouldLoadMore by remember {
-        derivedStateOf {
-            val lastVisibleIndex = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val totalItems = gridState.layoutInfo.totalItemsCount
-            lastVisibleIndex >= totalItems - 6 && !uiState.isLoadingMoreResults
-        }
-    }
-
-    LaunchedEffect(shouldLoadMore) {
-        if (shouldLoadMore && uiState.filterResults.isNotEmpty()) {
-            onLoadMore()
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Results count
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Results count - use actual count if totalResults is wrong
         if (!uiState.isLoadingFilterResults && uiState.filterResults.isNotEmpty()) {
+            val displayCount = if (uiState.filterResultsTotal > 0) uiState.filterResultsTotal else uiState.filterResults.size
             Text(
-                text = "${uiState.filterResultsTotal} results",
+                text = "$displayCount results",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.White.copy(alpha = 0.7f),
                 modifier = Modifier.padding(horizontal = Dimens.edgePadding, vertical = 8.dp)
@@ -408,51 +355,59 @@ private fun FilterResultsGrid(
                 text = "Error: ${uiState.filterError}",
                 style = MaterialTheme.typography.bodyMedium,
                 color = Color.Red,
-                modifier = Modifier.padding(16.dp)
+                modifier = Modifier.padding(horizontal = Dimens.edgePadding)
             )
         }
 
-        // Results grid
+        // Results rows
         if (!uiState.isLoadingFilterResults && uiState.filterResults.isNotEmpty()) {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 140.dp),
-                state = gridState,
-                contentPadding = PaddingValues(
-                    start = Dimens.edgePadding,
-                    end = Dimens.edgePadding,
-                    bottom = 32.dp
-                ),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(
-                    items = uiState.filterResults,
-                    key = { "${it.id}_${it.mediaType}" }
-                ) { item ->
-                    ResultCard(
-                        item = item,
-                        onClick = { onContentClick(item.id, item.mediaType) }
-                    )
-                }
+            when (uiState.mediaTypeFilter) {
+                MediaTypeFilter.ALL -> {
+                    // Split into movies and TV shows
+                    val movies = uiState.filterResults.filter { it.mediaType == "movie" }
+                    val tvShows = uiState.filterResults.filter { it.mediaType == "tv" }
 
-                // Loading more indicator
-                if (uiState.isLoadingMoreResults) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(
-                                color = Color.White,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
+                    if (movies.isNotEmpty()) {
+                        FilterResultSection(
+                            title = "Movies",
+                            items = movies,
+                            onItemClick = onContentClick,
+                            onEndReached = onLoadMore,
+                            isLoadingMore = uiState.isLoadingMoreResults
+                        )
+                    }
+
+                    if (tvShows.isNotEmpty()) {
+                        FilterResultSection(
+                            title = "TV Shows",
+                            items = tvShows,
+                            onItemClick = onContentClick,
+                            onEndReached = onLoadMore,
+                            isLoadingMore = uiState.isLoadingMoreResults
+                        )
                     }
                 }
+                MediaTypeFilter.MOVIE -> {
+                    FilterResultSection(
+                        title = "Movies",
+                        items = uiState.filterResults,
+                        onItemClick = onContentClick,
+                        onEndReached = onLoadMore,
+                        isLoadingMore = uiState.isLoadingMoreResults
+                    )
+                }
+                MediaTypeFilter.TV -> {
+                    FilterResultSection(
+                        title = "TV Shows",
+                        items = uiState.filterResults,
+                        onItemClick = onContentClick,
+                        onEndReached = onLoadMore,
+                        isLoadingMore = uiState.isLoadingMoreResults
+                    )
+                }
             }
+
+            Spacer(modifier = Modifier.height(32.dp))
         }
 
         // Empty state
@@ -473,17 +428,118 @@ private fun FilterResultsGrid(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FilterResultSection(
+    title: String,
+    items: List<CollectionItem>,
+    onItemClick: (tmdbId: Int, mediaType: String) -> Unit,
+    onEndReached: () -> Unit,
+    isLoadingMore: Boolean
+) {
+    val bringIntoViewRequester = remember { BringIntoViewRequester() }
+    val coroutineScope = rememberCoroutineScope()
+
+    Column(
+        modifier = Modifier
+            .bringIntoViewRequester(bringIntoViewRequester)
+            .onFocusChanged { focusState ->
+                if (focusState.hasFocus) {
+                    coroutineScope.launch {
+                        bringIntoViewRequester.bringIntoView()
+                    }
+                }
+            },
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.headlineSmall,
+            color = Color.White,
+            modifier = Modifier.padding(horizontal = Dimens.edgePadding)
+        )
+
+        TvOsGradientLazyRow(
+            gradientAlpha = 0.5f,
+            verticalPadding = 20.dp,
+            onEndReached = onEndReached
+        ) {
+            items(items.size, key = { "${it}_${items[it].id}_${items[it].mediaType}" }) { index ->
+                val item = items[index]
+                val glowColor = rememberGlowColor(index, items.size)
+                MediaCard(
+                    onClick = { onItemClick(item.id, item.mediaType) },
+                    modifier = Modifier
+                        .width(128.dp)
+                        .height(240.dp),
+                    borderColor = glowColor
+                ) {
+                    Column {
+                        AsyncImage(
+                            model = item.posterUrl,
+                            contentDescription = item.title,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(190.dp),
+                            contentScale = ContentScale.Crop
+                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Text(
+                                text = item.title,
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (item.voteAverage != null && item.voteAverage > 0) {
+                                Text(
+                                    text = String.format("%.1f", item.voteAverage),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFFFFD700).copy(alpha = 0.9f)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Loading more indicator at end of row
+            if (isLoadingMore) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .width(80.dp)
+                            .height(240.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ResultCard(
     item: CollectionItem,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    borderColor: Color = Color.White
 ) {
     MediaCard(
         onClick = onClick,
         modifier = modifier
             .width(140.dp)
-            .height(260.dp)
+            .height(260.dp),
+        borderColor = borderColor
     ) {
         Column {
             AsyncImage(
@@ -521,9 +577,16 @@ private fun ResultCard(
 @Composable
 private fun BrowseContent(
     uiState: DiscoverUiState,
-    onContentClick: (tmdbId: Int, mediaType: String) -> Unit
+    onContentClick: (tmdbId: Int, mediaType: String) -> Unit,
+    onLoadMoreTrending: () -> Unit,
+    onLoadMorePopular: () -> Unit,
+    onLoadMoreTopRated: () -> Unit,
+    onLoadMoreNowPlaying: () -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(
+        modifier = Modifier.padding(top = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
         // Trending Section
         ContentSection(title = "Trending") {
             when {
@@ -531,7 +594,8 @@ private fun BrowseContent(
                 uiState.trendingError != null -> ErrorText(uiState.trendingError)
                 uiState.trending.isNotEmpty() -> TrendingRow(
                     items = uiState.trending,
-                    onItemClick = { item -> onContentClick(item.id, item.mediaType) }
+                    onItemClick = { item -> onContentClick(item.id, item.mediaType) },
+                    onEndReached = onLoadMoreTrending
                 )
             }
         }
@@ -543,7 +607,8 @@ private fun BrowseContent(
                 uiState.popularError != null -> ErrorText(uiState.popularError)
                 uiState.popular.isNotEmpty() -> CollectionRow(
                     items = uiState.popular,
-                    onItemClick = { item -> onContentClick(item.id, item.mediaType) }
+                    onItemClick = { item -> onContentClick(item.id, item.mediaType) },
+                    onEndReached = onLoadMorePopular
                 )
             }
         }
@@ -555,7 +620,8 @@ private fun BrowseContent(
                 uiState.topRatedError != null -> ErrorText(uiState.topRatedError)
                 uiState.topRated.isNotEmpty() -> CollectionRow(
                     items = uiState.topRated,
-                    onItemClick = { item -> onContentClick(item.id, item.mediaType) }
+                    onItemClick = { item -> onContentClick(item.id, item.mediaType) },
+                    onEndReached = onLoadMoreTopRated
                 )
             }
         }
@@ -568,7 +634,8 @@ private fun BrowseContent(
                     uiState.nowPlayingError != null -> ErrorText(uiState.nowPlayingError)
                     uiState.nowPlaying.isNotEmpty() -> CollectionRow(
                         items = uiState.nowPlaying,
-                        onItemClick = { item -> onContentClick(item.id, item.mediaType) }
+                        onItemClick = { item -> onContentClick(item.id, item.mediaType) },
+                        onEndReached = onLoadMoreNowPlaying
                     )
                 }
             }
@@ -648,10 +715,11 @@ private fun ErrorText(error: String) {
 @Composable
 private fun TrendingRow(
     items: List<TrendingResult>,
-    onItemClick: (TrendingResult) -> Unit
+    onItemClick: (TrendingResult) -> Unit,
+    onEndReached: (() -> Unit)? = null
 ) {
-    TvOsGradientLazyRow(gradientAlpha = 0.5f, verticalPadding = 20.dp) {
-        items(items.size, key = { items[it].let { item -> "${item.id}_${item.mediaType}" } }) { index ->
+    TvOsGradientLazyRow(gradientAlpha = 0.5f, verticalPadding = 20.dp, onEndReached = onEndReached) {
+        items(items.size, key = { items[it].let { item -> "${it}_${item.id}_${item.mediaType}" } }) { index ->
             val item = items[index]
             val glowColor = rememberGlowColor(index, items.size)
             MediaCard(
@@ -699,10 +767,11 @@ private fun TrendingRow(
 @Composable
 private fun CollectionRow(
     items: List<CollectionItem>,
-    onItemClick: (CollectionItem) -> Unit
+    onItemClick: (CollectionItem) -> Unit,
+    onEndReached: (() -> Unit)? = null
 ) {
-    TvOsGradientLazyRow(gradientAlpha = 0.5f, verticalPadding = 20.dp) {
-        items(items.size, key = { items[it].let { item -> "${item.id}_${item.mediaType}" } }) { index ->
+    TvOsGradientLazyRow(gradientAlpha = 0.5f, verticalPadding = 20.dp, onEndReached = onEndReached) {
+        items(items.size, key = { items[it].let { item -> "${it}_${item.id}_${item.mediaType}" } }) { index ->
             val item = items[index]
             val glowColor = rememberGlowColor(index, items.size)
             MediaCard(

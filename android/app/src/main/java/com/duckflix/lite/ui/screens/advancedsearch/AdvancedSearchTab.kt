@@ -107,7 +107,8 @@ fun AdvancedSearchTab(
             ResultsGrid(
                 results = uiState.results,
                 onContentClick = onContentClick,
-                resultsFocusRequester = resultsFocusRequester
+                resultsFocusRequester = resultsFocusRequester,
+                onEndReached = viewModel::loadMore
             )
         }
 
@@ -183,13 +184,15 @@ private fun SearchBarRow(
 private fun ResultsGrid(
     results: List<CollectionItem>,
     onContentClick: (tmdbId: Int, mediaType: String) -> Unit,
-    resultsFocusRequester: FocusRequester
+    resultsFocusRequester: FocusRequester,
+    onEndReached: (() -> Unit)? = null
 ) {
     // Display results in a horizontal carousel with gradient glow (matches My Stuff style)
     TvOsGradientLazyRow(
-        verticalPadding = 20.dp
+        verticalPadding = 20.dp,
+        onEndReached = onEndReached
     ) {
-        items(results.size, key = { results[it].let { item -> "${item.id}_${item.mediaType}" } }) { index ->
+        items(results.size, key = { results[it].let { item -> "${it}_${item.id}_${item.mediaType}" } }) { index ->
             val item = results[index]
             val glowColor = rememberGlowColor(index, results.size)
             ResultCard(

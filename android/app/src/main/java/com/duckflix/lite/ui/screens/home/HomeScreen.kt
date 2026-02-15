@@ -178,7 +178,8 @@ fun HomeScreen(
                     items = uiState.recommendations,
                     onItemClick = { item ->
                         navController.navigate(Screen.Detail.createRoute(item.id, item.mediaType))
-                    }
+                    },
+                    onEndReached = viewModel::loadMoreRecommendations
                 )
             }
         } else if (uiState.isLoadingRecommendations) {
@@ -203,7 +204,8 @@ fun HomeScreen(
                     items = uiState.trendingMovies,
                     onItemClick = { item ->
                         navController.navigate(Screen.Detail.createRoute(item.id, "movie"))
-                    }
+                    },
+                    onEndReached = viewModel::loadMoreTrendingMovies
                 )
             }
         } else if (uiState.isLoadingTrendingMovies) {
@@ -228,7 +230,8 @@ fun HomeScreen(
                     items = uiState.trendingTV,
                     onItemClick = { item ->
                         navController.navigate(Screen.Detail.createRoute(item.id, "tv"))
-                    }
+                    },
+                    onEndReached = viewModel::loadMoreTrendingTV
                 )
             }
         } else if (uiState.isLoadingTrendingTV) {
@@ -298,7 +301,7 @@ fun HomeScreen(
                 },
                 onDetails = { item ->
                     showContinueWatchingDialog = false
-                    navController.navigate(Screen.Detail.createRoute(item.tmdbId, item.type))
+                    navController.navigate(Screen.Detail.createRoute(item.tmdbId, item.type, item.season, item.episode))
                 },
                 onRemove = { item ->
                     showContinueWatchingDialog = false
@@ -461,11 +464,13 @@ private fun WatchlistRow(
 @Composable
 private fun RecommendationsRow(
     items: List<RecommendationItem>,
-    onItemClick: (RecommendationItem) -> Unit
+    onItemClick: (RecommendationItem) -> Unit,
+    onEndReached: (() -> Unit)? = null
 ) {
     TvOsGradientLazyRow(
         gradientAlpha = 0.5f,
         verticalPadding = 20.dp,
+        onEndReached = onEndReached
     ) {
         items(items.size) { index ->
             val item = items[index]
@@ -515,11 +520,13 @@ private fun RecommendationsRow(
 @Composable
 private fun TrendingRow(
     items: List<TrendingResult>,
-    onItemClick: (TrendingResult) -> Unit
+    onItemClick: (TrendingResult) -> Unit,
+    onEndReached: (() -> Unit)? = null
 ) {
     TvOsGradientLazyRow(
         gradientAlpha = 0.5f,
         verticalPadding = 20.dp,
+        onEndReached = onEndReached
     ) {
         items(items.size) { index ->
             val item = items[index]

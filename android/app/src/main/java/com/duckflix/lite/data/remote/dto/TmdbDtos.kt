@@ -5,7 +5,11 @@ import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
 data class TmdbSearchResponse(
-    val results: List<TmdbSearchResult>
+    val results: List<TmdbSearchResult>,
+    val page: Int = 1,
+    val totalPages: Int = 1,
+    val totalResults: Int = 0,
+    val hasMore: Boolean = false
 )
 
 @JsonClass(generateAdapter = true)
@@ -196,7 +200,11 @@ data class TrendingResult(
 
 @JsonClass(generateAdapter = true)
 data class TrendingResponse(
-    val results: List<TrendingResult>
+    val results: List<TrendingResult>,
+    val page: Int = 1,
+    val totalPages: Int = 1,
+    val totalResults: Int = 0,
+    val hasMore: Boolean = false
 )
 
 // Recommendations API DTOs
@@ -253,6 +261,21 @@ data class WatchProgressSyncRequest(
 )
 
 @JsonClass(generateAdapter = true)
+data class EpisodeProgressItem(
+    val season: Int,
+    val episode: Int,
+    val position: Long,
+    val duration: Long,
+    val completed: Boolean = false,
+    val updatedAt: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class EpisodeProgressResponse(
+    val episodes: List<EpisodeProgressItem>
+)
+
+@JsonClass(generateAdapter = true)
 data class WatchlistSyncRequest(
     val tmdbId: Int,
     val type: String,
@@ -284,6 +307,16 @@ data class RandomEpisodeResponse(
     val season: Int,
     val episode: Int,
     val title: String
+)
+
+@JsonClass(generateAdapter = true)
+data class RTScoresResponse(
+    val tmdbId: Int,
+    val criticsScore: Int?,
+    val audienceScore: Int?,
+    val rtUrl: String?,
+    val available: Boolean,
+    val cached: Boolean
 )
 
 // Person/Actor DTOs

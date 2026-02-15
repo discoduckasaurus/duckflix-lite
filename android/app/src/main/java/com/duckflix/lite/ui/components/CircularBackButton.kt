@@ -56,7 +56,7 @@ fun CircularBackButton(
             ) { onClick() }
             .then(
                 if (isFocused) {
-                    Modifier.border(2.dp, Color.White, RoundedCornerShape(12.dp))
+                    Modifier.border(1.5.dp, Color.White, RoundedCornerShape(12.dp))
                 } else {
                     Modifier
                 }
