@@ -14,8 +14,9 @@ const { NTV_DOMAINS } = require('../services/ntv-service');
  * Mirrors getSourceLabel() in livetv.js.
  */
 function getSourceLabel(url) {
+  if (url.includes('smartcdn.org')) return 'CDN';
   if (url.startsWith('ntv://') || NTV_DOMAINS.some(d => url.includes(d))) return 'NTV';
-  if (url.includes('tvpass.org')) return 'TVPass';
+  if (url.includes('tvpass.org') || url.includes('thetvapp.to')) return 'TVPass';
   return 'Backup';
 }
 
@@ -122,6 +123,17 @@ router.get('/channels', (req, res) => {
       logger.debug('Failed to load ntv_stream_map:', err.message);
     }
 
+    // Get IPTV/CDN stream map (channelId -> { url, iptv_id, name, group })
+    let iptvStreamMap = {};
+    try {
+      const iptvRow = db.prepare(`
+        SELECT epg_data FROM epg_cache WHERE channel_id = 'iptv_stream_map'
+      `).get();
+      if (iptvRow) iptvStreamMap = JSON.parse(iptvRow.epg_data);
+    } catch (err) {
+      logger.debug('Failed to load iptv_stream_map:', err.message);
+    }
+
     // Get special channels
     const specialChannels = db.prepare(`
       SELECT id, name, display_name, group_name, stream_url, logo_url, sort_order, is_active
@@ -152,6 +164,7 @@ router.get('/channels', (req, res) => {
       }
 
       const hasNTV = !!ntvStreamMap[ch.id];
+      const hasCDN = !!iptvStreamMap[ch.id];
       const hasBackupStreams = !!backupStreams[ch.id];
       let streamSourceCount = 1; // original M3U URL
       if (hasNTV) streamSourceCount++;
@@ -191,6 +204,7 @@ router.get('/channels', (req, res) => {
         source: ch.source || (ch.id.startsWith('ntv-') ? 'ntv' : ch.id.startsWith('cab-') ? 'cabernet' : 'tvpass'),
         hasMetadata: !!meta,
         hasNTV,
+        hasCDN,
         hasBackupStreams,
         streamSourceCount,
         streamSources, // Full ordered source chain with labels

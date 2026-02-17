@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DuckFlix Lite - Admin Dashboard</title>
-    <link rel="stylesheet" href="/static/admin/styles.css?v=18">
+    <link rel="stylesheet" href="/static/admin/styles.css?v=19">
 </head>
 <body>
     <!-- Login Screen -->
@@ -119,8 +119,10 @@
                     <div class="livetv-filters">
                         <select id="channel-source-filter">
                             <option value="all">All Sources</option>
-                            <option value="tvpass">TVPass</option>
+                            <option value="has-cdn">Has CDN</option>
                             <option value="has-ntv">Has NTV</option>
+                            <option value="no-cdn">No CDN</option>
+                            <option value="tvpass">TVPass</option>
                             <option value="failover">On Failover (not primary)</option>
                             <option value="special">Special</option>
                         </select>
@@ -220,6 +222,6 @@
     <input type="file" id="logo-upload-input" accept="image/*" style="display:none">
     <input type="file" id="provider-logo-upload-input" accept="image/*" style="display:none">
 
-    <script src="/static/admin/app.js?v=18"></script>
+    <script src="/static/admin/app.js?v=19"></script>
 </body>
 </html>

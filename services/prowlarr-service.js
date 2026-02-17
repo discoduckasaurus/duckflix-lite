@@ -88,7 +88,7 @@ async function searchTorrentsWithProwlarr(searchQuery, extraParams = {}) {
       .filter(r => r.seeders >= MIN_SEEDERS)
       .filter(r => {
         const sizeGB = r.size / (1024 * 1024 * 1024);
-        return sizeGB > 0.05 && sizeGB < 100;
+        return sizeGB > 0.05;
       })
       // Filter out blocklisted groups
       .filter(r => {

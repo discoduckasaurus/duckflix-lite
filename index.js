@@ -106,6 +106,11 @@ app.use('/api', liveTVRoutes); // Logo proxy at /api/logo-proxy
 // Static files (APK hosting)
 app.use('/static', express.static(path.join(__dirname, 'static')));
 
+// Public APK download at /Apk
+app.get('/Apk', (req, res) => {
+  res.redirect('/api/apk/latest');
+});
+
 // Admin dashboard (SPA - serve index.html for all /admin routes)
 app.get('/admin*', (req, res) => {
   res.sendFile(path.join(__dirname, 'static', 'admin', 'index.html'));
@@ -152,6 +157,15 @@ app.get('/stream-proxy', async (req, res) => {
     logger.error('[Stream Proxy] Fetch error:', err.message);
     if (!res.headersSent) res.status(502).json({ error: 'Proxy fetch failed' });
   }
+});
+
+// Web app (SPA - but never intercept API routes)
+app.use(express.static(path.join(__dirname, 'web')));
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  const indexPath = path.join(__dirname, 'web', 'index.html');
+  if (fs.existsSync(indexPath)) return res.sendFile(indexPath);
+  next();
 });
 
 // 404 handler

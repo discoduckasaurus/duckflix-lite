@@ -16,6 +16,7 @@ const { detectEmbeddedSubtitles, getBestEmbeddedSubtitle } = require('../service
 const { standardizeLanguage } = require('../utils/language-standardizer');
 const { extractSubtitleStream, analyzeStreamCompatibility } = require('../services/ffprobe-service');
 const { remuxWithCompatibleAudio, transcodeAudioToEac3 } = require('../services/audio-processor');
+const { syncSubtitle } = require('../services/subtitle-sync');
 const path = require('path');
 
 const TRANSCODED_DIR = path.join(__dirname, '..', 'transcoded');
@@ -331,6 +332,8 @@ router.get('/stream-url/progress/:jobId', (req, res) => {
       quality: job.quality,
       source: job.streamUrl ? 'rd' : null,
       subtitles: job.subtitles || [],
+      embeddedSubtitleTracks: job.embeddedSubtitleTracks || [],
+      recommendedSubtitleIndex: job.recommendedSubtitleIndex ?? null,
       skipMarkers: job.skipMarkers || null,
       error: job.error,
       suggestBandwidthRetest
@@ -584,18 +587,33 @@ router.post('/prefetch-promote/:jobId', async (req, res) => {
  * Background subtitle fetcher (shared by cached and fresh downloads)
  * Priority: 1) Subtitle cache 2) Embedded 3) OpenSubtitles API
  */
-function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, streamUrl, serverHost) {
+function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, streamUrl, serverHost, options = {}) {
+  const { hasEnglishSubtitle } = options;
+
   (async () => {
     try {
       const preferredLang = 'en';
 
+      // Compute OpenSubtitles hash from the video URL (skips local/FUSE URLs, ~200ms)
+      const videoHash = await opensubtitlesService.computeOpenSubtitlesHash(streamUrl);
+
       // Step 1: Check cache — only trust OpenSubtitles-sourced cache (embedded subs may be corrupted)
-      const cached = opensubtitlesService.getCachedSubtitle(tmdbId, type, season, episode, preferredLang);
+      const cached = opensubtitlesService.getCachedSubtitle(tmdbId, type, season, episode, preferredLang, videoHash);
       let cachedFileExists = false;
       if (cached) {
         try { await require('fs').promises.access(cached.file_path); cachedFileExists = true; } catch {}
       }
       if (cached && cachedFileExists && cached.opensubtitles_file_id) {
+        // If cached subtitle was never synced (no video_hash), sync it now
+        if (!cached.video_hash && videoHash) {
+          const syncResult = await syncSubtitle(streamUrl, cached.file_path);
+          if (syncResult.synced) {
+            logger.info(`[SubSync] Synced cached subtitle for ${title} by ${syncResult.offsetMs > 0 ? '+' : ''}${(syncResult.offsetMs / 1000).toFixed(2)}s`);
+          }
+          // Stamp the hash so we don't re-sync next time
+          db.prepare('UPDATE subtitles SET video_hash = ? WHERE id = ?').run(videoHash, cached.id);
+        }
+
         const langResult = standardizeLanguage(cached.language);
         downloadJobManager.updateJob(jobId, {
           subtitles: [{
@@ -611,7 +629,15 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
         return;
       }
 
-      // Step 2: Try OpenSubtitles API first (higher quality than embedded)
+      // Step 2: If container has clean English embedded subs, skip external fetch
+      // (ExoPlayer reads them directly from the container — no SRT overlay needed)
+      if (hasEnglishSubtitle) {
+        logger.info(`Container has clean English subtitle track for ${title}, skipping external fetch`);
+        return;
+      }
+
+      // Step 3: No English embedded subs — auto-fetch from OpenSubtitles
+      logger.info(`No English subtitle in container for ${title}, fetching from OpenSubtitles`);
       try {
         const subtitle = await opensubtitlesService.getSubtitle({
           tmdbId,
@@ -620,10 +646,19 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
           type,
           season,
           episode,
-          languageCode: preferredLang
+          languageCode: preferredLang,
+          videoHash
         });
 
         if (subtitle) {
+          // Auto-sync subtitle timing to this video's audio track
+          if (!subtitle.cached) {
+            const syncResult = await syncSubtitle(streamUrl, subtitle.filePath);
+            if (syncResult.synced) {
+              logger.info(`[SubSync] Subtitle for ${title} adjusted by ${syncResult.offsetMs > 0 ? '+' : ''}${(syncResult.offsetMs / 1000).toFixed(2)}s`);
+            }
+          }
+
           const langResult = standardizeLanguage(subtitle.language);
           downloadJobManager.updateJob(jobId, {
             subtitles: [{
@@ -642,7 +677,7 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
         logger.debug(`OpenSubtitles unavailable for ${title}: ${osErr.message}`);
       }
 
-      // Step 3: Fall back to embedded subtitles
+      // Step 4: OpenSubtitles failed — fall back to embedded subtitle detection
       const embeddedResult = await detectEmbeddedSubtitles(streamUrl, preferredLang);
 
       if (embeddedResult.hasEmbedded && !embeddedResult.shouldFallbackToApi) {
@@ -693,7 +728,7 @@ function fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, epis
         }
       }
 
-      // Step 4: Use embedded-cached subtitle as last resort (if it exists but wasn't from OpenSubtitles)
+      // Step 5: Use embedded-cached subtitle as last resort (if it exists but wasn't from OpenSubtitles)
       if (cached && cachedFileExists) {
         const langResult = standardizeLanguage(cached.language);
         downloadJobManager.updateJob(jobId, {
@@ -793,6 +828,9 @@ async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, server
     defaultAudioCodec: analysis.defaultAudioCodec,
     bestCompatibleAudioIndex: analysis.bestCompatibleAudioIndex,
     audioTracks: analysis.audioStreams?.length || 0,
+    subTracks: analysis.subtitleStreams?.length || 0,
+    subCleanup: analysis.subtitleCleanupNeeded,
+    hasEngSub: analysis.hasEnglishSubtitle,
     probeTimeMs: analysis.probeTimeMs,
     timedOut: analysis.timedOut
   });
@@ -802,37 +840,72 @@ async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, server
     return { accepted: false, reason: analysis.videoReason };
   }
 
-  // Audio compatible as-is, or probe timed out (assume compatible)
-  if (analysis.audioCompatible || analysis.timedOut) {
-    return { accepted: true, streamUrl: candidateUrl, videoCodec: analysis.videoCodec, videoCodecName: analysis.videoCodecName, chapters: analysis.chapters, duration: analysis.duration };
+  const needsAudioWork = !analysis.audioCompatible && !analysis.timedOut;
+  const needsSubWork = analysis.subtitleCleanupNeeded;
+
+  // Build embedded subtitle track list for the APK (client-side track selection)
+  // This avoids remuxing the entire file just for subtitle metadata cleanup
+  const embeddedSubtitleTracks = analysis.subtitleStreams?.length > 0
+    ? analysis.subtitleStreams.map(s => ({
+        index: s.index,
+        language: s.standardizedLanguage || null,
+        languageCode: s.languageCode || null,
+        title: s.title,
+        isRecognized: s.isRecognized,
+        isForced: s.isForced,
+        isDefault: s.isDefault,
+        isSDH: s.isSDH,
+        keep: s.isRecognized && !(s.isForced && !s.isDefault) // matches cleanup filter logic
+      }))
+    : [];
+
+  // Pick recommended track: first English non-forced, or first kept track
+  const keptTracks = embeddedSubtitleTracks.filter(t => t.keep);
+  const recommendedSubIdx = keptTracks.find(t => t.languageCode === 'en' && !t.isForced)?.index
+    ?? keptTracks.find(t => t.languageCode === 'en')?.index
+    ?? null;
+
+  const baseResult = {
+    videoCodec: analysis.videoCodec,
+    videoCodecName: analysis.videoCodecName,
+    chapters: analysis.chapters,
+    duration: analysis.duration,
+    hasEnglishSubtitle: analysis.hasEnglishSubtitle,
+    embeddedSubtitleTracks,
+    recommendedSubtitleIndex: recommendedSubIdx
+  };
+
+  // Audio compatible — pass through original URL (no remux needed)
+  if (!needsAudioWork) {
+    return { accepted: true, streamUrl: candidateUrl, ...baseResult };
   }
 
   // Audio needs processing — use .mp4 for web clients (browsers can't play MKV)
+  // Subtitle cleanup piggybacks on audio remux for free (file is being downloaded anyway)
   const outputExt = platform === 'web' ? 'mp4' : 'mkv';
   const outputPath = path.join(TRANSCODED_DIR, `${jobId}_${Date.now()}.${outputExt}`);
+  const subtitleArgs = needsSubWork ? analysis.cleanSubtitleArgs : null;
 
   if (analysis.bestCompatibleAudioIndex !== null) {
-    // Remux: strip incompatible audio, keep compatible track
     downloadJobManager.updateJob(jobId, {
       status: 'processing',
-      message: 'Remuxing compatible audio track...'
+      message: needsSubWork ? 'Remuxing audio + cleaning subtitles...' : 'Remuxing compatible audio track...'
     });
 
-    logger.info(`[AudioProcess] Remuxing audio stream ${analysis.bestCompatibleAudioIndex} for ${sourceLabel}`);
-    const result = await remuxWithCompatibleAudio(candidateUrl, outputPath, analysis.bestCompatibleAudioIndex, { videoCodecName: analysis.videoCodecName });
+    logger.info(`[AudioProcess] Remuxing audio stream ${analysis.bestCompatibleAudioIndex} for ${sourceLabel}${needsSubWork ? ' (+ sub cleanup)' : ''}`);
+    const result = await remuxWithCompatibleAudio(candidateUrl, outputPath, analysis.bestCompatibleAudioIndex, { videoCodecName: analysis.videoCodecName, subtitleArgs });
 
     if (!result.success) {
       return { accepted: false, reason: 'audio_remux_failed' };
     }
   } else {
-    // Transcode: convert DTS/TrueHD to EAC3
     downloadJobManager.updateJob(jobId, {
       status: 'processing',
-      message: 'Converting audio to EAC3...'
+      message: needsSubWork ? 'Converting audio + cleaning subtitles...' : 'Converting audio to EAC3...'
     });
 
-    logger.info(`[AudioProcess] Transcoding ${analysis.defaultAudioCodec} -> EAC3 for ${sourceLabel}`);
-    const result = await transcodeAudioToEac3(candidateUrl, outputPath, { videoCodecName: analysis.videoCodecName });
+    logger.info(`[AudioProcess] Transcoding ${analysis.defaultAudioCodec} -> EAC3 for ${sourceLabel}${needsSubWork ? ' (+ sub cleanup)' : ''}`);
+    const result = await transcodeAudioToEac3(candidateUrl, outputPath, { videoCodecName: analysis.videoCodecName, subtitleArgs });
 
     if (!result.success) {
       return { accepted: false, reason: 'audio_transcode_failed' };
@@ -842,13 +915,11 @@ async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, server
   // Store processed file path on job for cleanup + serving
   downloadJobManager.updateJob(jobId, { processedFilePath: outputPath });
 
-  // Web: relative URL avoids stream-proxy layer (cleaner for AirPlay)
-  // Other platforms: absolute URL so APK/external clients can resolve it
   const processedUrl = platform === 'web'
     ? `/api/vod/stream-processed/${jobId}`
     : `https://${serverHost || process.env.SERVER_HOST || `localhost:${process.env.PORT || 3001}`}/api/vod/stream-processed/${jobId}`;
 
-  return { accepted: true, streamUrl: processedUrl, videoCodec: analysis.videoCodec, videoCodecName: analysis.videoCodecName, chapters: analysis.chapters, duration: analysis.duration };
+  return { accepted: true, streamUrl: processedUrl, ...baseResult };
 }
 
 /**
@@ -966,7 +1037,9 @@ async function processRdDownload(jobId, contentInfo) {
               streamUrl: finalStreamUrl,
               fileName: cached.fileName,
               quality: cached.resolution ? `${cached.resolution}p` : null,
-              subtitles: [] // Will be populated in background
+              subtitles: [], // Will be populated in background
+              embeddedSubtitleTracks: validation.embeddedSubtitleTracks || [],
+              recommendedSubtitleIndex: validation.recommendedSubtitleIndex ?? null
             });
 
             // Resolve next episode for autoplay (non-blocking)
@@ -978,8 +1051,8 @@ async function processRdDownload(jobId, contentInfo) {
               .then(imdbId => fetchSkipMarkersBackground(jobId, validation.chapters || [], contentInfo, imdbId, validation.duration))
               .catch(() => fetchSkipMarkersBackground(jobId, validation.chapters || [], contentInfo, null, validation.duration));
 
-            // Fetch subtitles in background (use original URL for embedded subtitle detection)
-            fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, cached.streamUrl, serverHost);
+            // Fetch subtitles in background — skip external fetch if container has clean English subs
+            fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, cached.streamUrl, serverHost, { hasEnglishSubtitle: validation.hasEnglishSubtitle });
 
             // Track playback
             try {
@@ -1209,8 +1282,9 @@ async function processRdDownload(jobId, contentInfo) {
           let lastRdStatus = null;
           let lastRdSeeders = null;
           let lastRdSpeed = null;
-          const SLOW_START_TIMEOUT = 12000; // 12s to get past 0% (was 20s)
-          const DEAD_TORRENT_TIMEOUT = 15000; // 15s for 0-seeder/0-speed detection
+          const SLOW_START_TIMEOUT = 12000; // 12s at 0% with no seeder info yet
+          const DEAD_TORRENT_TIMEOUT = 10000; // 10s for confirmed 0-seeder/0-speed
+          const ACTIVE_START_TIMEOUT = 30000; // 30s at 0% when seeders/speed detected
           const STALL_TIMEOUT = 60000; // 60s stall at any progress level
 
           const downloadPromise = downloadFromRD(
@@ -1270,11 +1344,18 @@ async function processRdDownload(jobId, contentInfo) {
                 return;
               }
 
-              // General timeout: 12s at 0%, 60s at any other progress
-              const timeout = lastProgress < 1 ? SLOW_START_TIMEOUT : STALL_TIMEOUT;
+              // Adaptive timeout: if RD reports seeders or speed, give more time
+              let timeout;
+              if (lastProgress >= 1) {
+                timeout = STALL_TIMEOUT; // 60s - already making progress
+              } else if (lastRdSeeders > 0 || lastRdSpeed > 0) {
+                timeout = ACTIVE_START_TIMEOUT; // 30s - has seeders, just slow to start
+              } else {
+                timeout = SLOW_START_TIMEOUT; // 12s - no info yet or confirmed dead
+              }
               if (stuckTime > timeout) {
                 clearInterval(checkInterval);
-                reject(new Error(`TIMEOUT: Stuck at ${lastProgress}% for ${Math.round(stuckTime/1000)}s - trying next source`));
+                reject(new Error(`TIMEOUT: Stuck at ${lastProgress}% for ${Math.round(stuckTime/1000)}s (seeders=${lastRdSeeders ?? '?'}, speed=${lastRdSpeed ?? '?'}) - trying next source`));
               }
             }, 3000); // Check every 3s (matches RD poll interval)
 
@@ -1340,7 +1421,10 @@ async function processRdDownload(jobId, contentInfo) {
             videoCodec: validation.videoCodec,
             videoCodecName: validation.videoCodecName,
             chapters: validation.chapters,
-            duration: validation.duration
+            duration: validation.duration,
+            hasEnglishSubtitle: validation.hasEnglishSubtitle,
+            embeddedSubtitleTracks: validation.embeddedSubtitleTracks,
+            recommendedSubtitleIndex: validation.recommendedSubtitleIndex
           };
           successfulSource = source;
           break;
@@ -1478,7 +1562,9 @@ async function processRdDownload(jobId, contentInfo) {
       fileName: result.filename,
       fileSize: result.filesize || result.bytes || null,
       quality: successfulSource?.quality || null,
-      subtitles: [] // Will be populated in background
+      subtitles: [], // Will be populated in background
+      embeddedSubtitleTracks: result.embeddedSubtitleTracks || [],
+      recommendedSubtitleIndex: result.recommendedSubtitleIndex ?? null
     });
 
     // Resolve next episode for autoplay (non-blocking)
@@ -1492,8 +1578,8 @@ async function processRdDownload(jobId, contentInfo) {
         .catch(() => fetchSkipMarkersBackground(jobId, result.chapters || [], contentInfo, null, result.duration));
     }
 
-    // Auto-fetch subtitles in background (use original URL for embedded subtitle detection)
-    fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, originalRdUrl, serverHost);
+    // Auto-fetch subtitles in background — skip external fetch if container has clean English subs
+    fetchSubtitlesBackground(jobId, tmdbId, title, year, type, season, episode, originalRdUrl, serverHost, { hasEnglishSubtitle: result.hasEnglishSubtitle });
 
     // Also track as playback for monitoring dashboard (non-blocking)
     try {
@@ -1751,7 +1837,10 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
             videoCodec: validation.videoCodec,
             videoCodecName: validation.videoCodecName,
             chapters: validation.chapters,
-            duration: validation.duration
+            duration: validation.duration,
+            hasEnglishSubtitle: validation.hasEnglishSubtitle,
+            embeddedSubtitleTracks: validation.embeddedSubtitleTracks,
+            recommendedSubtitleIndex: validation.recommendedSubtitleIndex
           };
           successfulSource = source;
           break;
@@ -2369,6 +2458,49 @@ router.get('/next-episode/:tmdbId/:season/:episode', async (req, res) => {
 });
 
 /**
+ * Find the stream URL for content from an active/completed download job.
+ * Used by subtitle endpoints to sync timing before serving.
+ */
+function findStreamUrlForContent(tmdbId, type, season, episode) {
+  const allJobs = downloadJobManager.getAllJobs();
+  const job = allJobs.find(j =>
+    j.contentInfo?.tmdbId == tmdbId &&
+    j.contentInfo?.type === type &&
+    j.contentInfo?.season == season &&
+    j.contentInfo?.episode == episode &&
+    j.streamUrl &&
+    (j.status === 'completed' || j.status === 'downloading')
+  );
+  return job?.streamUrl || null;
+}
+
+/**
+ * Sync a subtitle file to the video's audio track if not already synced.
+ */
+async function syncSubtitleForEndpoint(subtitle, tmdbId, type, season, episode) {
+  // Check if this subtitle already has a video_hash — means it was previously synced
+  if (subtitle.cached) {
+    const row = db.prepare('SELECT video_hash FROM subtitles WHERE id = ?').get(subtitle.id);
+    if (row?.video_hash) return; // Already synced for this file
+  }
+  const streamUrl = findStreamUrlForContent(tmdbId, type, season, episode);
+  if (!streamUrl) return; // No active job to get stream URL from
+  try {
+    const videoHash = await opensubtitlesService.computeOpenSubtitlesHash(streamUrl);
+    const result = await syncSubtitle(streamUrl, subtitle.filePath);
+    if (result.synced) {
+      logger.info(`[SubSync] Synced subtitle via direct endpoint: ${result.offsetMs > 0 ? '+' : ''}${(result.offsetMs / 1000).toFixed(2)}s`);
+    }
+    // Stamp video_hash whether synced or not (offset < threshold = already good)
+    if (videoHash) {
+      db.prepare('UPDATE subtitles SET video_hash = ? WHERE id = ?').run(videoHash, subtitle.id);
+    }
+  } catch (err) {
+    logger.warn(`[SubSync] Direct endpoint sync failed: ${err.message}`);
+  }
+}
+
+/**
  * GET /api/vod/subtitles/search
  * Search for subtitles (checks cache first, downloads if needed)
  */
@@ -2394,6 +2526,9 @@ router.get('/subtitles/search', async (req, res) => {
       force: forceDownload
     });
 
+    // Sync timing before responding (uses active job's stream URL)
+    await syncSubtitleForEndpoint(subtitle, parseInt(tmdbId), type, season ? parseInt(season) : null, episode ? parseInt(episode) : null);
+
     res.json({
       success: true,
       subtitle: {
@@ -2401,7 +2536,7 @@ router.get('/subtitles/search', async (req, res) => {
         language: subtitle.language,
         languageCode: subtitle.languageCode,
         format: subtitle.format,
-        url: `${req.protocol}://${req.get('host')}/api/vod/subtitles/file/${subtitle.id}`,
+        url: `https://${req.get('host')}/api/vod/subtitles/file/${subtitle.id}`,
         cached: subtitle.cached,
         fileSize: subtitle.fileSize
       }
@@ -2441,6 +2576,9 @@ router.post('/subtitles/search', async (req, res) => {
       force: forceDownload
     });
 
+    // Sync timing before responding (uses active job's stream URL)
+    await syncSubtitleForEndpoint(subtitle, parseInt(tmdbId), type, season ? parseInt(season) : null, episode ? parseInt(episode) : null);
+
     res.json({
       success: true,
       subtitle: {
@@ -2448,7 +2586,7 @@ router.post('/subtitles/search', async (req, res) => {
         language: subtitle.language,
         languageCode: subtitle.languageCode,
         format: subtitle.format,
-        url: `${req.protocol}://${req.get('host')}/api/vod/subtitles/file/${subtitle.id}`,
+        url: `https://${req.get('host')}/api/vod/subtitles/file/${subtitle.id}`,
         cached: subtitle.cached,
         fileSize: subtitle.fileSize
       }

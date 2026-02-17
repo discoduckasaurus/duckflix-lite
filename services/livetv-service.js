@@ -257,6 +257,11 @@ let ntvStreamMap = null;
 let ntvStreamMapLoadedAt = 0;
 const NTV_MAP_CACHE_TTL = 60000; // 1 minute
 
+// Cached IPTV stream map (tvpassId -> { url, iptv_id, name, group })
+let iptvStreamMap = null;
+let iptvStreamMapLoadedAt = 0;
+const IPTV_MAP_CACHE_TTL = 60000; // 1 minute
+
 /**
  * Load the NTV stream map from epg_cache (lazy-load + TTL cache).
  * Returns {channelId: {channel_id, channel_name, channel_code, channel_url}} or empty object.
@@ -283,11 +288,37 @@ function getNTVStreamMap() {
 }
 
 /**
+ * Load the IPTV stream map from epg_cache (lazy-load + TTL cache).
+ * Returns {channelId: {url, iptv_id, name, group}} or empty object.
+ */
+function getIPTVStreamMap() {
+  const now = Date.now();
+  if (iptvStreamMap && (now - iptvStreamMapLoadedAt) < IPTV_MAP_CACHE_TTL) {
+    return iptvStreamMap;
+  }
+
+  try {
+    const row = db.prepare(`
+      SELECT epg_data FROM epg_cache WHERE channel_id = 'iptv_stream_map'
+    `).get();
+
+    iptvStreamMap = row ? JSON.parse(row.epg_data) : {};
+  } catch (err) {
+    logger.debug(`Error loading iptv_stream_map: ${err.message}`);
+    iptvStreamMap = {};
+  }
+
+  iptvStreamMapLoadedAt = now;
+  return iptvStreamMap;
+}
+
+/**
  * Get stream URLs for a channel, ordered by priority:
- * 1. NTV (ntv://{channel_id} marker — resolved on-demand in livetv.js)
- * 2. backup-streams.json primary (if exists)
- * 3. M3U/special channel original URL
- * 4. backup-streams.json backups[]
+ * 1. IPTV (direct URL from external M3U provider)
+ * 2. NTV (ntv://{channel_id} marker — resolved on-demand in livetv.js)
+ * 3. backup-streams.json primary (if exists)
+ * 4. M3U/special channel original URL
+ * 5. backup-streams.json backups[]
  *
  * @param {string} channelId - Channel ID
  * @returns {string[]} Array of stream URLs to try in order
@@ -301,21 +332,27 @@ function getStreamUrls(channelId) {
 
   const urls = [];
   const backup = backupStreams[channelId];
+  const iptvMap = getIPTVStreamMap();
   const ntvMap = getNTVStreamMap();
 
-  // 1. NTV primary (marker URL — resolved on-demand since tokens are ephemeral)
+  // 1. IPTV primary (direct URL from external M3U provider)
+  if (iptvMap[channelId]?.url) {
+    urls.push(iptvMap[channelId].url);
+  }
+
+  // 2. NTV (marker URL — resolved on-demand since tokens are ephemeral)
   if (ntvMap[channelId]) {
     urls.push(`ntv://${ntvMap[channelId].channel_id}`);
   }
 
-  // 2. Primary override from backup-streams.json
+  // 3. Primary override from backup-streams.json
   if (backup?.primary) {
     if (!urls.includes(backup.primary)) {
       urls.push(backup.primary);
     }
   }
 
-  // 3. Original M3U / special channel URL
+  // 4. Original M3U / special channel URL
   try {
     const m3uData = stmtGetM3uChannels.get();
 
@@ -343,7 +380,7 @@ function getStreamUrls(channelId) {
     logger.debug(`Error looking up special channel URL for ${channelId}: ${err.message}`);
   }
 
-  // 4. Backup streams
+  // 5. Backup streams
   if (backup?.backups?.length) {
     for (const backupUrl of backup.backups) {
       if (!urls.includes(backupUrl)) {
@@ -363,6 +400,7 @@ function getStreamUrls(channelId) {
     const labelUrl = (url) => {
       if (url.startsWith('ntv://') || /cdn-live\.|cdn-google\./.test(url)) return 'NTV';
       if (url.includes('tvpass.org')) return 'TVPASS';
+      if (url.includes('smartcdn.org') || url.includes('iptv-')) return 'IPTV';
       return 'OTHER';
     };
     const keep = urls.filter(u => !depri.has(labelUrl(u)));
@@ -492,6 +530,7 @@ module.exports = {
   getStreamUrl,
   getStreamUrls,
   getNTVStreamMap,
+  getIPTVStreamMap,
   toggleChannel,
   toggleFavorite,
   reorderChannels

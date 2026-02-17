@@ -30,6 +30,7 @@ let currentEpisodeIndex = -1;
 let lastClientActivity = 0;
 let idleTimer = null;
 let transitionTimer = null;
+let nextStartNumber = 0; // Continues segment filename numbering across episode transitions
 
 // ---------- Schedule Loading ----------
 
@@ -161,7 +162,28 @@ function softCleanHlsDir() {
   }
 }
 
-function stopFfmpeg() {
+/**
+ * Parse the current HLS manifest to find the highest segment number.
+ * Used to continue filename numbering across episode transitions.
+ */
+function getNextStartNumber() {
+  try {
+    if (!fs.existsSync(HLS_MANIFEST)) return 0;
+    const manifest = fs.readFileSync(HLS_MANIFEST, 'utf-8');
+    let maxNum = 0;
+    for (const line of manifest.split('\n')) {
+      const match = line.trim().match(/^seg_(\d+)\.ts$/);
+      if (match) {
+        maxNum = Math.max(maxNum, parseInt(match[1], 10));
+      }
+    }
+    return maxNum + 1;
+  } catch {
+    return 0;
+  }
+}
+
+function stopFfmpeg(fullReset = true) {
   if (transitionTimer) {
     clearTimeout(transitionTimer);
     transitionTimer = null;
@@ -181,22 +203,34 @@ function stopFfmpeg() {
     proc.once('exit', () => clearTimeout(killTimer));
   }
 
-  currentEpisodeIndex = -1;
+  if (fullReset) {
+    currentEpisodeIndex = -1;
+    nextStartNumber = 0;
+  }
 }
 
-function startFfmpeg(filePath, seekOffsetSec, durationMs) {
+function startFfmpeg(filePath, seekOffsetSec, durationMs, appendMode = false) {
   ensureHlsDir();
 
-  // Validate remaining duration
+  // Validate remaining duration — need at least one segment's worth of content
   const remainingMs = durationMs - (seekOffsetSec * 1000);
-  if (remainingMs <= 0) {
-    logger.warn(`[DFTV] Skipping expired entry (remaining: ${remainingMs}ms), transitioning`);
-    transitionToNext();
+  if (remainingMs < SEGMENT_DURATION * 1000) {
+    logger.info(`[DFTV] Not enough content left (${(remainingMs / 1000).toFixed(1)}s < ${SEGMENT_DURATION}s), waiting for next episode`);
+    // Wait for the wall clock to advance past this episode boundary
+    if (transitionTimer) clearTimeout(transitionTimer);
+    const waitMs = Math.max(remainingMs, 500) + 500;
+    transitionTimer = setTimeout(() => transitionToNext(), waitMs);
     return;
   }
 
-  // Soft-clean HLS dir: remove unreferenced segments, keep ones clients may still be fetching
-  softCleanHlsDir();
+  if (appendMode) {
+    // Append mode: keep manifest + referenced segments for HLS continuity
+    softCleanHlsDir();
+  } else {
+    // Fresh start: wipe everything
+    cleanHlsDir();
+    nextStartNumber = 0;
+  }
 
   const generation = ++ffmpegGeneration;
 
@@ -205,6 +239,14 @@ function startFfmpeg(filePath, seekOffsetSec, durationMs) {
   // Input seeking (before -i for fast keyframe seek)
   if (seekOffsetSec > 1) {
     args.push('-ss', String(seekOffsetSec));
+  }
+
+  // Build HLS flags
+  let hlsFlags = 'delete_segments+omit_endlist';
+  if (appendMode) {
+    // append_list: continue from existing manifest (sequence numbers, etc.)
+    // discont_start: insert #EXT-X-DISCONTINUITY before first new segment
+    hlsFlags += '+append_list+discont_start';
   }
 
   args.push(
@@ -218,12 +260,20 @@ function startFfmpeg(filePath, seekOffsetSec, durationMs) {
     '-f', 'hls',
     '-hls_time', String(SEGMENT_DURATION),
     '-hls_list_size', String(HLS_LIST_SIZE),
-    '-hls_flags', 'delete_segments+omit_endlist',
+    '-hls_flags', hlsFlags,
+  );
+
+  // Continue segment filename numbering to avoid overwriting buffered segments
+  if (appendMode && nextStartNumber > 0) {
+    args.push('-start_number', String(nextStartNumber));
+  }
+
+  args.push(
     '-hls_segment_filename', path.join(HLS_DIR, 'seg_%05d.ts'),
     HLS_MANIFEST,
   );
 
-  logger.info(`[DFTV] Starting ffmpeg: ${path.basename(filePath)} (seek: ${seekOffsetSec.toFixed(1)}s)`);
+  logger.info(`[DFTV] Starting ffmpeg: ${path.basename(filePath)} (seek: ${seekOffsetSec.toFixed(1)}s, append: ${appendMode}, startNum: ${appendMode ? nextStartNumber : 0})`);
 
   const proc = spawn('ffmpeg', args, {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -240,6 +290,8 @@ function startFfmpeg(filePath, seekOffsetSec, durationMs) {
     // Only handle if this is still the current generation (not replaced by a newer process)
     if (generation === ffmpegGeneration) {
       logger.info(`[DFTV] ffmpeg exited (code: ${code}, signal: ${signal})`);
+      // Capture segment counter before clearing process ref — manifest is still on disk
+      nextStartNumber = getNextStartNumber();
       ffmpegProcess = null;
 
       // If not killed intentionally, transition to next episode
@@ -265,7 +317,9 @@ function startFfmpeg(filePath, seekOffsetSec, durationMs) {
     transitionTimer = setTimeout(() => {
       if (generation === ffmpegGeneration && ffmpegProcess === proc) {
         logger.warn('[DFTV] Safety timer: killing hung ffmpeg');
-        stopFfmpeg();
+        // Capture segment counter before killing
+        nextStartNumber = getNextStartNumber();
+        stopFfmpeg(false); // Preserve HLS state for append
         transitionToNext();
       }
     }, safetyMs);
@@ -283,22 +337,27 @@ function transitionToNext() {
   if (Date.now() - lastClientActivity > IDLE_TIMEOUT_MS) {
     logger.info('[DFTV] No active clients, not starting next episode');
     cleanHlsDir();
+    nextStartNumber = 0;
     return;
   }
 
   // If we're still on the same episode (ffmpeg finished before wall-clock advanced),
-  // wait until the remaining time elapses then try again
-  if (playback.index === currentEpisodeIndex && playback.remainingMs > 2000) {
-    logger.info(`[DFTV] Still on same episode (${playback.remainingMs}ms remaining), waiting`);
+  // wait until the wall clock advances to the next episode
+  if (playback.index === currentEpisodeIndex) {
+    const waitMs = Math.max(playback.remainingMs, 500) + 500;
+    logger.info(`[DFTV] Still on same episode (${(playback.remainingMs / 1000).toFixed(1)}s remaining), waiting ${(waitMs / 1000).toFixed(1)}s`);
     if (transitionTimer) clearTimeout(transitionTimer);
     transitionTimer = setTimeout(() => {
       transitionToNext();
-    }, playback.remainingMs + 500);
+    }, waitMs);
     return;
   }
 
+  // Use append mode if we have an existing manifest (maintains HLS continuity)
+  const canAppend = fs.existsSync(HLS_MANIFEST);
+
   currentEpisodeIndex = playback.index;
-  startFfmpeg(playback.entry.filePath, playback.seekOffsetSec, playback.entry.durationMs);
+  startFfmpeg(playback.entry.filePath, playback.seekOffsetSec, playback.entry.durationMs, canAppend);
 }
 
 // ---------- Public API ----------
@@ -322,11 +381,18 @@ function ensureRunning() {
   // Check if we need to start or switch episodes
   if (!ffmpegProcess || currentEpisodeIndex !== playback.index) {
     if (ffmpegProcess) {
-      logger.info(`[DFTV] Episode changed (${currentEpisodeIndex} → ${playback.index}), restarting ffmpeg`);
-      stopFfmpeg();
+      // Live episode change — use append mode for seamless HLS continuity
+      logger.info(`[DFTV] Episode changed (${currentEpisodeIndex} → ${playback.index}), switching`);
+      nextStartNumber = getNextStartNumber();
+      stopFfmpeg(false);
+      currentEpisodeIndex = playback.index;
+      startFfmpeg(playback.entry.filePath, playback.seekOffsetSec, playback.entry.durationMs, true);
+    } else {
+      // No ffmpeg running — fresh start (cold start or idle resume)
+      // transitionToNext() handles seamless append for natural episode endings
+      currentEpisodeIndex = playback.index;
+      startFfmpeg(playback.entry.filePath, playback.seekOffsetSec, playback.entry.durationMs, false);
     }
-    currentEpisodeIndex = playback.index;
-    startFfmpeg(playback.entry.filePath, playback.seekOffsetSec, playback.entry.durationMs);
   }
 
   return true;

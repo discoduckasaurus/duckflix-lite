@@ -5,6 +5,7 @@
 
 const { spawn } = require('child_process');
 const logger = require('../utils/logger');
+const { standardizeLanguage, getLanguageCode } = require('../utils/language-standardizer');
 
 const FFPROBE_TIMEOUT = 15000; // 15 seconds for slow remote URLs
 
@@ -308,7 +309,7 @@ function checkVideoCompatibility(stream) {
   }
 
   // 1. Supported codec check
-  const supportedCodecs = new Set(['h264', 'hevc', 'h265', 'vp9', 'av1']);
+  const supportedCodecs = new Set(['h264', 'hevc', 'h265', 'vp9', 'av1', 'mpeg4']);
   if (!supportedCodecs.has(codecName)) {
     return { compatible: false, reason: `unsupported_codec_${codecName}` };
   }
@@ -424,7 +425,7 @@ async function analyzeStreamCompatibility(videoUrl) {
       '-show_entries', 'format=duration',
       '-show_entries', 'stream=index,codec_type,codec_name,profile,level,width,height,pix_fmt,avg_frame_rate,bit_rate,bits_per_raw_sample,channels,sample_rate,extradata_size,color_transfer,codec_tag_string',
       '-show_entries', 'stream_side_data_list',
-      '-show_entries', 'stream_disposition=default',
+      '-show_entries', 'stream_disposition=default,forced,hearing_impaired',
       '-show_entries', 'stream_tags=language,title',
       videoUrl
     ];
@@ -441,7 +442,9 @@ async function analyzeStreamCompatibility(videoUrl) {
       videoCompatible: true, videoReason: null,
       audioCompatible: true, audioNeedsProcessing: false,
       bestCompatibleAudioIndex: null, defaultAudioCodec: null,
-      audioStreams: [], chapters: [], duration: null,
+      audioStreams: [], subtitleStreams: [], subtitleCleanupNeeded: false,
+      cleanSubtitleArgs: null, hasEnglishSubtitle: false,
+      chapters: [], duration: null,
       probeTimeMs: Date.now() - startTime, timedOut: false,
       ...overrides
     });
@@ -523,6 +526,91 @@ async function analyzeStreamCompatibility(videoUrl) {
           // If no compatible tracks found, bestCompatibleAudioIndex stays null (needs transcode)
         }
 
+        // Subtitle analysis
+        const subtitleStreams = streams
+          .filter(s => s.codec_type === 'subtitle')
+          .map(s => {
+            const lang = s.tags?.language || null;
+            const title = s.tags?.title || null;
+            // Try language tag first, fall back to title for standardization
+            let stdResult = standardizeLanguage(lang);
+            if (!stdResult.isStandard && title) {
+              stdResult = standardizeLanguage(title);
+            }
+            return {
+              index: s.index,
+              codec: (s.codec_name || 'unknown').toLowerCase(),
+              language: lang,
+              title: title,
+              standardizedLanguage: stdResult.standardized,
+              languageCode: stdResult.isStandard ? getLanguageCode(stdResult.standardized) : null,
+              isRecognized: stdResult.isStandard,
+              isForced: s.disposition?.forced === 1,
+              isDefault: s.disposition?.default === 1,
+              isSDH: s.disposition?.hearing_impaired === 1
+            };
+          });
+
+        // Filter subtitle tracks: keep recognized, remove forced-only, deduplicate per language
+        const seenLanguages = new Map();
+        for (const sub of subtitleStreams) {
+          if (!sub.isRecognized) continue;
+          if (sub.isForced && !sub.isDefault) continue;
+
+          const langKey = sub.languageCode || sub.standardizedLanguage;
+          const existing = seenLanguages.get(langKey);
+
+          if (!existing) {
+            seenLanguages.set(langKey, sub);
+          } else {
+            // Prefer: default > non-forced > non-SDH
+            const score = (s) => (s.isDefault ? 4 : 0) + (!s.isForced ? 2 : 0) + (!s.isSDH ? 1 : 0);
+            if (score(sub) > score(existing)) {
+              seenLanguages.set(langKey, sub);
+            }
+          }
+        }
+        const cleanSubs = [...seenLanguages.values()];
+
+        // Determine if cleanup is needed
+        const subtitleCleanupNeeded = subtitleStreams.length > 0 && (
+          subtitleStreams.length !== cleanSubs.length ||
+          subtitleStreams.some(s => !s.isRecognized)
+        );
+
+        // Build ffmpeg args for selective subtitle mapping
+        let cleanSubtitleArgs = null;
+        if (subtitleCleanupNeeded) {
+          if (cleanSubs.length > 0) {
+            const mapArgs = cleanSubs.flatMap(s => ['-map', `0:${s.index}`]);
+            const metadataArgs = cleanSubs.flatMap((s, i) => [
+              `-metadata:s:s:${i}`, `language=${s.languageCode || 'und'}`,
+              `-metadata:s:s:${i}`, `title=${s.standardizedLanguage || 'Unknown'}`
+            ]);
+            // Set first English track as default, clear forced on all
+            const dispositionArgs = cleanSubs.flatMap((s, i) => {
+              const isFirstEng = s.languageCode === 'en' && !cleanSubs.slice(0, i).some(p => p.languageCode === 'en');
+              return [`-disposition:s:${i}`, isFirstEng ? 'default' : '0'];
+            });
+            cleanSubtitleArgs = { mapArgs, metadataArgs: [...metadataArgs, ...dispositionArgs] };
+          } else {
+            // All subs were bad — map none
+            cleanSubtitleArgs = { mapArgs: [], metadataArgs: [] };
+          }
+        }
+
+        const hasEnglishSubtitle = cleanSubs.some(s => s.languageCode === 'en');
+
+        if (subtitleStreams.length > 0) {
+          logger.info(`[SubAnalysis] ${subtitleStreams.length} sub tracks found, ${cleanSubs.length} kept after cleanup${subtitleCleanupNeeded ? ' (cleanup needed)' : ''}, hasEnglish=${hasEnglishSubtitle}`);
+          if (subtitleCleanupNeeded) {
+            const removed = subtitleStreams.filter(s => !cleanSubs.includes(s));
+            for (const r of removed) {
+              logger.debug(`[SubAnalysis] Removing: idx=${r.index} lang=${r.language} title="${r.title}" forced=${r.isForced} recognized=${r.isRecognized}`);
+            }
+          }
+        }
+
         resolve({
           videoCompatible: videoCheck.compatible,
           videoReason: videoCheck.reason,
@@ -533,6 +621,10 @@ async function analyzeStreamCompatibility(videoUrl) {
           bestCompatibleAudioIndex,
           defaultAudioCodec,
           audioStreams,
+          subtitleStreams,
+          subtitleCleanupNeeded,
+          cleanSubtitleArgs,
+          hasEnglishSubtitle,
           chapters: result.chapters || [],
           duration: parseFloat(result.format?.duration) || null,
           probeTimeMs,

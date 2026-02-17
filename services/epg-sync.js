@@ -16,6 +16,11 @@ const M3U_FILE = path.join(__dirname, '..', 'db', 'channels.m3u');
 const NTV_ENABLED = process.env.NTV_ENABLED === 'true';
 const { fetchNTVChannels } = require('./ntv-service');
 
+// IPTV configuration (external M3U provider, e.g. SmartCDN)
+const IPTV_M3U_URL = process.env.IPTV_M3U_URL;
+const IPTV_EPG_URL = process.env.IPTV_EPG_URL;
+const sax = require('sax');
+
 /**
  * Fetch and cache M3U playlist from local file
  */
@@ -121,6 +126,329 @@ const NTV_ID_ALIASES = {
   '759': 'sny-sportsnet-new-york-comcast', // "SportsNet New York (SNY)"
   '765': 'msg-madison-square-gardens', // "MSG USA" → "msg" collides with MSG+
 };
+
+/**
+ * Direct IPTV tvg-id -> TVPass channel_id mappings.
+ * Needed where name normalization fails or causes collisions.
+ */
+const IPTV_ID_ALIASES = {
+  // Structural name mismatches
+  '32': 'fx-networks-east-coast',         // FX (East) → "fx" ≠ TVPass "fxnetworkscoast"
+  '14': 'espn-u',                          // ESPNU College Sports → "espnucollegesports" ≠ "espnu"
+  '100': 'hbo-2-eastern-feed',            // HBO Hits (East) → HBO 2 in TVPass
+  '144': 'turner-classic-movies-usa',      // TCM (East) → "tcm" ≠ "turnerclassic"
+  '139': 'tlc-usa-eastern',               // The Learning Channel TLC → "learningtlc" ≠ "tlc"
+  '140': 'tnt-eastern-feed',              // Turner Network Television TNT → "turnernetworktnt" ≠ "tnt"
+  '134': 'tbs-east',                       // TBS Superstation → "tbssuperstation" ≠ "tbs"
+  '5': 'altitude-sports-denver',           // Altitude Sports → missing "Denver" in SmartCDN name
+  '2479': 'metv-toons-wjlp2-new-jersey',  // MeTV Toons (KAZD) → different affiliate call sign
+
+  // Collision fixes (multiple channels normalize to the same string)
+  '94': 'hallmark-eastern-feed',           // Hallmark Channel (East) → collides with Hallmark Mystery
+  '95': 'hallmark-eastern-feed',           // Hallmark Channel (West) → deduped with East, prevents mystery collision
+  '97': 'hallmark-mystery-eastern-hd',     // Hallmark Mystery → collides with Hallmark Channel
+  '96': 'hallmark-family-hd',             // Hallmark Family
+  '108': 'lifetime-network-us-eastern-feed', // Lifetime Television → collides with Lifetime Movies
+  '107': 'lifetime-movies-east',           // Lifetime Movie Network
+  '128': 'sny-sportsnet-new-york-comcast', // SportsNet New York (SNY) → "sportsnet" collision
+  '6234': 'sportsnet-east',               // Sportsnet East → "sportsnet" collision with West
+  '6239': 'sportsnet-west',               // Sportsnet West → "sportsnet" collision with East
+
+  // FanDuel "Network" in TVPass but not in SmartCDN names
+  '70': 'fanduel-sports-network-detroit-hd',
+  '71': 'fanduel-sports-network-florida',
+  '72': 'fanduel-sports-network-north',
+  '73': 'fanduel-sports-network-ohio-cleveland',
+  '74': 'fanduel-sports-network-oklahoma',
+  '76': 'fanduel-sports-network-wisconsin',
+  '77': 'fanduel-sports-network-west',
+  '81': 'fanduel-sports-network-socal',
+
+  // CDN-only local channels (Chicago)
+  '3251': 'cdn-3251',
+  '3252': 'cdn-3252',
+  '3253': 'cdn-3253',
+  '3254': 'cdn-3254',
+};
+
+/**
+ * Parse a remote M3U playlist text into channel objects.
+ * Handles standard #EXTINF format with tvg-name, tvg-id, group-title attributes.
+ */
+function parseRemoteM3U(m3uText) {
+  const channels = [];
+  const lines = m3uText.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line.startsWith('#EXTINF:')) continue;
+
+    const tvgName = line.match(/tvg-name="([^"]*)"/)?.[1] || '';
+    const tvgId = line.match(/tvg-id="([^"]*)"/)?.[1] || '';
+    const groupTitle = line.match(/group-title="([^"]*)"/)?.[1] || '';
+    const displayName = line.split(',').pop()?.trim() || tvgName;
+
+    // Next non-empty, non-comment line is the URL
+    let url = '';
+    for (let j = i + 1; j < lines.length; j++) {
+      const nextLine = lines[j].trim();
+      if (nextLine && !nextLine.startsWith('#')) {
+        url = nextLine;
+        break;
+      }
+    }
+
+    if (url && tvgId) {
+      channels.push({ tvgId, tvgName, displayName, groupTitle, url });
+    }
+  }
+
+  return channels;
+}
+
+/**
+ * Fetch and sync IPTV M3U playlist.
+ * Matches IPTV channels to existing TVPass channels by normalized name + aliases.
+ * Stores mapping in iptv_stream_map: { tvpassId: { url, iptv_id, name, group } }
+ */
+async function syncIPTV() {
+  if (!IPTV_M3U_URL) {
+    logger.debug('IPTV M3U URL not configured, skipping');
+    return;
+  }
+
+  try {
+    logger.info('Fetching IPTV M3U playlist...');
+    const response = await axios.get(IPTV_M3U_URL, { timeout: 30000 });
+    const channels = parseRemoteM3U(response.data);
+    logger.info(`Parsed ${channels.length} channels from IPTV M3U`);
+
+    // Get existing M3U channels for matching
+    const existingRow = db.prepare(`
+      SELECT epg_data FROM epg_cache WHERE channel_id = 'm3u_channels'
+    `).get();
+
+    let existingChannels = [];
+    if (existingRow) {
+      existingChannels = JSON.parse(existingRow.epg_data);
+    }
+
+    // Load channel-config display names for better matching
+    let channelConfigData = {};
+    try {
+      channelConfigData = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'db', 'channel-config.json'), 'utf-8'));
+    } catch (e) { /* ignore */ }
+
+    // Build normalized name → channel map (skip ntv-/cab-/cdn- entries)
+    const channelNameMap = new Map();
+    const channelById = new Map();
+    for (const ch of existingChannels) {
+      if (ch.id.startsWith('ntv-') || ch.id.startsWith('cab-') || ch.id.startsWith('cdn-')) continue;
+      channelById.set(ch.id, ch);
+
+      const normalized = normalizeName(ch.displayName || ch.name);
+      if (normalized) channelNameMap.set(normalized, ch);
+
+      // Also index by config displayName for broader matching
+      const configName = channelConfigData[ch.id]?.displayName;
+      if (configName) {
+        const configNormalized = normalizeName(configName);
+        if (configNormalized && configNormalized !== normalized) {
+          channelNameMap.set(configNormalized, ch);
+        }
+      }
+    }
+
+    // Match IPTV channels to TVPass channels
+    const iptvStreamMap = {};
+    const cdnOnlyChannels = []; // CDN channels with cdn- alias that need adding to channel list
+    let matched = 0, unmatched = 0;
+    const unmatchedNames = [];
+
+    for (const ch of channels) {
+      const normalized = normalizeName(ch.tvgName || ch.displayName);
+
+      // Check ID alias first (most specific), then auto-match by normalized name
+      const aliasId = IPTV_ID_ALIASES[ch.tvgId];
+      const existingMatch = aliasId ? channelById.get(aliasId) : channelNameMap.get(normalized);
+
+      if (existingMatch) {
+        // Only store first match per TVPass channel (prefer East over West)
+        if (!iptvStreamMap[existingMatch.id]) {
+          iptvStreamMap[existingMatch.id] = {
+            url: ch.url,
+            iptv_id: ch.tvgId,
+            name: ch.tvgName || ch.displayName,
+            group: ch.groupTitle
+          };
+          matched++;
+        }
+      } else if (aliasId && aliasId.startsWith('cdn-')) {
+        // CDN-only channel (alias points to cdn- ID, not in base channel list)
+        if (!iptvStreamMap[aliasId]) {
+          iptvStreamMap[aliasId] = {
+            url: ch.url,
+            iptv_id: ch.tvgId,
+            name: ch.tvgName || ch.displayName,
+            group: ch.groupTitle
+          };
+          cdnOnlyChannels.push({
+            id: aliasId,
+            name: ch.tvgName || ch.displayName,
+            displayName: ch.tvgName || ch.displayName,
+            url: '',
+            group: ch.groupTitle || 'CDN'
+          });
+          matched++;
+        }
+      } else {
+        unmatched++;
+        if (unmatchedNames.length < 30) {
+          unmatchedNames.push(`${ch.tvgName} (id:${ch.tvgId}) [${ch.groupTitle}]`);
+        }
+      }
+    }
+
+    // Merge CDN-only channels into m3u_channels list (like NTV does for ntv- channels)
+    if (cdnOnlyChannels.length > 0) {
+      const currentRow = db.prepare(`SELECT epg_data FROM epg_cache WHERE channel_id = 'm3u_channels'`).get();
+      if (currentRow) {
+        const currentChannels = JSON.parse(currentRow.epg_data);
+        // Remove old cdn- entries, then add fresh ones
+        const withoutCdn = currentChannels.filter(ch => !ch.id.startsWith('cdn-'));
+        const merged = [...withoutCdn, ...cdnOnlyChannels];
+        db.prepare(`INSERT OR REPLACE INTO epg_cache (channel_id, epg_data, updated_at) VALUES (?, ?, datetime('now'))`)
+          .run('m3u_channels', JSON.stringify(merged));
+        logger.info(`IPTV sync: added ${cdnOnlyChannels.length} CDN-only channels to channel list`);
+      }
+    }
+
+    // Store IPTV stream mapping
+    db.prepare(`
+      INSERT OR REPLACE INTO epg_cache (channel_id, epg_data, updated_at)
+      VALUES (?, ?, datetime('now'))
+    `).run('iptv_stream_map', JSON.stringify(iptvStreamMap));
+
+    logger.info(`IPTV sync: ${matched} matched, ${unmatched} unmatched out of ${channels.length} channels`);
+    if (unmatchedNames.length > 0) {
+      logger.debug(`IPTV unmatched: ${unmatchedNames.join(', ')}`);
+    }
+  } catch (error) {
+    logger.error('IPTV sync failed:', error.message);
+  }
+}
+
+/**
+ * Parse XMLTV date string to millisecond timestamp.
+ * Format: "20260215120000 +0000" or "20260215120000"
+ */
+function parseXMLTVDate(dateStr) {
+  if (!dateStr) return 0;
+  const m = dateStr.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\s*([+-]\d{4})?$/);
+  if (!m) return 0;
+  const iso = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${m[7] ? m[7].substring(0, 3) + ':' + m[7].substring(3) : 'Z'}`;
+  return new Date(iso).getTime();
+}
+
+/**
+ * Fetch and sync IPTV EPG from XMLTV source.
+ * Maps IPTV channel IDs to TVPass IDs using iptv_stream_map.
+ */
+async function syncIPTVEPG() {
+  if (!IPTV_EPG_URL) {
+    logger.debug('IPTV EPG URL not configured, skipping');
+    return;
+  }
+
+  try {
+    // Build reverse map: iptv_id → tvpass_id
+    const iptvRow = db.prepare(`SELECT epg_data FROM epg_cache WHERE channel_id = 'iptv_stream_map'`).get();
+    if (!iptvRow) {
+      logger.debug('No iptv_stream_map found, skipping IPTV EPG sync');
+      return;
+    }
+
+    const iptvStreamMap = JSON.parse(iptvRow.epg_data);
+    const reverseMap = {};
+    for (const [tvpassId, data] of Object.entries(iptvStreamMap)) {
+      reverseMap[String(data.iptv_id)] = tvpassId;
+    }
+
+    logger.info(`Fetching IPTV EPG from XMLTV source (${Object.keys(reverseMap).length} mapped channels)...`);
+    const response = await axios.get(IPTV_EPG_URL, { timeout: 120000, responseType: 'stream' });
+
+    await new Promise((resolve, reject) => {
+      const parser = sax.createStream(true, { trim: true });
+      const programs = {}; // tvpassId → [program, ...]
+      let currentProgramme = null;
+      let currentChannelId = '';
+      let textContent = '';
+
+      parser.on('opentag', (node) => {
+        if (node.name === 'programme') {
+          const channelId = String(node.attributes.channel || '');
+          const tvpassId = reverseMap[channelId];
+          if (tvpassId) {
+            currentProgramme = {
+              start: parseXMLTVDate(node.attributes.start),
+              stop: parseXMLTVDate(node.attributes.stop),
+              title: '', desc: '', category: '', icon: '', episodeNum: ''
+            };
+            currentChannelId = tvpassId;
+          }
+        } else if (currentProgramme && node.name === 'icon' && node.attributes.src) {
+          currentProgramme.icon = node.attributes.src;
+        }
+        textContent = '';
+      });
+
+      parser.on('text', (text) => { textContent += text; });
+      parser.on('cdata', (text) => { textContent += text; });
+
+      parser.on('closetag', (name) => {
+        if (currentProgramme) {
+          if (name === 'title') currentProgramme.title = textContent.trim();
+          else if (name === 'desc') currentProgramme.desc = textContent.trim();
+          else if (name === 'category') currentProgramme.category = textContent.trim();
+          else if (name === 'episode-num') currentProgramme.episodeNum = textContent.trim();
+          else if (name === 'programme') {
+            if (!programs[currentChannelId]) programs[currentChannelId] = [];
+            programs[currentChannelId].push(currentProgramme);
+            currentProgramme = null;
+            currentChannelId = '';
+          }
+        }
+        textContent = '';
+      });
+
+      parser.on('end', () => {
+        // Store EPG data per channel (replaces existing EPG for matched channels)
+        const stmt = db.prepare(`
+          INSERT OR REPLACE INTO epg_cache (channel_id, epg_data, updated_at)
+          VALUES (?, ?, datetime('now'))
+        `);
+
+        let totalPrograms = 0;
+        for (const [channelId, channelPrograms] of Object.entries(programs)) {
+          stmt.run(channelId, JSON.stringify(channelPrograms));
+          totalPrograms += channelPrograms.length;
+        }
+
+        logger.info(`IPTV EPG sync: ${Object.keys(programs).length} channels, ${totalPrograms} programs`);
+        resolve();
+      });
+
+      parser.on('error', (err) => {
+        logger.error('IPTV EPG XML parse error:', err.message);
+        reject(err);
+      });
+
+      response.data.pipe(parser);
+    });
+  } catch (error) {
+    logger.error('IPTV EPG sync failed:', error.message);
+  }
+}
 
 /**
  * Fetch and sync NTV channels into the channel list.
@@ -258,9 +586,16 @@ function autoDisableSourcelessChannels() {
     let ntvStreamMap = {};
     let backupStreams = {};
 
+    let iptvStreamMap = {};
+
     try {
       const ntvRow = db.prepare(`SELECT epg_data FROM epg_cache WHERE channel_id = 'ntv_stream_map'`).get();
       if (ntvRow) ntvStreamMap = JSON.parse(ntvRow.epg_data);
+    } catch (e) { /* ignore */ }
+
+    try {
+      const iptvRow = db.prepare(`SELECT epg_data FROM epg_cache WHERE channel_id = 'iptv_stream_map'`).get();
+      if (iptvRow) iptvStreamMap = JSON.parse(iptvRow.epg_data);
     } catch (e) { /* ignore */ }
 
     try {
@@ -287,10 +622,11 @@ function autoDisableSourcelessChannels() {
         if (ch.id.startsWith('ntv-')) continue;
 
         const hasNTV = !!ntvStreamMap[ch.id];
+        const hasIPTV = !!iptvStreamMap[ch.id];
         const hasBackup = !!backupStreams[ch.id];
         const hasM3UUrl = !!(ch.url && ch.url.startsWith('http'));
 
-        if (!hasNTV && !hasBackup && !hasM3UUrl) {
+        if (!hasNTV && !hasIPTV && !hasBackup && !hasM3UUrl) {
           const meta = db.prepare(`SELECT is_enabled FROM channel_metadata WHERE channel_id = ?`).get(ch.id);
           if (!meta || meta.is_enabled === 1) {
             upsert.run(ch.id);
@@ -348,6 +684,8 @@ async function syncAll() {
   logger.info('Starting EPG/M3U sync...');
   await Promise.all([syncEPG(), syncM3U()]);
   await syncNTVChannels();
+  await syncIPTV();
+  await syncIPTVEPG();
   autoDisableSourcelessChannels();
   logger.info('EPG/M3U sync finished');
 }
@@ -379,6 +717,8 @@ function startSyncJobs() {
     m3uSyncInProgress = true;
     syncM3U()
       .then(() => syncNTVChannels())
+      .then(() => syncIPTV())
+      .then(() => syncIPTVEPG())
       .then(() => autoDisableSourcelessChannels())
       .catch(err => logger.error('Cron M3U sync error:', err))
       .finally(() => { m3uSyncInProgress = false; });
@@ -394,6 +734,8 @@ module.exports = {
   syncEPG,
   syncM3U,
   syncNTVChannels,
+  syncIPTV,
+  syncIPTVEPG,
   syncAll,
   startSyncJobs
 };

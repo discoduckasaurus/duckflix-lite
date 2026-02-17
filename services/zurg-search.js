@@ -77,28 +77,48 @@ async function isZurgFileReadable(filePath) {
 }
 
 /**
- * Normalize title for comparison (remove special chars, lowercase)
+ * Normalize title for comparison (convert separators to spaces, remove special chars, lowercase)
  */
 function normalizeTitle(title) {
   if (!title) return '';
   return title
     .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, '') // Remove special chars
+    .replace(/[._\-]+/g, ' ')    // Convert common separators to spaces
+    .replace(/[']/g, '')          // Remove apostrophes
+    .replace(/[^a-z0-9\s]/g, '') // Remove remaining special chars
     .replace(/\s+/g, ' ')        // Normalize spaces
     .trim();
 }
 
 /**
  * Check if a file path/name contains the expected title
+ *
+ * For short titles (1-3 significant words, e.g. "The Office"), requires the full title
+ * to appear as a consecutive substring. Scattered word matching is too permissive —
+ * e.g. "Isekai Office Worker The Other Worlds..." contains both "the" and "office"
+ * but is NOT "The Office".
+ *
+ * For longer titles (4+ words), allows 70% word match for flexibility with
+ * abbreviations, alternate spellings, etc.
  */
 function titleMatches(filePath, expectedTitle) {
   const normalizedExpected = normalizeTitle(expectedTitle);
   const normalizedPath = normalizeTitle(filePath);
 
-  // Check if the expected title words appear in the path
+  // Best case: full title appears as consecutive substring
+  if (normalizedPath.includes(normalizedExpected)) {
+    return true;
+  }
+
   const expectedWords = normalizedExpected.split(' ').filter(w => w.length > 2);
 
-  // At least 70% of significant words should match
+  // For short titles (1-3 significant words), ONLY allow consecutive substring match
+  // Scattered word matching is too dangerous (e.g. "office" + "the" matching anime)
+  if (expectedWords.length <= 3) {
+    return false;
+  }
+
+  // For longer titles (4+ words), allow 70% word match
   const matchingWords = expectedWords.filter(word => normalizedPath.includes(word));
   const matchRatio = matchingWords.length / expectedWords.length;
 

@@ -25,6 +25,62 @@ if (!fs.existsSync(SUBTITLES_DIR)) {
 }
 
 /**
+ * Compute OpenSubtitles hash from a remote video URL.
+ * Algorithm: sum of 8-byte little-endian uint64s from first 64KB + last 64KB + fileSize, mod 2^64.
+ * @param {string} videoUrl - Direct URL to the video file (must support Range requests)
+ * @returns {Promise<string|null>} 16-char hex hash or null on failure
+ */
+async function computeOpenSubtitlesHash(videoUrl) {
+  if (!videoUrl || videoUrl.startsWith('/') || videoUrl.startsWith('http://localhost')) {
+    return null; // Skip local/FUSE URLs
+  }
+
+  try {
+    const CHUNK_SIZE = 65536; // 64KB
+
+    // HEAD request to get file size
+    const headResp = await axios.head(videoUrl, { timeout: 5000 });
+    const fileSize = parseInt(headResp.headers['content-length'], 10);
+    if (!fileSize || fileSize < CHUNK_SIZE * 2) {
+      logger.warn(`[Hash] File too small or no Content-Length: ${fileSize}`);
+      return null;
+    }
+
+    // Two parallel Range requests: first 64KB and last 64KB
+    const [firstChunk, lastChunk] = await Promise.all([
+      axios.get(videoUrl, {
+        responseType: 'arraybuffer',
+        headers: { Range: `bytes=0-${CHUNK_SIZE - 1}` },
+        timeout: 10000
+      }).then(r => Buffer.from(r.data)),
+      axios.get(videoUrl, {
+        responseType: 'arraybuffer',
+        headers: { Range: `bytes=${fileSize - CHUNK_SIZE}-${fileSize - 1}` },
+        timeout: 10000
+      }).then(r => Buffer.from(r.data))
+    ]);
+
+    // Sum all 8-byte LE uint64s + fileSize, using BigInt for 64-bit modular arithmetic
+    let hash = BigInt(fileSize);
+    const MODULO = BigInt('18446744073709551616'); // 2^64
+
+    for (let i = 0; i < CHUNK_SIZE; i += 8) {
+      hash = (hash + firstChunk.readBigUInt64LE(i)) % MODULO;
+    }
+    for (let i = 0; i < CHUNK_SIZE; i += 8) {
+      hash = (hash + lastChunk.readBigUInt64LE(i)) % MODULO;
+    }
+
+    const hexHash = hash.toString(16).padStart(16, '0');
+    logger.info(`[Hash] Computed OpenSubtitles hash: ${hexHash} (fileSize: ${fileSize})`);
+    return hexHash;
+  } catch (err) {
+    logger.warn(`[Hash] Failed to compute hash: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Login to OpenSubtitles and get session token
  * @param {string} username - Optional username (defaults to env)
  * @param {string} password - Optional password (defaults to env)
@@ -258,7 +314,7 @@ function freeUpStorage(bytesNeeded) {
  * @param {string} languageCode - 'en', 'es', etc.
  * @returns {Object|null} Cached subtitle record
  */
-function getCachedSubtitle(tmdbId, type, season, episode, languageCode) {
+function getCachedSubtitle(tmdbId, type, season, episode, languageCode, videoHash = null) {
   const row = db.prepare(`
     SELECT * FROM subtitles
     WHERE tmdb_id = ?
@@ -269,6 +325,12 @@ function getCachedSubtitle(tmdbId, type, season, episode, languageCode) {
   `).get(tmdbId, type, season || null, episode || null, languageCode);
 
   if (row) {
+    // Hash-aware cache validation: if both hashes exist and differ, force re-fetch
+    if (videoHash && row.video_hash && row.video_hash !== videoHash) {
+      logger.info(`Subtitle cache hash mismatch: cached=${row.video_hash} current=${videoHash} — will re-fetch`);
+      return null;
+    }
+
     // Update last accessed timestamp
     db.prepare(`
       UPDATE subtitles
@@ -291,13 +353,17 @@ function getCachedSubtitle(tmdbId, type, season, episode, languageCode) {
  * @param {string} languageCode - 'en', 'es', etc.
  * @returns {Promise<Array>} Array of subtitle results
  */
-async function searchSubtitles(tmdbId, type, season, episode, languageCode = 'en') {
+async function searchSubtitles(tmdbId, type, season, episode, languageCode = 'en', moviehash = null) {
   try {
     const client = await getAuthenticatedClient();
     const params = {
       languages: languageCode,
       order_by: 'download_count' // Most popular first
     };
+
+    if (moviehash) {
+      params.moviehash = moviehash;
+    }
 
     if (type === 'movie') {
       params.tmdb_id = tmdbId;
@@ -309,7 +375,7 @@ async function searchSubtitles(tmdbId, type, season, episode, languageCode = 'en
       if (episode) params.episode_number = episode;
     }
 
-    logger.info(`Searching OpenSubtitles: TMDB ${tmdbId} ${type} S${season}E${episode} (${languageCode})`);
+    logger.info(`Searching OpenSubtitles: TMDB ${tmdbId} ${type} S${season}E${episode} (${languageCode})${moviehash ? ` hash=${moviehash}` : ''}`);
 
     const response = await client.get('/subtitles', { params });
 
@@ -416,7 +482,8 @@ function saveSubtitle({
   languageCode,
   format,
   fileContent,
-  opensubtitlesFileId
+  opensubtitlesFileId,
+  videoHash = null
 }) {
   // Generate filename
   const fileName = type === 'movie'
@@ -443,13 +510,14 @@ function saveSubtitle({
     INSERT INTO subtitles (
       tmdb_id, title, year, type, season, episode,
       language, language_code, format, file_path, file_size_bytes,
-      opensubtitles_file_id, downloaded_at, last_accessed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+      opensubtitles_file_id, video_hash, downloaded_at, last_accessed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
     ON CONFLICT(tmdb_id, type, season, episode, language_code)
     DO UPDATE SET
       file_path = excluded.file_path,
       file_size_bytes = excluded.file_size_bytes,
       opensubtitles_file_id = excluded.opensubtitles_file_id,
+      video_hash = excluded.video_hash,
       downloaded_at = datetime('now'),
       last_accessed_at = datetime('now')
   `).run(
@@ -464,11 +532,17 @@ function saveSubtitle({
     format,
     filePath,
     fileSize,
-    opensubtitlesFileId
+    opensubtitlesFileId,
+    videoHash
   );
 
+  // lastInsertRowid is unreliable for UPSERT that hits the UPDATE branch —
+  // it returns a stale value from a previous INSERT instead of the actual row ID.
+  // Always look up the real ID by file_path (which is unique and deterministic).
+  const row = db.prepare('SELECT id FROM subtitles WHERE file_path = ?').get(filePath);
+
   return {
-    id: result.lastInsertRowid,
+    id: row.id,
     filePath,
     fileSize,
     fileName
@@ -480,10 +554,10 @@ function saveSubtitle({
  * @param {Object} params
  * @returns {Promise<Object>} Subtitle record with file info
  */
-async function getSubtitle({ tmdbId, title, year, type, season, episode, languageCode = 'en', force = false }) {
+async function getSubtitle({ tmdbId, title, year, type, season, episode, languageCode = 'en', force = false, videoHash = null }) {
   // Check cache first (skip if force download requested)
   if (!force) {
-    const cached = getCachedSubtitle(tmdbId, type, season, episode, languageCode);
+    const cached = getCachedSubtitle(tmdbId, type, season, episode, languageCode, videoHash);
     if (cached && fs.existsSync(cached.file_path)) {
       // Standardize language name from cache (older entries may have non-standard names)
       const langResult = standardizeLanguage(cached.language);
@@ -506,15 +580,25 @@ async function getSubtitle({ tmdbId, title, year, type, season, episode, languag
     throw new Error(`Daily subtitle download quota exceeded (${quota.limit}/day). Please try again tomorrow.`);
   }
 
-  // Search OpenSubtitles
-  const results = await searchSubtitles(tmdbId, type, season, episode, languageCode);
+  // Search OpenSubtitles (with hash if available)
+  const results = await searchSubtitles(tmdbId, type, season, episode, languageCode, videoHash);
 
   if (results.length === 0) {
     throw new Error(`No subtitles found for TMDB ${tmdbId} (${languageCode})`);
   }
 
-  // Get best result (first one, already sorted by popularity)
-  const bestResult = results[0];
+  // Prefer hash-matched result over most popular
+  let bestResult = results[0];
+  if (videoHash) {
+    const hashMatch = results.find(r => r.attributes.moviehash_match === true);
+    if (hashMatch) {
+      bestResult = hashMatch;
+      logger.info(`[Hash] Hash match found! Using hash-matched subtitle instead of most popular`);
+    } else {
+      logger.info(`[Hash] No hash match in results, falling back to most popular`);
+    }
+  }
+
   const fileId = bestResult.attributes.files[0].file_id;
 
   // Get download link
@@ -543,7 +627,8 @@ async function getSubtitle({ tmdbId, title, year, type, season, episode, languag
     languageCode: languageCode,
     format: 'srt',
     fileContent,
-    opensubtitlesFileId: fileId
+    opensubtitlesFileId: fileId,
+    videoHash
   });
 
   logger.info(`Downloaded new subtitle: ${saved.fileName} (${standardizedLanguage})`);
@@ -678,8 +763,10 @@ function cacheExtractedSubtitle({
 
     logger.info(`Cached extracted subtitle: ${fileName} (${(fileSize / 1024).toFixed(2)} KB) - source: embedded`);
 
+    const row = db.prepare('SELECT id FROM subtitles WHERE file_path = ?').get(finalPath);
+
     return {
-      id: result.lastInsertRowid,
+      id: row.id,
       filePath: finalPath,
       fileSize,
       fileName,
@@ -707,6 +794,7 @@ module.exports = {
   getCachedSubtitle,
   cacheExtractedSubtitle,
   searchSubtitles,
+  computeOpenSubtitlesHash,
   checkDailyQuota,
   getSubtitleFilePath,
   getStorageStats,

@@ -30,24 +30,34 @@ router.get('/latest', (req, res) => {
 
 /**
  * GET /api/apk/version
- * Get APK version info
+ * Get APK version info for in-app update checks
  */
 router.get('/version', (req, res) => {
   try {
+    const versionPath = path.join(APK_DIR, 'version.json');
     const apkPath = path.join(APK_DIR, 'latest.apk');
 
-    if (!fs.existsSync(apkPath)) {
-      return res.status(404).json({ error: 'APK not found' });
+    if (!fs.existsSync(versionPath)) {
+      return res.status(404).json({ error: 'Version info not found' });
     }
 
-    const stats = fs.statSync(apkPath);
+    const versionInfo = JSON.parse(fs.readFileSync(versionPath, 'utf8'));
 
-    // TODO: Read version from metadata file
+    // Merge in APK file size for download progress calculation
+    let size = 0;
+    try {
+      const realPath = fs.realpathSync(apkPath);
+      size = fs.statSync(realPath).size;
+    } catch (e) {
+      // APK file missing — size stays 0
+    }
+
     res.json({
-      version: '1.0.0',
+      versionCode: versionInfo.versionCode,
+      versionName: versionInfo.versionName,
+      releaseNotes: versionInfo.releaseNotes || '',
       downloadUrl: '/api/apk/latest',
-      size: stats.size,
-      lastModified: stats.mtime.toISOString()
+      size
     });
   } catch (error) {
     logger.error('APK version error:', error);

@@ -751,7 +751,11 @@ function getFilteredChannels() {
         }
 
         // Source filter
-        if (sourceFilter === 'has-ntv') {
+        if (sourceFilter === 'has-cdn') {
+            if (!ch.hasCDN) return false;
+        } else if (sourceFilter === 'no-cdn') {
+            if (ch.hasCDN) return false;
+        } else if (sourceFilter === 'has-ntv') {
             if (!ch.hasNTV) return false;
         } else if (sourceFilter === 'failover') {
             const idx = ch.activeSourceIndex || 0;
@@ -899,23 +903,25 @@ function updateChannelStats() {
         return change?.isEnabled !== undefined ? change.isEnabled : ch.isEnabled;
     }).length;
     const withNTV = allAdminChannels.filter(ch => ch.hasNTV).length;
+    const withCDN = allAdminChannels.filter(ch => ch.hasCDN).length;
     const newCount = allAdminChannels.filter(ch => !ch.hasMetadata).length;
 
     // Count how many are currently on each source (active index)
-    let onNTV = 0, onTVP = 0, onFailover = 0;
+    let onCDN = 0, onNTV = 0, onTVP = 0, onFailover = 0;
     for (const ch of allAdminChannels) {
         const sources = ch.streamSources || [];
         const activeIdx = ch.activeSourceIndex || 0;
         const activeLabel = sources[activeIdx]?.label;
-        if (activeLabel === 'NTV') onNTV++;
+        if (activeLabel === 'CDN') onCDN++;
+        else if (activeLabel === 'NTV') onNTV++;
         else if (activeLabel === 'TVPass') onTVP++;
         if (activeIdx > 0 && sources.length > 1) onFailover++;
     }
 
     const statsEl = document.getElementById('channel-stats');
     if (statsEl) {
-        statsEl.innerHTML = `${enabled}/${total} enabled | ${withNTV} have NTV` +
-            ` | Active: ${onNTV} NTV, ${onTVP} TVP` +
+        statsEl.innerHTML = `${enabled}/${total} enabled | ${withCDN} CDN, ${withNTV} NTV` +
+            ` | Active: ${onCDN} CDN, ${onNTV} NTV, ${onTVP} TVP` +
             (onFailover > 0 ? ` | <strong style="color:var(--warning-color)">${onFailover} on failover</strong>` : '') +
             (newCount > 0 ? ` | <strong style="color:var(--warning-color)">${newCount} new</strong>` : '') +
             (channelChanges.size > 0 ? ` | <strong style="color:var(--primary-color)">${channelChanges.size} unsaved</strong>` : '');

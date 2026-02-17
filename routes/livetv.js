@@ -14,12 +14,19 @@ const router = express.Router();
 const ntvUrlCache = new Map();
 const NTV_URL_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// IPTV connection limiting (provider caps simultaneous streams per account)
+const IPTV_MAX_CONNECTIONS = parseInt(process.env.IPTV_MAX_CONNECTIONS || '4', 10);
+// Track channels actively using IPTV source (channelId -> lastActiveAt timestamp)
+const activeIPTVChannels = new Map();
+const IPTV_ACTIVE_TTL = 30000; // 30s — channel considered inactive if no manifest/segment in this window
+
 /**
  * Get a human-readable label for a stream URL (used for logging).
  */
 function getSourceLabel(url) {
+  if (url.includes('smartcdn.org')) return 'CDN';
   if (url.startsWith('ntv://') || NTV_DOMAINS.some(d => url.includes(d))) return 'NTV';
-  if (url.includes('tvpass.org')) return 'TVPass';
+  if (url.includes('tvpass.org') || url.includes('thetvapp.to')) return 'TVPass';
   return 'Backup';
 }
 
@@ -370,6 +377,16 @@ router.get('/stream/:channelId', async (req, res) => {
         activity.manifestsSinceSegment = 0;
         channelSegmentActivity.set(channelId, activity);
 
+        // Track IPTV active channel on segment fetch (not manifest fetch).
+        // This prevents APK prefetch bursts from consuming all IPTV slots.
+        // A channel only "uses" an IPTV slot when someone is actually watching it.
+        if (targetUrl.includes('smartcdn.org') || targetUrl.includes('iptv-')) {
+          activeIPTVChannels.set(channelId, Date.now());
+        } else if (activeIPTVChannels.has(channelId)) {
+          // Channel switched away from IPTV source — release the slot
+          activeIPTVChannels.delete(channelId);
+        }
+
         // Reset fail count on successful segment
         const active = channelActiveSource.get(channelId);
         if (active) active.failCount = 0;
@@ -459,6 +476,7 @@ router.get('/stream/:channelId', async (req, res) => {
 
     const startIndex = active?.urlIndex || 0;
     const previousIndex = active?.urlIndex ?? -1;
+    let iptvCapacitySkipped = false; // Track if IPTV was skipped due to connection limit (not failure)
 
     for (let attempt = 0; attempt < streamUrls.length; attempt++) {
       const i = (startIndex + attempt) % streamUrls.length;
@@ -498,6 +516,23 @@ router.get('/stream/:channelId', async (req, res) => {
           }
         }
 
+        // IPTV connection limit: skip if all slots are in use, fall through to NTV/TVPass.
+        // Slots are allocated at segment-fetch time (not manifest time) so APK prefetch
+        // bursts don't consume all slots. Only channels being actively watched count.
+        if (sourceLabel === 'CDN') {
+          // Prune stale entries
+          const now = Date.now();
+          for (const [ch, lastActive] of activeIPTVChannels) {
+            if (now - lastActive > IPTV_ACTIVE_TTL) activeIPTVChannels.delete(ch);
+          }
+          const isAlreadyActive = activeIPTVChannels.has(channelId);
+          if (!isAlreadyActive && activeIPTVChannels.size >= IPTV_MAX_CONNECTIONS) {
+            logger.debug(`[LiveTV] IPTV limit reached (${activeIPTVChannels.size}/${IPTV_MAX_CONNECTIONS}), skipping for ${channelId}`);
+            iptvCapacitySkipped = true;
+            continue;
+          }
+        }
+
         let rewritten;
         try {
           rewritten = await fetchAndRewriteManifest(streamUrl, channelId);
@@ -515,15 +550,21 @@ router.get('/stream/:channelId', async (req, res) => {
         // Log source switches (different source than last time, or first time)
         if (previousIndex !== i) {
           if (previousIndex === -1) {
-            logger.info(`[LiveTV] ${channelId} → ${sourceLabel} (initial)`);
+            logger.info(`[LiveTV] ${channelId} → ${sourceLabel} (initial, IPTV: ${activeIPTVChannels.size}/${IPTV_MAX_CONNECTIONS}${iptvCapacitySkipped ? ' cap-skip' : ''})`);
           } else {
             const prevLabel = getSourceLabel(streamUrls[previousIndex] || '');
             logger.warn(`[LiveTV] ${channelId} source switch: ${prevLabel} → ${sourceLabel}`);
           }
         }
 
-        // Remember which source worked (set failedAt when on non-primary so auto-recovery can retry primary later)
-        channelActiveSource.set(channelId, { urlIndex: i, failCount: 0, failedAt: i > 0 ? Date.now() : undefined });
+        // Remember which source worked — but DON'T lock in the fallback source when IPTV
+        // was merely at capacity. Those channels should retry IPTV when slots free up.
+        if (iptvCapacitySkipped && i > 0) {
+          // Don't persist — channel will re-evaluate full source list on next manifest request
+          // This prevents APK prefetch bursts from permanently locking channels to NTV/TVPass
+        } else {
+          channelActiveSource.set(channelId, { urlIndex: i, failCount: 0, failedAt: i > 0 ? Date.now() : undefined });
+        }
 
         res.set('Content-Type', 'application/vnd.apple.mpegurl');
         res.set('Cache-Control', 'no-cache, no-store');
@@ -712,6 +753,13 @@ setInterval(() => {
   for (const [key, val] of ntvUrlCache) {
     if ((now - val.resolvedAt) > NTV_URL_CACHE_TTL) {
       ntvUrlCache.delete(key);
+    }
+  }
+
+  // Prune stale IPTV active channels
+  for (const [key, val] of activeIPTVChannels) {
+    if ((now - val) > IPTV_ACTIVE_TTL) {
+      activeIPTVChannels.delete(key);
     }
   }
 

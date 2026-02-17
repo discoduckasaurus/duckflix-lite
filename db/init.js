@@ -391,6 +391,12 @@ function initDatabase() {
     ON subtitles(last_accessed_at)
   `);
 
+  // Migration: Add video_hash for OpenSubtitles hash-based subtitle matching
+  try {
+    db.exec(`ALTER TABLE subtitles ADD COLUMN video_hash TEXT`);
+    logger.info('Added video_hash column to subtitles');
+  } catch (e) {}
+
   // Subtitle quota tracking (daily OpenSubtitles API usage)
   db.exec(`
     CREATE TABLE IF NOT EXISTS subtitle_quota_tracking (
