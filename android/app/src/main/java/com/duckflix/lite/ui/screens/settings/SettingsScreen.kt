@@ -133,6 +133,34 @@ fun SettingsScreen(
             )
         }
 
+        // Subtitle Settings
+        SettingsSection(title = "Subtitles") {
+            SettingsChipRow(
+                title = "Size",
+                options = listOf("Small", "Medium", "Large"),
+                selectedIndex = uiState.subtitleSize,
+                onSelect = { viewModel.setSubtitleSize(it) }
+            )
+            SettingsChipRow(
+                title = "Color",
+                options = listOf("White", "Yellow", "Green", "Cyan"),
+                selectedIndex = uiState.subtitleColor,
+                onSelect = { viewModel.setSubtitleColor(it) }
+            )
+            SettingsChipRow(
+                title = "Background",
+                options = listOf("None", "Black", "Semi-transparent"),
+                selectedIndex = uiState.subtitleBackground,
+                onSelect = { viewModel.setSubtitleBackground(it) }
+            )
+            SettingsChipRow(
+                title = "Edge Style",
+                options = listOf("None", "Drop Shadow", "Outline"),
+                selectedIndex = uiState.subtitleEdge,
+                onSelect = { viewModel.setSubtitleEdge(it) }
+            )
+        }
+
         // Display Settings
         SettingsSection(title = "Display") {
             UiScaleSelector()
@@ -443,6 +471,93 @@ private fun UiScaleChip(
         Text(
             text = scale.displayName,
             fontSize = previewFontSize,
+            color = if (isFocused || isSelected) Color.White else Color.White.copy(alpha = 0.7f),
+            maxLines = 1
+        )
+    }
+}
+
+/**
+ * Reusable chip row for settings options (subtitle size, color, etc.)
+ * Uses same visual pattern as UiScaleChip.
+ */
+@Composable
+private fun SettingsChipRow(
+    title: String,
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            options.forEachIndexed { index, label ->
+                SettingsChip(
+                    label = label,
+                    isSelected = index == selectedIndex,
+                    onClick = { onSelect(index) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsChip(
+    label: String,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+    val shape = RoundedCornerShape(8.dp)
+
+    val gradientBrush = androidx.compose.ui.graphics.Brush.linearGradient(
+        colors = com.duckflix.lite.ui.theme.TvOsColors.gradientColors
+    )
+
+    val backgroundModifier = when {
+        isFocused -> Modifier.background(brush = gradientBrush, shape = shape)
+        isSelected -> Modifier.background(brush = gradientBrush, shape = shape)
+        else -> Modifier.background(color = Color(0xFF3A3A3A), shape = shape)
+    }
+
+    val borderModifier = if (isFocused) {
+        Modifier.border(2.dp, gradientBrush, shape)
+    } else {
+        Modifier
+    }
+
+    Box(
+        modifier = modifier
+            .height(48.dp)
+            .clip(shape)
+            .then(backgroundModifier)
+            .then(borderModifier)
+            .focusable(interactionSource = interactionSource)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick
+            )
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
             color = if (isFocused || isSelected) Color.White else Color.White.copy(alpha = 0.7f),
             maxLines = 1
         )

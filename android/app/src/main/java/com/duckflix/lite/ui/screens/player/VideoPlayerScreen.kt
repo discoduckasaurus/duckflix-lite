@@ -28,6 +28,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import android.graphics.Typeface
+import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import com.duckflix.lite.ui.components.CircularBackButton
 import com.duckflix.lite.ui.components.ErrorScreen
@@ -290,11 +292,90 @@ fun VideoPlayerScreen(
                             // On non-HDR displays, Android handles tone mapping automatically
                             setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER) // We handle buffering UI
                             resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+
+                            // Apply subtitle style preferences
+                            subtitleView?.apply {
+                                setApplyEmbeddedStyles(false)
+                                setApplyEmbeddedFontSizes(false)
+
+                                val foregroundColor = when (uiState.subtitleColor) {
+                                    1 -> android.graphics.Color.YELLOW
+                                    2 -> android.graphics.Color.GREEN
+                                    3 -> android.graphics.Color.CYAN
+                                    else -> android.graphics.Color.WHITE
+                                }
+                                val bgColor = when (uiState.subtitleBackground) {
+                                    1 -> android.graphics.Color.BLACK
+                                    2 -> android.graphics.Color.argb(128, 0, 0, 0)
+                                    else -> android.graphics.Color.TRANSPARENT
+                                }
+                                val edgeType = when (uiState.subtitleEdge) {
+                                    0 -> CaptionStyleCompat.EDGE_TYPE_NONE
+                                    2 -> CaptionStyleCompat.EDGE_TYPE_OUTLINE
+                                    else -> CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW
+                                }
+
+                                setStyle(
+                                    CaptionStyleCompat(
+                                        foregroundColor,
+                                        bgColor,
+                                        android.graphics.Color.TRANSPARENT,
+                                        edgeType,
+                                        android.graphics.Color.BLACK,
+                                        Typeface.DEFAULT_BOLD
+                                    )
+                                )
+
+                                val textSize = when (uiState.subtitleSize) {
+                                    0 -> 0.04f  // Small
+                                    2 -> 0.08f  // Large
+                                    else -> 0.06f // Medium
+                                }
+                                setFractionalTextSize(textSize)
+                            }
                         }
                     },
                     update = { view ->
                         // Ensure player is attached when view updates
                         view.player = viewModel.player
+
+                        // Update subtitle styles when preferences change
+                        view.subtitleView?.apply {
+                            val foregroundColor = when (uiState.subtitleColor) {
+                                1 -> android.graphics.Color.YELLOW
+                                2 -> android.graphics.Color.GREEN
+                                3 -> android.graphics.Color.CYAN
+                                else -> android.graphics.Color.WHITE
+                            }
+                            val bgColor = when (uiState.subtitleBackground) {
+                                1 -> android.graphics.Color.BLACK
+                                2 -> android.graphics.Color.argb(128, 0, 0, 0)
+                                else -> android.graphics.Color.TRANSPARENT
+                            }
+                            val edgeType = when (uiState.subtitleEdge) {
+                                0 -> CaptionStyleCompat.EDGE_TYPE_NONE
+                                2 -> CaptionStyleCompat.EDGE_TYPE_OUTLINE
+                                else -> CaptionStyleCompat.EDGE_TYPE_DROP_SHADOW
+                            }
+
+                            setStyle(
+                                CaptionStyleCompat(
+                                    foregroundColor,
+                                    bgColor,
+                                    android.graphics.Color.TRANSPARENT,
+                                    edgeType,
+                                    android.graphics.Color.BLACK,
+                                    Typeface.DEFAULT_BOLD
+                                )
+                            )
+
+                            val textSize = when (uiState.subtitleSize) {
+                                0 -> 0.04f
+                                2 -> 0.08f
+                                else -> 0.06f
+                            }
+                            setFractionalTextSize(textSize)
+                        }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -1301,7 +1382,7 @@ private fun SubtitlePanel(
                 color = MaterialTheme.colorScheme.onSurface
             )
 
-            // Scrollable track list
+            // Scrollable track list + Force English button together
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -1373,23 +1454,22 @@ private fun SubtitlePanel(
                         }
                     }
                 }
-            }
 
-            // Divider
-            HorizontalDivider(
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
-            )
-
-            // Force English button
-            com.duckflix.lite.ui.components.FocusableButton(
-                onClick = onForceEnglish,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !isForceEnglishLoading
-            ) {
-                Text(
-                    text = if (isForceEnglishLoading) "Downloading..." else "Force English",
-                    style = MaterialTheme.typography.titleMedium
+                // Divider + Force English inside the scrollable area
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
                 )
+
+                com.duckflix.lite.ui.components.FocusableButton(
+                    onClick = onForceEnglish,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isForceEnglishLoading
+                ) {
+                    Text(
+                        text = if (isForceEnglishLoading) "Downloading..." else "Force English",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
             }
         }
     }

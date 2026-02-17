@@ -51,6 +51,26 @@ object DatabaseModule {
         }
     }
 
+    /**
+     * Migration 11→12: Add subtitle_preferences table for sticky subtitle language
+     * and subtitle style settings (size, color, background, edge).
+     */
+    private val MIGRATION_11_12 = object : Migration(11, 12) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS subtitle_preferences (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    preferredLanguage TEXT,
+                    subtitlesEnabled INTEGER NOT NULL DEFAULT 0,
+                    subtitleSize INTEGER NOT NULL DEFAULT 1,
+                    subtitleColor INTEGER NOT NULL DEFAULT 0,
+                    subtitleBackground INTEGER NOT NULL DEFAULT 0,
+                    subtitleEdge INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(
@@ -60,7 +80,7 @@ object DatabaseModule {
         DuckFlixDatabase::class.java,
         "duckflix.db"
     )
-        .addMigrations(MIGRATION_10_11)
+        .addMigrations(MIGRATION_10_11, MIGRATION_11_12)
         .fallbackToDestructiveMigration() // Safety net for other version jumps
         .build()
 
@@ -90,4 +110,7 @@ object DatabaseModule {
 
     @Provides
     fun provideAutoPlaySettingsDao(database: DuckFlixDatabase) = database.autoPlaySettingsDao()
+
+    @Provides
+    fun provideSubtitlePreferencesDao(database: DuckFlixDatabase) = database.subtitlePreferencesDao()
 }

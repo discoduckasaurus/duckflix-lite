@@ -8,6 +8,7 @@ import com.duckflix.lite.data.local.dao.EpgDao
 import com.duckflix.lite.data.local.dao.PlaybackErrorDao
 import com.duckflix.lite.data.local.dao.RecentSearchDao
 import com.duckflix.lite.data.local.dao.RecordingDao
+import com.duckflix.lite.data.local.dao.SubtitlePreferencesDao
 import com.duckflix.lite.data.local.dao.UserDao
 import com.duckflix.lite.data.local.dao.WatchProgressDao
 import com.duckflix.lite.data.local.dao.WatchlistDao
@@ -17,6 +18,7 @@ import com.duckflix.lite.data.local.entity.EpgProgramEntity
 import com.duckflix.lite.data.local.entity.PlaybackErrorEntity
 import com.duckflix.lite.data.local.entity.RecentSearchEntity
 import com.duckflix.lite.data.local.entity.RecordingEntity
+import com.duckflix.lite.data.local.entity.SubtitlePreferencesEntity
 import com.duckflix.lite.data.local.entity.UserEntity
 import com.duckflix.lite.data.local.entity.WatchProgressEntity
 import com.duckflix.lite.data.local.entity.WatchlistEntity
@@ -31,9 +33,10 @@ import com.duckflix.lite.data.local.entity.WatchlistEntity
         RecentSearchEntity::class,
         WatchlistEntity::class,
         PlaybackErrorEntity::class,
-        AutoPlaySettingsEntity::class
+        AutoPlaySettingsEntity::class,
+        SubtitlePreferencesEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 abstract class DuckFlixDatabase : RoomDatabase() {
@@ -46,4 +49,5 @@ abstract class DuckFlixDatabase : RoomDatabase() {
     abstract fun watchlistDao(): WatchlistDao
     abstract fun playbackErrorDao(): PlaybackErrorDao
     abstract fun autoPlaySettingsDao(): AutoPlaySettingsDao
+    abstract fun subtitlePreferencesDao(): SubtitlePreferencesDao
 }

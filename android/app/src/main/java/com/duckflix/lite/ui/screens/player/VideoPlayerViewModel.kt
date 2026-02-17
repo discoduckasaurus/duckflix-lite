@@ -40,8 +40,134 @@ private fun decodeTitle(title: String?): String? {
 data class TrackInfo(
     val id: String,
     val label: String,
-    val isSelected: Boolean
+    val isSelected: Boolean,
+    val language: String? = null
 )
+
+/** Normalize subtitle/audio track labels to clean, consistent format */
+private fun normalizeTrackLabel(label: String?, language: String?, fallback: String): String {
+    val raw = label ?: language ?: return fallback
+
+    // Detect flags from the raw label
+    val flags = mutableListOf<String>()
+    val lower = raw.lowercase()
+    if (lower.contains("sdh")) flags.add("SDH")
+    if (lower.contains("forced")) flags.add("Forced")
+    if (lower.contains("commentary") || lower.contains("comment")) flags.add("Commentary")
+    if (lower.contains("descriptive") || lower.contains("description")) flags.add("AD")
+    if (lower.contains("dolby")) flags.add("Dolby")
+    if (lower.contains("atmos")) flags.add("Atmos")
+    if (lower.contains("cc") && !lower.contains("acc")) flags.add("CC")
+
+    // Resolve language name from code or raw string
+    val langName = resolveLanguageName(language) ?: resolveLanguageName(raw) ?: cleanLanguageName(raw)
+
+    return if (flags.isEmpty()) langName
+    else "$langName (${flags.joinToString(", ")})"
+}
+
+private val languageMap = mapOf(
+    "en" to "English", "eng" to "English", "english" to "English",
+    "fr" to "French", "fre" to "French", "fra" to "French", "french" to "French",
+    "es" to "Spanish", "spa" to "Spanish", "spanish" to "Spanish",
+    "de" to "German", "ger" to "German", "deu" to "German", "german" to "German",
+    "it" to "Italian", "ita" to "Italian", "italian" to "Italian",
+    "pt" to "Portuguese", "por" to "Portuguese", "portuguese" to "Portuguese",
+    "ja" to "Japanese", "jpn" to "Japanese", "japanese" to "Japanese",
+    "ko" to "Korean", "kor" to "Korean", "korean" to "Korean",
+    "zh" to "Chinese", "zho" to "Chinese", "chi" to "Chinese", "chinese" to "Chinese",
+    "ru" to "Russian", "rus" to "Russian", "russian" to "Russian",
+    "ar" to "Arabic", "ara" to "Arabic", "arabic" to "Arabic",
+    "hi" to "Hindi", "hin" to "Hindi", "hindi" to "Hindi",
+    "nl" to "Dutch", "nld" to "Dutch", "dut" to "Dutch", "dutch" to "Dutch",
+    "pl" to "Polish", "pol" to "Polish", "polish" to "Polish",
+    "sv" to "Swedish", "swe" to "Swedish", "swedish" to "Swedish",
+    "da" to "Danish", "dan" to "Danish", "danish" to "Danish",
+    "no" to "Norwegian", "nor" to "Norwegian", "norwegian" to "Norwegian",
+    "fi" to "Finnish", "fin" to "Finnish", "finnish" to "Finnish",
+    "tr" to "Turkish", "tur" to "Turkish", "turkish" to "Turkish",
+    "th" to "Thai", "tha" to "Thai", "thai" to "Thai",
+    "vi" to "Vietnamese", "vie" to "Vietnamese", "vietnamese" to "Vietnamese",
+    "he" to "Hebrew", "heb" to "Hebrew", "hebrew" to "Hebrew",
+    "uk" to "Ukrainian", "ukr" to "Ukrainian", "ukrainian" to "Ukrainian",
+    "cs" to "Czech", "ces" to "Czech", "cze" to "Czech", "czech" to "Czech",
+    "ro" to "Romanian", "ron" to "Romanian", "rum" to "Romanian", "romanian" to "Romanian",
+    "hu" to "Hungarian", "hun" to "Hungarian", "hungarian" to "Hungarian",
+    "el" to "Greek", "ell" to "Greek", "gre" to "Greek", "greek" to "Greek",
+    "id" to "Indonesian", "ind" to "Indonesian", "indonesian" to "Indonesian",
+    "ms" to "Malay", "msa" to "Malay", "may" to "Malay", "malay" to "Malay",
+    "und" to "Unknown"
+)
+
+private fun resolveLanguageName(input: String?): String? {
+    if (input == null) return null
+    // Strip everything after first space/dash/paren to get the core language token
+    val token = input.trim().split(Regex("[\\s\\-_(]"))[0].lowercase()
+    return languageMap[token]
+}
+
+private fun cleanLanguageName(raw: String): String {
+    // Remove known flag words and clean up
+    var cleaned = raw
+        .replace(Regex("(?i)\\b(sdh|forced|dolby|digital|atmos|commentary|descriptive|cc)\\b"), "")
+        .replace(Regex("[\\-_/,]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+    if (cleaned.isBlank()) cleaned = raw.trim()
+    // Capitalize first letter
+    return cleaned.replaceFirstChar { it.uppercase() }
+}
+
+/**
+ * Deduplicate subtitle tracks: keep one per language.
+ * Forced/Commentary/Dolby tracks are kept as separate entries since they're functionally different.
+ * Among regular tracks for the same language, prefer plain > SDH > CC.
+ */
+private fun deduplicateSubtitleTracks(tracks: List<TrackInfo>): List<TrackInfo> {
+    if (tracks.size <= 1) return tracks
+
+    // Classify each track
+    data class ClassifiedTrack(val track: TrackInfo, val lang: String, val category: String)
+
+    val classified = tracks.map { track ->
+        val lower = track.label.lowercase()
+        // Extract base language (text before any parenthetical)
+        val lang = track.label.replace(Regex("\\s*\\(.*\\)"), "").trim()
+        val category = when {
+            lower.contains("forced") -> "forced"
+            lower.contains("commentary") || lower.contains("comment") -> "commentary"
+            lower.contains("dolby") -> "dolby"
+            lower.contains("sdh") -> "sdh"
+            lower.contains("cc") && !lower.contains("acc") -> "cc"
+            else -> "plain"
+        }
+        ClassifiedTrack(track, lang, category)
+    }
+
+    // Group by language
+    val result = mutableListOf<TrackInfo>()
+    val byLang = classified.groupBy { it.lang }
+
+    for ((_, langTracks) in byLang) {
+        // Always keep forced/commentary/dolby as separate entries
+        val special = langTracks.filter { it.category in listOf("forced", "commentary", "dolby") }
+        result.addAll(special.map { it.track })
+
+        // For regular tracks (plain, sdh, cc), keep the best one
+        val regular = langTracks.filter { it.category !in listOf("forced", "commentary", "dolby") }
+        if (regular.isNotEmpty()) {
+            // Priority: plain > sdh > cc > first available
+            val best = regular.firstOrNull { it.category == "plain" }
+                ?: regular.firstOrNull { it.category == "sdh" }
+                ?: regular.firstOrNull { it.category == "cc" }
+                ?: regular.first()
+            result.add(best.track)
+        }
+    }
+
+    println("[SUBTITLES] Dedup: ${tracks.size} tracks -> ${result.size} tracks")
+    return result
+}
 
 data class AudioTrackCandidate(
     val trackId: String,
@@ -107,7 +233,12 @@ data class PlayerUiState(
     val recapDismissed: Boolean = false,
     val creditsDismissed: Boolean = false,
     val isSeeking: Boolean = false, // Track if user is actively seeking (hide skip buttons during seek)
-    val isForceEnglishLoading: Boolean = false
+    val isForceEnglishLoading: Boolean = false,
+    // Subtitle style preferences (from settings)
+    val subtitleSize: Int = 1,          // 0=Small, 1=Medium, 2=Large
+    val subtitleColor: Int = 0,         // 0=White, 1=Yellow, 2=Green, 3=Cyan
+    val subtitleBackground: Int = 0,    // 0=None, 1=Black, 2=Semi-transparent
+    val subtitleEdge: Int = 1           // 0=None, 1=Drop shadow, 2=Outline
 )
 
 @HiltViewModel
@@ -118,6 +249,7 @@ class VideoPlayerViewModel @Inject constructor(
     private val watchlistDao: WatchlistDao,
     private val playbackErrorDao: PlaybackErrorDao,
     private val autoPlaySettingsDao: com.duckflix.lite.data.local.dao.AutoPlaySettingsDao,
+    private val subtitlePreferencesDao: com.duckflix.lite.data.local.dao.SubtitlePreferencesDao,
     private val okHttpClient: okhttp3.OkHttpClient,
     private val stutterDetector: StutterDetector,
     private val bandwidthTester: BandwidthTester,
@@ -156,6 +288,7 @@ class VideoPlayerViewModel @Inject constructor(
     private var currentErrorId: Int? = null
     private var isSelectingTrack = false // Prevent infinite loop during auto-selection
     private var isAddingSubtitles = false // Don't show errors during subtitle loading
+    private var pendingAutoSelectSubtitle = false // Auto-select last subtitle after tracks update
     private var autoRetryCount = 0
     private val maxAutoRetries = 1 // Only auto-retry once, then show error with manual retry option
     private var upNextOverlayDismissed = false // Track if user dismissed the Up Next overlay
@@ -197,6 +330,7 @@ class VideoPlayerViewModel @Inject constructor(
         }
 
         loadAutoPlaySettings()
+        loadSubtitleStylePreferences()
         initializePlayer()
         loadVideoUrl()
         startPositionUpdates()
@@ -361,6 +495,10 @@ class VideoPlayerViewModel @Inject constructor(
         _player = ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .build().apply {
+            // Disable subtitle auto-selection by ExoPlayer — we handle it via sticky prefs or manual selection
+            trackSelectionParameters = trackSelectionParameters.buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                .build()
             addListener(object : Player.Listener {
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     val stateName = when(playbackState) {
@@ -421,6 +559,18 @@ class VideoPlayerViewModel @Inject constructor(
                 override fun onTracksChanged(tracks: Tracks) {
                     println("[DEBUG] ExoPlayer tracks changed")
                     updateAvailableTracks()
+
+                    // Auto-select the last subtitle if we just added one via Force English
+                    if (pendingAutoSelectSubtitle) {
+                        pendingAutoSelectSubtitle = false
+                        autoSelectLastSubtitle()
+                    } else if (pendingAutoSelectEnglish) {
+                        // Retry finding English track from Force English (may take multiple onTracksChanged calls)
+                        tryAutoSelectEnglish()
+                    } else {
+                        // Try to restore saved subtitle preference (sticky subs)
+                        autoSelectSavedSubtitlePreference()
+                    }
 
                     // Log video format info including HDR status for debugging
                     tracks.groups.forEach { group ->
@@ -505,14 +655,15 @@ class VideoPlayerViewModel @Inject constructor(
                         format.sampleMimeType?.startsWith("text/") == true ||
                         format.sampleMimeType?.startsWith("application/") == true -> {
                             val subtitleId = "${group.mediaTrackGroup.id}_$i"
-                            val label = format.label ?: format.language ?: "Subtitle ${subtitleTracks.size + 1}"
-                            println("[TRACK-CREATE] Subtitle: ID='$subtitleId', Label='$label', Selected=$isSelected")
+                            val label = normalizeTrackLabel(format.label, format.language, "Subtitle ${subtitleTracks.size + 1}")
+                            println("[TRACK-CREATE] Subtitle: ID='$subtitleId', Label='$label', RawLabel='${format.label}', Lang='${format.language}', Selected=$isSelected")
 
                             subtitleTracks.add(
                                 TrackInfo(
                                     id = subtitleId,
                                     label = label,
-                                    isSelected = isSelected
+                                    isSelected = isSelected,
+                                    language = format.language
                                 )
                             )
                         }
@@ -520,9 +671,22 @@ class VideoPlayerViewModel @Inject constructor(
                 }
             }
 
+            // Deduplicate subtitle tracks: one per language unless functionally different
+            val deduped = deduplicateSubtitleTracks(subtitleTracks)
+
+            // Filter out "Unknown" / unidentified language tracks — they're unusable noise
+            val filtered = deduped.filter { track ->
+                val lang = track.language?.lowercase()
+                val isUnknown = lang == null || lang == "und"
+                if (isUnknown) {
+                    println("[SUBTITLES] Filtering out unknown track: ${track.label} (lang=${track.language})")
+                }
+                !isUnknown
+            }
+
             _uiState.value = _uiState.value.copy(
                 audioTracks = audioTracks,
-                subtitleTracks = subtitleTracks
+                subtitleTracks = filtered
             )
 
             // ALWAYS run smart audio track selection (don't let ExoPlayer's default selection override us)
@@ -976,10 +1140,17 @@ class VideoPlayerViewModel @Inject constructor(
     private suspend fun pollDownloadProgress(jobId: String) {
         var consecutiveErrors = 0
         val maxConsecutiveErrors = 3
+        val maxPollDuration = 5 * 60 * 1000L // 5 minute timeout for the entire poll loop
+        val pollStartTime = System.currentTimeMillis()
 
         try {
             while (true) {
                 delay(2000) // Poll every 2 seconds
+
+                // Safety timeout — don't poll forever
+                if (System.currentTimeMillis() - pollStartTime > maxPollDuration) {
+                    throw Exception("Search timed out. Please try again later.")
+                }
 
                 try {
                     val progress = api.getStreamProgress(jobId)
@@ -987,9 +1158,29 @@ class VideoPlayerViewModel @Inject constructor(
 
                     println("[POLL] Status: ${progress.status}, Progress: ${progress.progress}%, Message: '${progress.message}', Error: '${progress.error}'")
 
-                    // Check for error conditions first - error field or error-like messages
-                    if (progress.error != null) {
-                        throw Exception(progress.error)
+                    // Check for error/failed status
+                    if (progress.status == "error" || progress.status == "failed" || progress.error != null) {
+                        val errorMsg = progress.error ?: progress.message ?: ""
+
+                        // "trying next source" = server is still cycling through sources, keep polling
+                        if (errorMsg.contains("trying next source", ignoreCase = true)) {
+                            println("[POLL] Source timed out, server trying next — continuing poll")
+                            _uiState.value = _uiState.value.copy(
+                                loadingPhase = LoadingPhase.SEARCHING,
+                                downloadMessage = "Trying another source..."
+                            )
+                        } else {
+                            // Definitive failure — all sources exhausted
+                            val displayMsg = errorMsg.takeIf { it.isNotBlank() }
+                                ?: "Unable to find a working stream. Please try again later."
+                            println("[POLL] Job failed definitively: $displayMsg")
+                            _uiState.value = _uiState.value.copy(
+                                isLoading = false,
+                                loadingPhase = LoadingPhase.READY,
+                                error = "⚠️ $displayMsg"
+                            )
+                            return
+                        }
                     }
 
                     // Update loading phase based on server status
@@ -1075,19 +1266,20 @@ class VideoPlayerViewModel @Inject constructor(
                             break
                         }
                         "failed", "error" -> {
-                            // Use server message if available, otherwise generic message
-                            val errorMsg = progress.message.takeIf {
-                                it.isNotBlank() && !it.equals("searching", ignoreCase = true)
-                            } ?: "Unable to find a working stream. Please try again later."
-                            throw Exception(errorMsg)
+                            // Should not reach here — handled above before the when block
+                            return
                         }
                         "searching", "downloading" -> {
                             // Continue polling - these are expected active states
                             println("[POLL] Still ${progress.status}, continuing poll loop")
                         }
                         else -> {
-                            // Continue polling for unknown states
-                            println("[POLL] Unknown status '${progress.status}', continuing poll loop")
+                            // Unknown status — treat as error rather than polling forever
+                            println("[POLL] Unexpected status '${progress.status}', treating as error")
+                            val errorMsg = progress.message.takeIf {
+                                it.isNotBlank() && !it.equals("searching", ignoreCase = true)
+                            } ?: "Unable to find a working stream (status: ${progress.status})"
+                            throw Exception(errorMsg)
                         }
                     }
                 } catch (e: Exception) {
@@ -1591,6 +1783,8 @@ class VideoPlayerViewModel @Inject constructor(
                         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                         .build()
                     updateAvailableTracks()
+                    // Save preference: subtitles disabled
+                    saveSubtitlePreference(enabled = false, language = null)
                     return
                 }
 
@@ -1632,6 +1826,8 @@ class VideoPlayerViewModel @Inject constructor(
                                     )
                                     .build()
                                 updateAvailableTracks()
+                                // Save preference: subtitles enabled with this language
+                                saveSubtitlePreference(enabled = true, language = format.language)
                                 return
                             }
                         }
@@ -1718,6 +1914,22 @@ class VideoPlayerViewModel @Inject constructor(
                 settings?.sessionEnabled ?: false
             }
             _uiState.value = _uiState.value.copy(autoPlayEnabled = shouldEnable)
+        }
+    }
+
+    private fun loadSubtitleStylePreferences() {
+        viewModelScope.launch {
+            try {
+                val prefs = subtitlePreferencesDao.getSettings() ?: return@launch
+                _uiState.value = _uiState.value.copy(
+                    subtitleSize = prefs.subtitleSize,
+                    subtitleColor = prefs.subtitleColor,
+                    subtitleBackground = prefs.subtitleBackground,
+                    subtitleEdge = prefs.subtitleEdge
+                )
+            } catch (e: Exception) {
+                println("[SUBTITLES] Failed to load style preferences: ${e.message}")
+            }
         }
     }
 
@@ -2325,10 +2537,11 @@ class VideoPlayerViewModel @Inject constructor(
 
                 if (response.success && response.subtitle != null) {
                     println("[SUBTITLES] Force English subtitle found, adding to player...")
+                    pendingAutoSelectSubtitle = true
                     addExternalSubtitles(listOf(response.subtitle))
-                    // Auto-select the newly added subtitle after a short delay for tracks to update
-                    delay(500)
-                    autoSelectLastSubtitle()
+                    // Dismiss panel and save English as preferred language
+                    _uiState.value = _uiState.value.copy(showSubtitlePanel = false)
+                    saveSubtitlePreference(enabled = true, language = "en")
                 } else {
                     println("[SUBTITLES] Force English subtitle not found")
                 }
@@ -2343,11 +2556,142 @@ class VideoPlayerViewModel @Inject constructor(
     /**
      * Auto-select the last (most recently added) subtitle track
      */
+    private var pendingAutoSelectEnglish = false
+
     private fun autoSelectLastSubtitle() {
+        // After adding external subs via Force English, ExoPlayer replaces the media item
+        // which triggers multiple onTracksChanged calls. The new subtitle track may not
+        // appear until a later call. Set a flag so we keep trying on each onTracksChanged.
+        pendingAutoSelectEnglish = true
+        tryAutoSelectEnglish()
+    }
+
+    private fun tryAutoSelectEnglish() {
         val tracks = _uiState.value.subtitleTracks
-        val lastTrack = tracks.lastOrNull() ?: return
-        println("[SUBTITLES] Auto-selecting newly added subtitle: ${lastTrack.label}")
-        selectSubtitleTrack(lastTrack.id)
+        val englishTrack = tracks.lastOrNull { track ->
+            val lang = track.language?.take(2)?.lowercase()
+            lang == "en"
+        }
+        if (englishTrack != null) {
+            pendingAutoSelectEnglish = false
+            println("[SUBTITLES] Auto-selecting Force English subtitle: ${englishTrack.label}")
+            selectSubtitleTrack(englishTrack.id)
+        } else {
+            println("[SUBTITLES] English track not available yet, will retry on next tracks update")
+        }
+    }
+
+    /**
+     * Save subtitle language preference to DB for sticky subs across sessions.
+     * Resolves "und"/null to a real language code from the track label if possible.
+     */
+    private fun saveSubtitlePreference(enabled: Boolean, language: String?) {
+        viewModelScope.launch {
+            try {
+                // Resolve the language — if "und" or null, try to get it from the currently selected track label
+                var resolvedLang = language
+                if (resolvedLang == null || resolvedLang.lowercase() == "und") {
+                    // Try to find the selected track and reverse-map its label to a language code
+                    val selectedTrack = _uiState.value.subtitleTracks.firstOrNull { it.isSelected }
+                    if (selectedTrack != null) {
+                        val labelLower = selectedTrack.label.replace(Regex("\\s*\\(.*\\)"), "").trim().lowercase()
+                        // Reverse lookup: find a language code from the label
+                        resolvedLang = languageMap.entries
+                            .firstOrNull { (_, name) -> name.lowercase() == labelLower }
+                            ?.key?.take(2) // Normalize to 2-letter code
+                    }
+                    println("[SUBTITLES] Resolved language from label: $resolvedLang (original: $language)")
+                }
+
+                val current = subtitlePreferencesDao.getSettings()
+                    ?: com.duckflix.lite.data.local.entity.SubtitlePreferencesEntity()
+
+                if (!enabled) {
+                    // Disabling subs — keep the saved language for next time
+                    subtitlePreferencesDao.saveSettings(current.copy(subtitlesEnabled = false))
+                    println("[SUBTITLES] Saved preference: disabled (keeping language=${current.preferredLanguage})")
+                    return@launch
+                }
+
+                // Don't save "und" or null as the preferred language
+                if (resolvedLang == null || resolvedLang.lowercase() == "und") {
+                    println("[SUBTITLES] Skipping save — couldn't resolve language")
+                    return@launch
+                }
+
+                subtitlePreferencesDao.saveSettings(
+                    current.copy(subtitlesEnabled = true, preferredLanguage = resolvedLang)
+                )
+                println("[SUBTITLES] Saved preference: enabled=true, language=$resolvedLang")
+            } catch (e: Exception) {
+                println("[SUBTITLES] Failed to save preference: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Auto-select subtitle track from saved preferences (sticky subs).
+     * Called from onTracksChanged when not handling a Force English addition.
+     * Matches by language code (e.g. "en") since track IDs change per video.
+     */
+    private var hasRestoredSubtitlePref = false
+    private fun autoSelectSavedSubtitlePreference() {
+        if (hasRestoredSubtitlePref) return
+        hasRestoredSubtitlePref = true
+
+        viewModelScope.launch {
+            try {
+                val prefs = subtitlePreferencesDao.getSettings()
+
+                // Determine target language: saved preference, or default to English
+                val targetLang: String
+                val isExplicitlyDisabled: Boolean
+
+                if (prefs != null && prefs.preferredLanguage != null) {
+                    // User has a saved preference
+                    if (!prefs.subtitlesEnabled) {
+                        println("[SUBTITLES] User explicitly turned off subs — respecting preference")
+                        return@launch
+                    }
+                    targetLang = prefs.preferredLanguage.take(2).lowercase()
+                    isExplicitlyDisabled = false
+                } else {
+                    // No saved preference — default to auto-selecting English
+                    targetLang = "en"
+                    isExplicitlyDisabled = false
+                    println("[SUBTITLES] No saved preference — defaulting to English")
+                }
+
+                val tracks = _uiState.value.subtitleTracks
+                if (tracks.isEmpty()) {
+                    println("[SUBTITLES] No subtitle tracks available to auto-select")
+                    return@launch
+                }
+
+                // Match by language code (normalize to 2-letter), skip unknown/undefined tracks
+                val match = tracks.firstOrNull { track ->
+                    val trackLang = track.language?.take(2)?.lowercase()
+                    trackLang != null && trackLang != "un" && trackLang == targetLang
+                }
+                // Fallback: match by label if language codes didn't work (e.g. language="und" but label="English")
+                ?: tracks.firstOrNull { track ->
+                    val labelLang = track.label.replace(Regex("\\s*\\(.*\\)"), "").trim().lowercase()
+                    val resolvedCode = languageMap.entries
+                        .firstOrNull { (_, name) -> name.lowercase() == labelLang }
+                        ?.key?.take(2)
+                    resolvedCode == targetLang
+                }
+
+                if (match != null) {
+                    println("[SUBTITLES] Auto-selecting: ${match.label} (lang=${match.language}, target=$targetLang)")
+                    selectSubtitleTrack(match.id)
+                } else {
+                    println("[SUBTITLES] No track matching language '$targetLang' found")
+                }
+            } catch (e: Exception) {
+                println("[SUBTITLES] Failed to restore subtitle preference: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -2449,13 +2793,16 @@ class VideoPlayerViewModel @Inject constructor(
                     return
                 }
 
-                val subtitleConfigs = externalSubs.mapNotNull { subtitle ->
+                val newConfigs = externalSubs.mapNotNull { subtitle ->
                     val url = subtitle.url ?: return@mapNotNull null
+                    // Default to SRT — OpenSubtitles primarily serves SRT, and our server
+                    // proxies them without a file extension
                     val mimeType = when {
-                        url.endsWith(".srt", ignoreCase = true) -> "application/x-subrip"
+                        url.endsWith(".vtt", ignoreCase = true) -> "text/vtt"
                         url.endsWith(".ass", ignoreCase = true) || url.endsWith(".ssa", ignoreCase = true) -> "text/x-ssa"
-                        else -> "text/vtt"
+                        else -> "application/x-subrip" // SRT is the most common format
                     }
+                    println("[SUBTITLES] Adding external sub: url=$url, mimeType=$mimeType, lang=${subtitle.languageCode ?: subtitle.language}")
                     MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(url))
                         .setMimeType(mimeType)
                         .setLanguage(subtitle.languageCode ?: subtitle.language)
@@ -2464,14 +2811,18 @@ class VideoPlayerViewModel @Inject constructor(
                         .build()
                 }
 
-                if (subtitleConfigs.isEmpty()) {
+                if (newConfigs.isEmpty()) {
                     println("[SUBTITLES] No valid subtitle configurations to add")
                     return
                 }
 
-                // Create new media item with subtitles
+                // Merge with any existing subtitle configurations instead of replacing
+                val existingConfigs = currentMediaItem.localConfiguration?.subtitleConfigurations ?: emptyList()
+                val mergedConfigs = existingConfigs + newConfigs
+
+                // Create new media item with merged subtitles
                 val newMediaItem = currentMediaItem.buildUpon()
-                    .setSubtitleConfigurations(subtitleConfigs)
+                    .setSubtitleConfigurations(mergedConfigs)
                     .build()
 
                 // Save current position
@@ -2490,7 +2841,7 @@ class VideoPlayerViewModel @Inject constructor(
                     player.play()
                 }
 
-                println("[SUBTITLES] Added ${subtitleConfigs.size} external subtitle tracks")
+                println("[SUBTITLES] Added ${newConfigs.size} external subtitle tracks (${mergedConfigs.size} total)")
             } catch (e: Exception) {
                 isAddingSubtitles = false // Clear on synchronous exceptions
                 println("[ERROR] Failed to add external subtitles: ${e.message}")

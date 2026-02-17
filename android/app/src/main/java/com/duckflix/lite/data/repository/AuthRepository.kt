@@ -93,7 +93,27 @@ class AuthRepository @Inject constructor(
     suspend fun getCurrentUser(): UserEntity? {
         val userId = encryptedPrefs.getInt(KEY_USER_ID, -1)
         if (userId == -1) return null
-        return userDao.getUserById(userId)
+
+        // Try local DB first
+        val localUser = userDao.getUserById(userId)
+        if (localUser != null) return localUser
+
+        // Local row missing (e.g. after DB migration) — re-fetch from API
+        val token = getAuthToken() ?: return null
+        return try {
+            val response = api.getCurrentUser("Bearer $token")
+            val user = UserEntity(
+                id = response.user.id,
+                username = response.user.username,
+                isAdmin = response.user.isAdmin,
+                rdExpiryDate = response.user.rdExpiryDate
+            )
+            userDao.insertUser(user)
+            user
+        } catch (e: Exception) {
+            println("[AUTH] Failed to re-fetch user from API: ${e.message}")
+            null
+        }
     }
 
     companion object {
