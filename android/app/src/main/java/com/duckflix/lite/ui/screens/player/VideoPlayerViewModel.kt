@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.duckflix.lite.ActivePlayerRegistry
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -300,11 +301,35 @@ class VideoPlayerViewModel @Inject constructor(
     val player: ExoPlayer?
         get() = _player
 
+    private val playerHandle = object : ActivePlayerRegistry.PlayerHandle {
+        override fun onAppBackground() {
+            val p = _player ?: return
+            println("[VOD] App backgrounded — pausing player")
+            p.pause()
+            viewModelScope.launch {
+                try {
+                    saveProgressWithValues(p.currentPosition, p.duration)
+                } catch (e: Exception) {
+                    println("[VOD] Failed to save progress on pause: ${e.message}")
+                }
+            }
+        }
+
+        override fun onAppForeground() {
+            _player?.let {
+                println("[VOD] App foregrounded — resuming player")
+                it.play()
+            }
+        }
+    }
+
     private var autoPlayCountdownJob: kotlinx.coroutines.Job? = null
     var onAutoPlayNext: ((season: Int, episode: Int, episodeTitle: String?) -> Unit)? = null
     var onAutoPlayRecommendation: ((tmdbId: Int) -> Unit)? = null
 
     init {
+        ActivePlayerRegistry.register(playerHandle)
+
         // Set initial posterUrl, logoUrl, and episode info from navigation
         _uiState.value = _uiState.value.copy(
             posterUrl = posterUrl,
@@ -2850,6 +2875,7 @@ class VideoPlayerViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        ActivePlayerRegistry.unregister(playerHandle)
         super.onCleared()
 
         // Capture player state BEFORE releasing - saveProgress needs these values

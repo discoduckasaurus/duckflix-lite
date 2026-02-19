@@ -34,11 +34,19 @@ data class EpgProgramEntity(
 data class RecordingEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val channelId: String,
-    val title: String,
-    val filePath: String,
-    val startTime: Long,
-    val endTime: Long,
-    val status: String
+    val channelName: String,
+    val programTitle: String,
+    val programDescription: String? = null,
+    val scheduledStart: Long,        // epoch ms — when to start recording
+    val scheduledEnd: Long,          // epoch ms — when to stop
+    val actualStart: Long? = null,   // epoch ms — when recording actually began
+    val actualEnd: Long? = null,
+    val filePath: String? = null,    // set when recording starts
+    val fileSize: Long = 0,
+    val status: String = "scheduled", // scheduled, recording, completed, failed, cancelled
+    val errorMessage: String? = null,
+    val storageType: String = "external", // external (USB) or internal
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 @Entity(

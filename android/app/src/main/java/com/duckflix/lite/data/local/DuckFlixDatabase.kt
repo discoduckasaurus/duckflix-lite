@@ -36,7 +36,7 @@ import com.duckflix.lite.data.local.entity.WatchlistEntity
         AutoPlaySettingsEntity::class,
         SubtitlePreferencesEntity::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = false
 )
 abstract class DuckFlixDatabase : RoomDatabase() {

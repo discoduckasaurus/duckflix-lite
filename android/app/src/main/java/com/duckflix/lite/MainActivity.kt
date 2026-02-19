@@ -26,4 +26,16 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onStop() {
+        super.onStop()
+        println("[MainActivity] onStop — stopping all active players")
+        ActivePlayerRegistry.notifyBackground()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        println("[MainActivity] onStart — resuming active players")
+        ActivePlayerRegistry.notifyForeground()
+    }
 }

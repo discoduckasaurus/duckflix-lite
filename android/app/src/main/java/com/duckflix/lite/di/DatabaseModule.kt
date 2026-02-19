@@ -71,6 +71,37 @@ object DatabaseModule {
         }
     }
 
+    /**
+     * Migration 12→13: Expand recordings table for DVR — drop and recreate with new schema.
+     * Old table had: id, channelId, title, filePath, startTime, endTime, status
+     * New table has: id, channelId, channelName, programTitle, programDescription, scheduledStart,
+     *   scheduledEnd, actualStart, actualEnd, filePath, fileSize, status, errorMessage, storageType, createdAt
+     */
+    private val MIGRATION_12_13 = object : Migration(12, 13) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("DROP TABLE IF EXISTS recordings")
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS recordings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    channelId TEXT NOT NULL,
+                    channelName TEXT NOT NULL,
+                    programTitle TEXT NOT NULL,
+                    programDescription TEXT,
+                    scheduledStart INTEGER NOT NULL,
+                    scheduledEnd INTEGER NOT NULL,
+                    actualStart INTEGER,
+                    actualEnd INTEGER,
+                    filePath TEXT,
+                    fileSize INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'scheduled',
+                    errorMessage TEXT,
+                    storageType TEXT NOT NULL DEFAULT 'external',
+                    createdAt INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(
@@ -80,7 +111,7 @@ object DatabaseModule {
         DuckFlixDatabase::class.java,
         "duckflix.db"
     )
-        .addMigrations(MIGRATION_10_11, MIGRATION_11_12)
+        .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
         .fallbackToDestructiveMigration() // Safety net for other version jumps
         .build()
 

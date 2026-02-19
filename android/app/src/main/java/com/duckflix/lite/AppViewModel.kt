@@ -111,7 +111,7 @@ class AppViewModel @Inject constructor(
     private fun installApk(apkFile: File) {
         val uri: Uri = FileProvider.getUriForFile(
             application,
-            "com.duckflix.lite.fileprovider",
+            "${application.packageName}.fileprovider",
             apkFile
         )
         val intent = Intent(Intent.ACTION_VIEW).apply {

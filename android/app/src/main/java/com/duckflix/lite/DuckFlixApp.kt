@@ -24,6 +24,8 @@ import com.duckflix.lite.ui.screens.player.VideoPlayerScreen
 import com.duckflix.lite.ui.screens.search.SearchScreen
 import com.duckflix.lite.ui.screens.settings.SettingsScreen
 import com.duckflix.lite.ui.screens.livetv.LiveTvScreen
+import com.duckflix.lite.ui.screens.dvr.DvrScreen
+import com.duckflix.lite.ui.screens.dvr.DvrPlayerScreen
 import com.duckflix.lite.ui.components.UpdateAvailableDialog
 
 sealed class Screen(val route: String) {
@@ -71,6 +73,10 @@ sealed class Screen(val route: String) {
     object Vod : Screen("vod")
     object LiveTV : Screen("livetv")
     object Dvr : Screen("dvr")
+    object DvrPlayer : Screen("dvr_player/{filePath}?title={title}") {
+        fun createRoute(filePath: String, title: String) =
+            "dvr_player/${java.net.URLEncoder.encode(filePath, "UTF-8")}?title=${java.net.URLEncoder.encode(title, "UTF-8")}"
+    }
     object Settings : Screen("settings")
     object Admin : Screen("admin")
     object ProviderDetail : Screen("provider/{providerId}?name={name}&logoUrl={logoUrl}") {
@@ -375,6 +381,9 @@ fun DuckFlixApp(
             LiveTvScreen(
                 onNavigateBack = {
                     navController.navigateUp()
+                },
+                onNavigateToDvr = {
+                    navController.navigate(Screen.Dvr.route)
                 }
             )
         }
@@ -412,6 +421,38 @@ fun DuckFlixApp(
             )
         }
 
-        // TODO: Add other screens (DVR)
+        composable(Screen.Dvr.route) {
+            DvrScreen(
+                onNavigateBack = {
+                    navController.navigateUp()
+                },
+                onPlayRecording = { filePath, title ->
+                    navController.navigate(Screen.DvrPlayer.createRoute(filePath, title))
+                }
+            )
+        }
+
+        composable(
+            route = Screen.DvrPlayer.route,
+            arguments = listOf(
+                navArgument("filePath") { type = NavType.StringType },
+                navArgument("title") {
+                    type = NavType.StringType
+                    defaultValue = "Recording"
+                }
+            )
+        ) { backStackEntry ->
+            val filePath = java.net.URLDecoder.decode(
+                backStackEntry.arguments?.getString("filePath") ?: "", "UTF-8"
+            )
+            val title = java.net.URLDecoder.decode(
+                backStackEntry.arguments?.getString("title") ?: "Recording", "UTF-8"
+            )
+            DvrPlayerScreen(
+                filePath = filePath,
+                title = title,
+                onNavigateBack = { navController.navigateUp() }
+            )
+        }
     }
 }

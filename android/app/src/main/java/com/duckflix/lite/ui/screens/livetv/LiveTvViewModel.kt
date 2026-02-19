@@ -3,6 +3,7 @@ package com.duckflix.lite.ui.screens.livetv
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.duckflix.lite.ActivePlayerRegistry
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
@@ -14,8 +15,16 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import com.duckflix.lite.data.dvr.DvrStorageManager
+import com.duckflix.lite.data.local.dao.RecordingDao
+import com.duckflix.lite.data.local.entity.RecordingEntity
 import com.duckflix.lite.data.remote.DuckFlixApi
 import com.duckflix.lite.data.remote.dto.LiveTvChannel
+import com.duckflix.lite.data.remote.dto.LiveTvProgram
+import com.duckflix.lite.service.DvrSchedulerWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -56,11 +65,14 @@ data class LiveTvUiState(
 @HiltViewModel
 class LiveTvViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val api: DuckFlixApi
+    private val api: DuckFlixApi,
+    private val recordingDao: RecordingDao,
+    private val storageManager: DvrStorageManager
 ) : ViewModel() {
 
     companion object {
-        private const val MAX_RETRY_ATTEMPTS = 3
+        private const val MAX_RESTART_ATTEMPTS = 3
+        private const val RESTART_WINDOW_MS = 60_000L  // 60s window for consecutive restart tracking
         private const val STALL_TIMEOUT_MS = 10000L  // 10s - gives server time to switch backup streams
     }
 
@@ -74,10 +86,25 @@ class LiveTvViewModel @Inject constructor(
     private var epgRefreshJob: Job? = null
     private var timeUpdateJob: Job? = null
     private var stallDetectionJob: Job? = null
-    private var retryAttempts = 0
+    private val restartTimestamps = mutableListOf<Long>()
 
     // Base URL for constructing stream URLs
     private val baseUrl = "https://lite.duckflix.tv/api"
+
+    private val playerHandle = object : ActivePlayerRegistry.PlayerHandle {
+        override fun onAppBackground() {
+            println("[LiveTV] App backgrounded — stopping player")
+            stallDetectionJob?.cancel()
+            _player?.stop()
+        }
+
+        override fun onAppForeground() {
+            val channelId = _uiState.value.selectedChannel?.id ?: return
+            println("[LiveTV] App foregrounded — resuming stream")
+            val streamUrl = "$baseUrl/livetv/stream/$channelId"
+            playStream(streamUrl)
+        }
+    }
 
     // Get auth token for HLS requests
     private val authToken: String?
@@ -105,10 +132,18 @@ class LiveTvViewModel @Inject constructor(
         loadChannels()
         startTimeUpdates()
         startEpgRefresh()
+        ActivePlayerRegistry.register(playerHandle)
     }
 
     private fun initializePlayer() {
-        // Create HTTP data source factory with auth header
+        _player = createPlayerInstance()
+    }
+
+    /**
+     * Create a fresh ExoPlayer instance with HLS support and event listener.
+     * Each instance has its own HLS playlist tracker and sequence state.
+     */
+    private fun createPlayerInstance(): ExoPlayer {
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setUserAgent("ExoPlayer/DuckFlix-LiveTV")
@@ -116,16 +151,14 @@ class LiveTvViewModel @Inject constructor(
                 authToken?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
             )
 
-        // Use HLS media source factory for live streams
         val mediaSourceFactory = HlsMediaSource.Factory(httpDataSourceFactory)
             .setAllowChunklessPreparation(true)
 
-        // Audio codec support: Enable FFmpeg extension for various audio codecs
         val renderersFactory = androidx.media3.exoplayer.DefaultRenderersFactory(context)
             .setExtensionRendererMode(androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
             .setEnableDecoderFallback(true)
 
-        _player = ExoPlayer.Builder(context, renderersFactory)
+        return ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(mediaSourceFactory)
             .build().apply {
                 addListener(object : Player.Listener {
@@ -141,8 +174,8 @@ class LiveTvViewModel @Inject constructor(
 
                         when (playbackState) {
                             Player.STATE_READY -> {
-                                // Stream recovered successfully
-                                retryAttempts = 0
+                                // Stream recovered — segments are loading, reset restart tracking
+                                restartTimestamps.clear()
                                 stallDetectionJob?.cancel()
                                 _uiState.value = _uiState.value.copy(
                                     isRecovering = false,
@@ -151,7 +184,6 @@ class LiveTvViewModel @Inject constructor(
                                 )
                             }
                             Player.STATE_BUFFERING -> {
-                                // Start stall detection
                                 startStallDetection()
                             }
                             Player.STATE_IDLE, Player.STATE_ENDED -> {
@@ -177,30 +209,55 @@ class LiveTvViewModel @Inject constructor(
             }
     }
 
+    /**
+     * Release the current player and create a fresh instance.
+     * Clears all internal HLS state (playlist tracker, chunk source, media-sequence tracking)
+     * so the next manifest is parsed from scratch — necessary when the server switches
+     * upstream sources (CDN <-> TVPass) and MEDIA-SEQUENCE jumps discontinuously.
+     */
+    private fun recreatePlayer() {
+        println("[LiveTV] Recreating player instance for clean HLS state")
+        val oldPlayer = _player
+        _player = createPlayerInstance()
+        oldPlayer?.release()
+    }
+
     private fun handleStreamError() {
         stallDetectionJob?.cancel()
         val channelId = _uiState.value.selectedChannel?.id ?: return
 
-        if (retryAttempts < MAX_RETRY_ATTEMPTS) {
-            retryAttempts++
+        val now = System.currentTimeMillis()
+        // Prune restart timestamps outside the 60s window
+        restartTimestamps.removeAll { now - it > RESTART_WINDOW_MS }
+
+        if (restartTimestamps.size < MAX_RESTART_ATTEMPTS) {
+            restartTimestamps.add(now)
+            val attempt = restartTimestamps.size
             _uiState.value = _uiState.value.copy(
                 isRecovering = true,
-                retryCount = retryAttempts,
+                retryCount = attempt,
                 error = null
             )
             viewModelScope.launch {
-                // Report error to server so it can failover to backup source
+                // Lightweight restart: stop and re-prepare on the same proxy URL.
+                // Don't report error to server — it already detects failures via segment activity.
+                _player?.stop()
+                println("[LiveTV] Player restart after error (attempt $attempt/$MAX_RESTART_ATTEMPTS)")
+                delay(1500L)
+
+                val streamUrl = "$baseUrl/livetv/stream/$channelId"
+                playStream(streamUrl)
+            }
+        } else {
+            // All restart attempts exhausted — now report to server and show error UI
+            viewModelScope.launch {
                 try {
                     api.reportLiveTvStreamError(channelId)
-                    println("[LiveTV] Reported stream error to server for channel $channelId")
+                    println("[LiveTV] All $MAX_RESTART_ATTEMPTS restarts failed, reported error to server for channel $channelId")
                 } catch (e: Exception) {
                     println("[LiveTV] Failed to report stream error: ${e.message}")
                 }
-                // Exponential backoff: 1s, 2s, 4s
-                delay(1000L * (1 shl (retryAttempts - 1)))
-                refreshStream()
             }
-        } else {
             _uiState.value = _uiState.value.copy(
                 error = "Stream unavailable. Tap retry to reconnect.",
                 isRecovering = false
@@ -224,8 +281,8 @@ class LiveTvViewModel @Inject constructor(
         val channel = _uiState.value.selectedChannel ?: return
         _uiState.value = _uiState.value.copy(error = null, isRecovering = true)
 
-        // Reset retry counter on manual refresh
-        retryAttempts = 0
+        // Reset restart tracking on manual refresh
+        restartTimestamps.clear()
 
         viewModelScope.launch {
             // Report error to trigger server-side failover before fetching new manifest
@@ -236,6 +293,8 @@ class LiveTvViewModel @Inject constructor(
                 println("[LiveTV] Failed to report stream error: ${e.message}")
             }
 
+            // Full player recreation for manual retry (more aggressive reset)
+            recreatePlayer()
             val streamUrl = "$baseUrl/livetv/stream/${channel.id}"
             playStream(streamUrl)
         }
@@ -302,7 +361,7 @@ class LiveTvViewModel @Inject constructor(
         println("[LiveTV] Selecting channel: ${channel.effectiveDisplayName}")
 
         // Reset recovery state when switching channels
-        retryAttempts = 0
+        restartTimestamps.clear()
         stallDetectionJob?.cancel()
 
         _uiState.value = _uiState.value.copy(
@@ -571,8 +630,66 @@ class LiveTvViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Record the currently-airing program on a channel (starts immediately).
+     */
+    fun recordNow(channel: LiveTvChannel, program: LiveTvProgram) {
+        viewModelScope.launch {
+            val filePath = storageManager.generateFilePath(channel.effectiveDisplayName, program.title)
+            val recording = RecordingEntity(
+                channelId = channel.id,
+                channelName = channel.effectiveDisplayName,
+                programTitle = program.title,
+                programDescription = program.description,
+                scheduledStart = System.currentTimeMillis(),
+                scheduledEnd = program.stop * 1000, // EPG times are in seconds
+                filePath = filePath,
+                storageType = storageManager.getStorageType()
+            )
+            val id = recordingDao.insertRecording(recording).toInt()
+
+            val workRequest = OneTimeWorkRequestBuilder<DvrSchedulerWorker>()
+                .setInputData(workDataOf(DvrSchedulerWorker.KEY_RECORDING_ID to id))
+                .build()
+            WorkManager.getInstance(context).enqueue(workRequest)
+            println("[LiveTV] Started recording: ${program.title} on ${channel.effectiveDisplayName}")
+        }
+    }
+
+    /**
+     * Schedule a future program for recording.
+     */
+    fun scheduleRecording(channel: LiveTvChannel, program: LiveTvProgram) {
+        viewModelScope.launch {
+            val filePath = storageManager.generateFilePath(channel.effectiveDisplayName, program.title)
+            val recording = RecordingEntity(
+                channelId = channel.id,
+                channelName = channel.effectiveDisplayName,
+                programTitle = program.title,
+                programDescription = program.description,
+                scheduledStart = program.start * 1000, // EPG times are in seconds
+                scheduledEnd = program.stop * 1000,
+                filePath = filePath,
+                storageType = storageManager.getStorageType()
+            )
+            recordingDao.insertRecording(recording)
+
+            // Ensure periodic scheduler is running
+            val periodicWork = androidx.work.PeriodicWorkRequestBuilder<DvrSchedulerWorker>(
+                15, java.util.concurrent.TimeUnit.MINUTES
+            ).build()
+            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                DvrSchedulerWorker.WORK_NAME_PERIODIC,
+                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+                periodicWork
+            )
+            println("[LiveTV] Scheduled recording: ${program.title} on ${channel.effectiveDisplayName}")
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
+        ActivePlayerRegistry.unregister(playerHandle)
         epgRefreshJob?.cancel()
         timeUpdateJob?.cancel()
         stallDetectionJob?.cancel()

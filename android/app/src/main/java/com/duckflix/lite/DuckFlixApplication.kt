@@ -1,6 +1,8 @@
 package com.duckflix.lite
 
 import android.app.Application
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
 import com.duckflix.lite.data.remote.DuckFlixApi
 import com.duckflix.lite.utils.LoadingPhrasesCache
 import dagger.hilt.android.HiltAndroidApp
@@ -12,7 +14,15 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @HiltAndroidApp
-class DuckFlixApplication : Application() {
+class DuckFlixApplication : Application(), Configuration.Provider {
+
+    @Inject
+    lateinit var workerFactory: HiltWorkerFactory
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setWorkerFactory(workerFactory)
+            .build()
 
     @Inject
     lateinit var api: DuckFlixApi

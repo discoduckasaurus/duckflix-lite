@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,6 +55,7 @@ import com.duckflix.lite.ui.components.livetv.PipPlayer
 @Composable
 fun LiveTvScreen(
     onNavigateBack: () -> Unit,
+    onNavigateToDvr: () -> Unit = {},
     viewModel: LiveTvViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -194,6 +196,22 @@ fun LiveTvScreen(
                                 color = Color.White
                             )
 
+                            // DVR button
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Color(0xFFE53935).copy(alpha = 0.15f))
+                                    .clickable { onNavigateToDvr() }
+                                    .focusable()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    text = "DVR",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = Color(0xFFE53935)
+                                )
+                            }
+
                             Spacer(modifier = Modifier.weight(1f))
 
                             // Logo at top right
@@ -247,13 +265,14 @@ fun LiveTvScreen(
                                 viewModel.selectChannel(channel)
                                 viewModel.goFullscreen()
                             },
-                            onProgramClick = { _, _ ->
-                                // Future: DVR functionality
-                                Toast.makeText(
-                                    context,
-                                    "DVR recording coming soon",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                            onProgramClick = { channel, program ->
+                                if (program.isCurrentlyAiring) {
+                                    viewModel.recordNow(channel, program)
+                                    Toast.makeText(context, "Recording: ${program.title}", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    viewModel.scheduleRecording(channel, program)
+                                    Toast.makeText(context, "Scheduled: ${program.title}", Toast.LENGTH_SHORT).show()
+                                }
                             },
                             modifier = Modifier.weight(1f),
                             focusTrigger = uiState.focusTrigger

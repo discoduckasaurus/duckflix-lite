@@ -39,14 +39,29 @@ interface EpgDao {
 
 @Dao
 interface RecordingDao {
-    @Query("SELECT * FROM recordings ORDER BY startTime DESC")
+    @Query("SELECT * FROM recordings ORDER BY scheduledStart DESC")
     fun getAllRecordings(): Flow<List<RecordingEntity>>
 
-    @Insert
+    @Query("SELECT * FROM recordings WHERE status = 'scheduled' AND scheduledStart <= :timeMs ORDER BY scheduledStart ASC")
+    suspend fun getDueRecordings(timeMs: Long): List<RecordingEntity>
+
+    @Query("SELECT * FROM recordings WHERE status = 'recording'")
+    suspend fun getActiveRecordings(): List<RecordingEntity>
+
+    @Query("SELECT * FROM recordings WHERE id = :id")
+    suspend fun getRecordingById(id: Int): RecordingEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRecording(recording: RecordingEntity): Long
+
+    @Update
+    suspend fun updateRecording(recording: RecordingEntity)
 
     @Delete
     suspend fun deleteRecording(recording: RecordingEntity)
+
+    @Query("DELETE FROM recordings WHERE id = :id")
+    suspend fun deleteById(id: Int)
 }
 
 @Dao

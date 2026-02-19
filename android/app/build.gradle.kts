@@ -13,8 +13,8 @@ android {
         applicationId = "com.duckflix.lite"
         minSdk = 21  // Android 5.0 for wide compatibility
         targetSdk = 34
-        versionCode = 8
-        versionName = "2.3.0"
+        versionCode = 9
+        versionName = "2.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -33,8 +33,9 @@ android {
         }
         debug {
             isMinifyEnabled = false
-            // applicationIdSuffix removed - debug replaces release app
-            versionNameSuffix = "-debug"
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            resValue("string", "app_name", "DuckFlix Dev")
         }
     }
 
@@ -139,6 +140,8 @@ dependencies {
 
     // WorkManager (Background Tasks)
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+    implementation("androidx.hilt:hilt-work:1.1.0")
+    ksp("androidx.hilt:hilt-compiler:1.1.0")
 
     // Security (Encrypted SharedPreferences)
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
