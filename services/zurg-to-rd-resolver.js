@@ -51,7 +51,7 @@
  * readable by zurg-search.js's isZurgFileReadable() check.
  */
 
-const axios = require('axios');
+const { rdAxios } = require('@duckflix/rd-client');
 const { db } = require('../db/init');
 const { getUserRdApiKey } = require('./user-service');
 const logger = require('../utils/logger');
@@ -90,6 +90,25 @@ function parseZurgPath(zurgFilePath) {
 }
 
 /**
+ * Fetch torrent list for an API key, with session-scoped caching.
+ * Eliminates redundant GET /torrents?limit=2500 calls within a single resolution attempt.
+ */
+async function fetchTorrentList(rdApiKey, cache) {
+  if (cache.has(rdApiKey)) {
+    return cache.get(rdApiKey);
+  }
+
+  const res = await rdAxios.get(`${RD_API}/torrents`, {
+    headers: { 'Authorization': `Bearer ${rdApiKey}` },
+    params: { limit: 2500 }
+  });
+
+  const data = Array.isArray(res.data) ? res.data : [];
+  cache.set(rdApiKey, data);
+  return data;
+}
+
+/**
  * Find a torrent in an RD account by pack name.
  *
  * IMPORTANT: The RD /torrents list endpoint returns `filename` (individual file name),
@@ -98,19 +117,21 @@ function parseZurgPath(zurgFilePath) {
  *
  * @returns {{ id, hash, original_filename }} or null
  */
-async function findTorrentByPackName(rdApiKey, packName) {
-  // Fetch ALL torrents (default limit is 100, accounts can have 500+)
-  const torrentsRes = await axios.get(`${RD_API}/torrents`, {
-    headers: { 'Authorization': `Bearer ${rdApiKey}` },
-    params: { limit: 2500 }
-  });
+async function findTorrentByPackName(rdApiKey, packName, torrentListCache) {
+  const torrentsData = await fetchTorrentList(rdApiKey, torrentListCache);
+
+  // Guard: ensure we got an array
+  if (!Array.isArray(torrentsData)) {
+    logger.warn('[Zurg→RD] findTorrentByPackName: torrents response is not an array');
+    return null;
+  }
 
   const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
   const normPack = normalize(packName);
 
   // Quick check: see if any torrent's `filename` field happens to match
   // (works for single-file torrents where filename == pack name)
-  const quickMatch = torrentsRes.data.find(t => {
+  const quickMatch = torrentsData.find(t => {
     if (!t.filename) return false;
     const normFilename = normalize(t.filename);
     return normFilename === normPack || normFilename.includes(normPack) || normPack.includes(normFilename);
@@ -123,14 +144,13 @@ async function findTorrentByPackName(rdApiKey, packName) {
   // not the pack name. We need to check torrent info for each unique hash.
   // Deduplicate by hash since each selected file in a pack appears as a separate entry.
   const uniqueHashes = new Map();
-  for (const t of torrentsRes.data) {
+  for (const t of torrentsData) {
     if (t.hash && !uniqueHashes.has(t.hash)) {
       uniqueHashes.set(t.hash, t);
     }
   }
 
   // Check torrent info for each unique hash to find the pack name (original_filename).
-  // Limit to 10 concurrent checks to avoid rate limiting.
   const hashEntries = Array.from(uniqueHashes.values());
 
   // Optimization: only check torrents with filenames that share words with the pack name
@@ -140,9 +160,10 @@ async function findTorrentByPackName(rdApiKey, packName) {
     return packWords.some(w => normFilename.includes(w));
   });
 
-  for (const candidate of candidates.slice(0, 20)) {
+  // Limit to 10 candidates (each takes ~1s with rate limiting; 10s max is acceptable)
+  for (const candidate of candidates.slice(0, 10)) {
     try {
-      const infoRes = await axios.get(`${RD_API}/torrents/info/${candidate.id}`, {
+      const infoRes = await rdAxios.get(`${RD_API}/torrents/info/${candidate.id}`, {
         headers: { 'Authorization': `Bearer ${rdApiKey}` }
       });
       const origName = infoRes.data.original_filename;
@@ -171,12 +192,19 @@ async function findTorrentByPackName(rdApiKey, packName) {
  * We find the target file, map it to its link, then unrestrict for a direct URL.
  */
 async function getFileLink(rdApiKey, torrentId, fileName) {
-  const torrentInfoRes = await axios.get(
+  const torrentInfoRes = await rdAxios.get(
     `${RD_API}/torrents/info/${torrentId}`,
     { headers: { 'Authorization': `Bearer ${rdApiKey}` } }
   );
 
   const torrentInfo = torrentInfoRes.data;
+
+  // Guard: bail if files is not an array (RD returned HTML/garbage on rate limit)
+  if (!Array.isArray(torrentInfo.files)) {
+    logger.warn(`[Zurg→RD] getFileLink: torrentInfo.files is not an array for torrent ${torrentId}`);
+    return null;
+  }
+
   const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
 
   // Find the specific file in the torrent
@@ -199,7 +227,7 @@ async function getFileLink(rdApiKey, torrentId, fileName) {
   const downloadLink = torrentInfo.links[selectedFileIndex];
 
   // Unrestrict to get direct CDN download URL
-  const unrestrictRes = await axios.post(
+  const unrestrictRes = await rdAxios.post(
     `${RD_API}/unrestrict/link`,
     `link=${encodeURIComponent(downloadLink)}`,
     {
@@ -229,7 +257,7 @@ async function addCachedTorrent(rdApiKey, hash, fileName) {
   // Add magnet hash to user's RD — instant for cached content
   let addRes;
   try {
-    addRes = await axios.post(
+    addRes = await rdAxios.post(
       `${RD_API}/torrents/addMagnet`,
       `magnet=magnet:?xt=urn:btih:${hash}`,
       {
@@ -255,9 +283,15 @@ async function addCachedTorrent(rdApiKey, hash, fileName) {
   await new Promise(resolve => setTimeout(resolve, 1000));
 
   // Get torrent info to find and select the right file
-  const infoRes = await axios.get(`${RD_API}/torrents/info/${torrentId}`, {
+  const infoRes = await rdAxios.get(`${RD_API}/torrents/info/${torrentId}`, {
     headers: { 'Authorization': `Bearer ${rdApiKey}` }
   });
+
+  // Guard: bail if files is not an array
+  if (!Array.isArray(infoRes.data.files)) {
+    logger.warn(`[Zurg→RD] addCachedTorrent: infoRes.data.files is not an array for torrent ${torrentId}`);
+    return null;
+  }
 
   const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
   const normTarget = normalize(fileName);
@@ -282,7 +316,7 @@ async function addCachedTorrent(rdApiKey, hash, fileName) {
     ? videoFiles.map(f => f.id)
     : [targetFile.id];
 
-  await axios.post(
+  await rdAxios.post(
     `${RD_API}/torrents/selectFiles/${torrentId}`,
     `files=${fileIds.join(',')}`,
     {
@@ -319,6 +353,9 @@ async function addCachedTorrent(rdApiKey, hash, fileName) {
  * @returns {Promise<string|null>} Direct download URL, or null (fall back to FUSE mount)
  */
 async function resolveZurgToRdLink(zurgFilePath, rdApiKey) {
+  // Session-scoped cache: avoids redundant GET /torrents?limit=2500 calls within this resolution
+  const torrentListCache = new Map();
+
   try {
     const parsed = parseZurgPath(zurgFilePath);
     if (!parsed) {
@@ -330,7 +367,7 @@ async function resolveZurgToRdLink(zurgFilePath, rdApiKey) {
     logger.info(`[Zurg→RD] Resolving: pack="${packName}", file="${fileName}"`);
 
     // ── Step 1: Search user's OWN RD account for the torrent ──
-    const matchingTorrent = await findTorrentByPackName(rdApiKey, packName);
+    const matchingTorrent = await findTorrentByPackName(rdApiKey, packName, torrentListCache);
 
     if (matchingTorrent) {
       logger.info(`[Zurg→RD] Found in user's RD: torrent ${matchingTorrent.id}`);
@@ -352,25 +389,27 @@ async function resolveZurgToRdLink(zurgFilePath, rdApiKey) {
 
     // ── Step 2: Search user's RD by filename (covers cases where pack name doesn't match) ──
     try {
-      const allTorrents = await axios.get(`${RD_API}/torrents`, {
-        headers: { 'Authorization': `Bearer ${rdApiKey}` },
-        params: { limit: 2500 }
-      });
+      const allTorrents = await fetchTorrentList(rdApiKey, torrentListCache);
 
-      const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const normFile = normalize(fileName);
+      // Guard: ensure we got an array
+      if (!Array.isArray(allTorrents)) {
+        logger.warn('[Zurg→RD] Step 2: torrents response is not an array');
+      } else {
+        const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const normFile = normalize(fileName);
 
-      const fileMatch = allTorrents.data.find(t => {
-        if (!t.filename) return false;
-        return normalize(t.filename) === normFile;
-      });
+        const fileMatch = allTorrents.find(t => {
+          if (!t.filename) return false;
+          return normalize(t.filename) === normFile;
+        });
 
-      if (fileMatch) {
-        logger.info(`[Zurg→RD] Found by filename match: torrent ${fileMatch.id} (hash ${fileMatch.hash?.substring(0, 12)})`);
-        const link = await getFileLink(rdApiKey, fileMatch.id, fileName);
-        if (link) {
-          logger.info(`[Zurg→RD] Resolved via filename: ${link.substring(0, 60)}...`);
-          return link;
+        if (fileMatch) {
+          logger.info(`[Zurg→RD] Found by filename match: torrent ${fileMatch.id} (hash ${fileMatch.hash?.substring(0, 12)})`);
+          const link = await getFileLink(rdApiKey, fileMatch.id, fileName);
+          if (link) {
+            logger.info(`[Zurg→RD] Resolved via filename: ${link.substring(0, 60)}...`);
+            return link;
+          }
         }
       }
     } catch (err) {
@@ -386,43 +425,45 @@ async function resolveZurgToRdLink(zurgFilePath, rdApiKey) {
     const zurgOwnerKey = getZurgOwnerKey();
     if (zurgOwnerKey) {
       try {
-        const ownerTorrents = await axios.get(`${RD_API}/torrents`, {
-          headers: { 'Authorization': `Bearer ${zurgOwnerKey}` },
-          params: { limit: 2500 }
-        });
+        const ownerTorrents = await fetchTorrentList(zurgOwnerKey, torrentListCache);
 
-        const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const normFile = normalize(fileName);
+        // Guard: ensure we got an array
+        if (!Array.isArray(ownerTorrents)) {
+          logger.warn('[Zurg→RD] Step 3: owner torrents response is not an array');
+        } else {
+          const normalize = (str) => str.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const normFile = normalize(fileName);
 
-        // Find by exact filename match
-        const ownerMatch = ownerTorrents.data.find(t => {
-          if (!t.filename) return false;
-          return normalize(t.filename) === normFile;
-        });
+          // Find by exact filename match
+          const ownerMatch = ownerTorrents.find(t => {
+            if (!t.filename) return false;
+            return normalize(t.filename) === normFile;
+          });
 
-        if (ownerMatch && ownerMatch.hash) {
-          logger.info(`[Zurg→RD] Found hash via Zurg owner: ${ownerMatch.hash.substring(0, 12)}...`);
+          if (ownerMatch && ownerMatch.hash) {
+            logger.info(`[Zurg→RD] Found hash via Zurg owner: ${ownerMatch.hash.substring(0, 12)}...`);
 
-          // If user is NOT the admin, re-add to their account
-          if (zurgOwnerKey !== rdApiKey) {
-            const result = await addCachedTorrent(rdApiKey, ownerMatch.hash, fileName);
-            if (result) {
-              logger.info(`[Zurg→RD] Cloned to user's RD: ${result.link.substring(0, 60)}...`);
-              return result.link;
-            }
-          } else {
-            // User IS the admin — the torrent is in their account but pack name search missed it.
-            // Try getting the file link directly.
-            const link = await getFileLink(rdApiKey, ownerMatch.id, fileName);
-            if (link) {
-              logger.info(`[Zurg→RD] Resolved from owner's own torrent: ${link.substring(0, 60)}...`);
-              return link;
-            }
-            // If file link failed, try re-adding by hash (re-adds are idempotent on RD)
-            const result = await addCachedTorrent(rdApiKey, ownerMatch.hash, fileName);
-            if (result) {
-              logger.info(`[Zurg→RD] Re-added to own account: ${result.link.substring(0, 60)}...`);
-              return result.link;
+            // If user is NOT the admin, re-add to their account
+            if (zurgOwnerKey !== rdApiKey) {
+              const result = await addCachedTorrent(rdApiKey, ownerMatch.hash, fileName);
+              if (result) {
+                logger.info(`[Zurg→RD] Cloned to user's RD: ${result.link.substring(0, 60)}...`);
+                return result.link;
+              }
+            } else {
+              // User IS the admin — the torrent is in their account but pack name search missed it.
+              // Try getting the file link directly.
+              const link = await getFileLink(rdApiKey, ownerMatch.id, fileName);
+              if (link) {
+                logger.info(`[Zurg→RD] Resolved from owner's own torrent: ${link.substring(0, 60)}...`);
+                return link;
+              }
+              // If file link failed, try re-adding by hash (re-adds are idempotent on RD)
+              const result = await addCachedTorrent(rdApiKey, ownerMatch.hash, fileName);
+              if (result) {
+                logger.info(`[Zurg→RD] Re-added to own account: ${result.link.substring(0, 60)}...`);
+                return result.link;
+              }
             }
           }
         }
@@ -445,4 +486,4 @@ async function resolveZurgToRdLink(zurgFilePath, rdApiKey) {
   }
 }
 
-module.exports = { resolveZurgToRdLink };
+module.exports = { resolveZurgToRdLink, addCachedTorrent };

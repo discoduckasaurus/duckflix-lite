@@ -6,7 +6,7 @@ const { searchZurg } = require('../services/zurg-search');
 const { completeDownloadFlow, cleanupStuckTorrents } = require('../services/rd-service');
 const rdCacheService = require('../services/rd-cache-service');
 const downloadJobManager = require('../services/download-job-manager');
-const { getUserRdApiKey, getEffectiveUserId } = require('../services/user-service');
+const { getUserRdApiKey, getEffectiveUserId, getUserBandwidthInfo } = require('../services/user-service');
 const { resolveZurgToRdLink } = require('../services/zurg-to-rd-resolver');
 const { logPlaybackFailure } = require('../services/failure-tracker');
 const { checkRdSession, startRdSession, updateRdHeartbeat, endRdSession } = require('../services/rd-session-tracker');
@@ -21,6 +21,36 @@ const path = require('path');
 
 const TRANSCODED_DIR = path.join(__dirname, '..', 'transcoded');
 const FUSE_TIMEOUT_MS = 10000;
+
+/**
+ * Detect browser engine from User-Agent for web platform.
+ * Returns 'chromium' | 'safari' | 'firefox' | 'unknown'
+ * Chromium: Chrome, Edge, Opera, Brave — can play MKV natively (no remux needed)
+ * Safari: needs MKV→MP4 remux, requires hvc1 tag for HEVC
+ * Firefox: MP4 works, MKV sometimes works
+ */
+function detectBrowserEngine(userAgent) {
+  if (!userAgent) return 'unknown';
+  const ua = userAgent.toLowerCase();
+  // Order matters: Chrome UA also contains "safari", so check Chrome/Edg/OPR first
+  if (ua.includes('chrome') || ua.includes('chromium') || ua.includes('edg/') || ua.includes('opr/')) return 'chromium';
+  if (ua.includes('firefox')) return 'firefox';
+  if (ua.includes('safari')) return 'safari';
+  return 'unknown';
+}
+
+/** Check if a filename needs remux for the given browser engine (non-MP4 container) */
+function needsWebRemux(fileName, browserEngine) {
+  if (!fileName) return false;
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith('.mp4')) return false; // MP4 is universally supported
+  if (lower.endsWith('.mkv')) {
+    // Chromium can play MKV natively — skip remux to save server resources
+    return browserEngine !== 'chromium';
+  }
+  // AVI/WMV/FLV/TS — don't attempt remux (codecs likely incompatible with browsers)
+  return false;
+}
 
 function withFuseTimeout(promise, label) {
   let timer;
@@ -132,7 +162,8 @@ router.get("/stream-processed/:jobId", async (req, res) => {
   const job = downloadJobManager.getJob(jobId);
 
   if (!job || !job.processedFilePath) {
-    return res.status(404).json({ error: "Processed file not found" });
+    // 410 Gone — tells browser/video element "this is permanent, stop retrying"
+    return res.status(410).json({ error: "Processed file no longer available" });
   }
 
   const filePath = job.processedFilePath;
@@ -153,7 +184,8 @@ router.get("/stream-processed/:jobId", async (req, res) => {
     fileSize = stat.size;
   } catch (err) {
     if (err.code === 'ENOENT') {
-      return res.status(404).json({ error: "File not found" });
+      // 410 Gone — processed file was cleaned up, stop retrying
+      return res.status(410).json({ error: "Processed file was cleaned up" });
     }
     logger.error(`[Stream Processed] Filesystem error: ${err.code || err.message}`);
     return res.status(503).json({ error: "Filesystem temporarily unavailable" });
@@ -218,8 +250,9 @@ router.post('/stream-url/start', async (req, res) => {
   try {
     const { tmdbId, title, year, type, season, episode, platform } = req.body;
     const userId = req.user.sub;
+    const browserEngine = platform === 'web' ? detectBrowserEngine(req.get('user-agent')) : null;
 
-    logger.info(`Starting stream URL retrieval for: ${title} (${year})${platform ? ` [${platform}]` : ''}`);
+    logger.info(`Starting stream URL retrieval for: ${title} (${year})${platform ? ` [${platform}${browserEngine ? '/' + browserEngine : ''}]` : ''}`);
 
     // Skip blocking Zurg search here - processRdDownload handles Zurg + Prowlarr in parallel
     // This returns the jobId immediately so client can start showing progress
@@ -243,7 +276,7 @@ router.post('/stream-url/start', async (req, res) => {
 
     // Start download in background (pass host for stream proxy URL generation)
     const serverHost = req.get('host');
-    processRdDownload(jobId, { tmdbId, title, year, type, season, episode, userId, serverHost, platform });
+    processRdDownload(jobId, { tmdbId, title, year, type, season, episode, userId, serverHost, platform, browserEngine });
 
     res.json({
       immediate: false,
@@ -926,7 +959,7 @@ async function validateAndProcessSource(candidateUrl, jobId, sourceLabel, server
  * Background RD download processor with progressive updates
  */
 async function processRdDownload(jobId, contentInfo) {
-  const { tmdbId, title, year, type, season, episode, userId, serverHost, platform } = contentInfo;
+  const { tmdbId, title, year, type, season, episode, userId, serverHost, platform, browserEngine } = contentInfo;
 
   try {
     const rdApiKey = getUserRdApiKey(userId);
@@ -941,14 +974,9 @@ async function processRdDownload(jobId, contentInfo) {
       message: 'Checking cache...'
     });
 
-    // Get user bandwidth limit
-    let maxBitrateMbps = null;
-    try {
-      const user = db.prepare('SELECT measured_bandwidth_mbps FROM users WHERE id = ?').get(userId);
-      maxBitrateMbps = user?.measured_bandwidth_mbps || null;
-    } catch (e) {
-      logger.warn('Failed to get user bandwidth limit:', e.message);
-    }
+    // Get user bandwidth limit (with safety margin applied)
+    const bandwidthInfo = getUserBandwidthInfo(userId);
+    let maxBitrateMbps = bandwidthInfo.maxBitrateMbps;
 
     // Step 1: Check RD link cache first (24h TTL with live verification)
     try {
@@ -992,8 +1020,8 @@ async function processRdDownload(jobId, contentInfo) {
             // SUCCESS - use cached link (or processed URL if audio was remuxed/transcoded)
             let finalStreamUrl = validation.streamUrl;
 
-            // Web client MKV→MP4 remux for cached links
-            if (platform === 'web' && cached.fileName?.toLowerCase().endsWith('.mkv') && !finalStreamUrl.includes('/stream-processed/')) {
+            // Web client container remux: MKV→MP4 for Safari/Firefox (Chromium plays MKV natively)
+            if (platform === 'web' && needsWebRemux(cached.fileName, browserEngine) && !finalStreamUrl.includes('/stream-processed/')) {
               try {
                 downloadJobManager.updateJob(jobId, {
                   status: 'processing',
@@ -1005,14 +1033,13 @@ async function processRdDownload(jobId, contentInfo) {
                 const { promisify } = require('util');
                 const execFileAsync = promisify(execFile);
 
-                logger.info(`[Web Remux] Remuxing cached MKV→MP4 for web client: ${cached.fileName}`);
+                logger.info(`[Web Remux] Remuxing ${cached.fileName} → MP4 for ${browserEngine || 'web'} client`);
 
                 const remuxArgs = [
                   '-y', '-i', finalStreamUrl,
                   '-c:v', 'copy', '-c:a', 'copy', '-sn'
                 ];
                 // Safari requires hvc1 tag for HEVC in MP4 (hev1 = black screen with audio)
-                // videoCodecName is the raw codec name ("hevc"), not the tag string ("[0][0][0][0]" in MKV)
                 if (validation.videoCodecName === 'hevc' || validation.videoCodecName === 'h265') {
                   remuxArgs.push('-tag:v', 'hvc1');
                 }
@@ -1109,6 +1136,7 @@ async function processRdDownload(jobId, contentInfo) {
     let sourcesAvailablePromise = new Promise(resolve => { sourcesAvailableResolve = resolve; });
 
     // Callback for streaming sources
+    const allDiscoveredSources = []; // Accumulate ALL sources for fallback endpoint
     const onSourcesReady = (sources, isComplete) => {
       // Add new sources to queue (filter already tried)
       for (const source of sources) {
@@ -1116,6 +1144,13 @@ async function processRdDownload(jobId, contentInfo) {
         if (!triedHashes.has(key)) {
           sourceQueue.push(source);
         }
+        // Store all sources for fallback (even duplicates get deduped later)
+        allDiscoveredSources.push({
+          source: source.source, title: source.title, hash: source.hash,
+          magnet: source.magnet, filePath: source.filePath, quality: source.quality,
+          resolution: source.resolution, sizeMB: source.sizeMB,
+          isCached: source.isCached, estimatedBitrateMbps: source.estimatedBitrateMbps
+        });
       }
 
       // Re-sort queue by score (higher first)
@@ -1124,6 +1159,9 @@ async function processRdDownload(jobId, contentInfo) {
       if (isComplete) {
         searchComplete = true;
         logger.info(`🔍 Search complete: ${sourceQueue.length} sources in queue`);
+        // Store full source list on job for fallback endpoint
+        downloadJobManager.updateJob(jobId, { sourceQueue: allDiscoveredSources });
+        logger.info(`[Fallback] Stored ${allDiscoveredSources.length} sources in queue for fallback`);
       }
 
       // Signal that sources are available
@@ -1143,13 +1181,20 @@ async function processRdDownload(jobId, contentInfo) {
       tmdbId,
       rdApiKey,
       maxBitrateMbps,
-      platform
+      platform,
+      browserEngine
     }, onSourcesReady).then(() => {
       // getAllSources returned — mark search complete so the while loop can exit
       // (Prowlarr callbacks may have already set this, but ensure it's set)
       if (!searchComplete) {
         logger.info('getAllSources returned, marking search complete');
         searchComplete = true;
+        // Store source queue for fallback if not already stored by callback
+        const job = downloadJobManager.getJob(jobId);
+        if (job && (!job.sourceQueue || job.sourceQueue.length === 0) && allDiscoveredSources.length > 0) {
+          downloadJobManager.updateJob(jobId, { sourceQueue: allDiscoveredSources });
+          logger.info(`[Fallback] Stored ${allDiscoveredSources.length} sources in queue for fallback (via search completion)`);
+        }
         if (sourcesAvailableResolve) {
           sourcesAvailableResolve();
           sourcesAvailableResolve = null;
@@ -1478,9 +1523,9 @@ async function processRdDownload(jobId, contentInfo) {
     // Save original RD URL for caching before web remux potentially overwrites it
     const originalRdUrl = result.download;
 
-    // Web client MKV→MP4 remux: browsers can't play MKV, so remux container with -c copy
+    // Web client container remux: MKV→MP4 for Safari/Firefox (Chromium plays MKV natively)
     // Skip if the stream is already a processed file (audio processing already output MP4 for web)
-    if (platform === 'web' && result.filename?.toLowerCase().endsWith('.mkv') && !result.download.includes('/stream-processed/')) {
+    if (platform === 'web' && needsWebRemux(result.filename, browserEngine) && !result.download.includes('/stream-processed/')) {
       try {
         downloadJobManager.updateJob(jobId, {
           status: 'processing',
@@ -1492,7 +1537,7 @@ async function processRdDownload(jobId, contentInfo) {
         const { promisify } = require('util');
         const execFileAsync = promisify(execFile);
 
-        logger.info(`[Web Remux] Remuxing MKV→MP4 for web client: ${result.filename}`);
+        logger.info(`[Web Remux] Remuxing ${result.filename} → MP4 for ${browserEngine || 'web'} client`);
 
         const remuxArgs = [
           '-y', '-i', result.download,
@@ -1512,8 +1557,6 @@ async function processRdDownload(jobId, contentInfo) {
 
         logger.info(`[Web Remux] Done: ${remuxOutputPath}`);
       } catch (remuxErr) {
-        // Remux failed — fall back to raw URL (MKV). The web client may not play it,
-        // but it's better than erroring the whole job.
         logger.warn(`[Web Remux] Failed, falling back to raw URL: ${remuxErr.message}`);
       }
     }
@@ -1633,7 +1676,7 @@ async function processRdDownload(jobId, contentInfo) {
  * Process RD download with exclusions (for re-search after bad report)
  */
 async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, { excludedHashes = [], excludedFilePaths = [] }) {
-  const { tmdbId, title, year, type, season, episode, userId, platform } = contentInfo;
+  const { tmdbId, title, year, type, season, episode, userId, platform, browserEngine } = contentInfo;
 
   try {
     const rdApiKey = getUserRdApiKey(userId);
@@ -1647,14 +1690,9 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
       message: 'Re-searching alternative sources...'
     });
 
-    // Get user bandwidth limit
-    let maxBitrateMbps = null;
-    try {
-      const user = db.prepare('SELECT measured_bandwidth_mbps FROM users WHERE id = ?').get(userId);
-      maxBitrateMbps = user?.measured_bandwidth_mbps || null;
-    } catch (e) {
-      logger.warn('Failed to get user bandwidth limit:', e.message);
-    }
+    // Get user bandwidth limit (with safety margin applied)
+    const bandwidthInfo = getUserBandwidthInfo(userId);
+    let maxBitrateMbps = bandwidthInfo.maxBitrateMbps;
 
     // Search with exclusions
     const { getAllSources } = require('../services/unified-source-resolver');
@@ -1672,7 +1710,8 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
         maxBitrateMbps,
         excludedHashes,
         excludedFilePaths,
-        platform
+        platform,
+        browserEngine
       });
 
       if (!allSources || allSources.length === 0) {
@@ -1872,8 +1911,8 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
     // Save original RD URL for caching before web remux potentially overwrites it
     const originalRdUrl = result.download;
 
-    // Web client MKV→MP4 remux (same as processRdDownload)
-    if (platform === 'web' && result.filename?.toLowerCase().endsWith('.mkv') && !result.download.includes('/stream-processed/')) {
+    // Web client container remux: MKV→MP4 for Safari/Firefox (Chromium plays MKV natively)
+    if (platform === 'web' && needsWebRemux(result.filename, browserEngine) && !result.download.includes('/stream-processed/')) {
       try {
         downloadJobManager.updateJob(jobId, {
           status: 'processing',
@@ -1885,7 +1924,7 @@ async function processRdDownloadWithExclusions(jobId, contentInfo, serverHost, {
         const { promisify } = require('util');
         const execFileAsync = promisify(execFile);
 
-        logger.info(`[Web Remux] Remuxing MKV→MP4 for web client: ${result.filename}`);
+        logger.info(`[Web Remux] Remuxing ${result.filename} → MP4 for ${browserEngine || 'web'} client`);
 
         const remuxArgs = [
           '-y', '-i', result.download,
@@ -2667,10 +2706,83 @@ router.get('/subtitles/stats', async (req, res) => {
 
 
 
+// Anti-spam cache for fallback requests: key = "tmdbId:season:episode:userId", value = { result, timestamp }
+const fallbackCache = new Map();
+const FALLBACK_COOLDOWN_MS = 60 * 1000; // 60 seconds
+
+// Cleanup stale fallback cache entries every 10 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of fallbackCache) {
+    if (now - entry.timestamp > 5 * 60 * 1000) fallbackCache.delete(key);
+  }
+}, 10 * 60 * 1000);
+
+/**
+ * Resolve a single source to a direct stream URL (lightweight, for fallback).
+ * For Zurg: resolveZurgToRdLink → FUSE fallback.
+ * For Prowlarr cached: addMagnet by hash → selectFiles → unrestrict.
+ */
+async function resolveSourceForFallback(source, rdApiKey, serverHost, season, episode) {
+  const { resolveZurgToRdLink, addCachedTorrent } = require('../services/zurg-to-rd-resolver');
+
+  if (source.source === 'zurg' && source.filePath) {
+    const rdLink = await resolveZurgToRdLink(source.filePath, rdApiKey);
+    if (rdLink) {
+      return { streamUrl: rdLink, fileName: source.filePath.split('/').pop() };
+    }
+    // FUSE mount fallback
+    const streamId = Buffer.from(source.filePath).toString('base64url');
+    return {
+      streamUrl: `https://${serverHost}/api/vod/stream/${streamId}`,
+      fileName: source.filePath.split('/').pop()
+    };
+  }
+
+  if (source.source === 'prowlarr' && source.hash && source.isCached) {
+    // For Prowlarr cached sources, we need to add the magnet and find the right episode file
+    const { downloadFromRD } = require('@duckflix/rd-client');
+
+    // Use downloadFromRD with a tight timeout — it handles file selection + unrestrict
+    const downloadPromise = downloadFromRD(
+      source.magnet || `magnet:?xt=urn:btih:${source.hash}`,
+      rdApiKey,
+      season,
+      episode,
+      () => {} // No-op progress callback
+    );
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Fallback download timeout')), 8000)
+    );
+
+    try {
+      const rdResult = await Promise.race([downloadPromise, timeoutPromise]);
+      if (rdResult && rdResult.download) {
+        return { streamUrl: rdResult.download, fileName: rdResult.filename };
+      }
+    } catch (err) {
+      downloadPromise.catch(() => {}); // Suppress orphaned rejection
+      throw err;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse resolution number from quality string like "1080p" → 1080
+ */
+function parseResolutionFromQuality(quality) {
+  if (!quality) return null;
+  const match = quality.match(/(\d{3,4})p?/i);
+  return match ? parseInt(match[1], 10) : null;
+}
+
 /**
  * POST /api/vod/fallback
- * Request a lower quality stream when playback is stuttering
- * Used by the adaptive bitrate system to get a fallback stream
+ * Request a lower quality stream when playback is stuttering.
+ * Three-tier fallback: RD cache → stored source queue → exhausted.
  */
 router.post('/fallback', authenticateToken, async (req, res) => {
   try {
@@ -2678,23 +2790,151 @@ router.post('/fallback', authenticateToken, async (req, res) => {
     const userId = req.user.sub;
 
     logger.info('[Fallback] Request for lower quality stream', {
-      tmdbId,
-      type,
-      year,
-      currentBitrate,
-      userId
+      tmdbId, type, year, season, episode, currentBitrate, userId
     });
 
-    // For now, return a 501 Not Implemented
-    // This endpoint would need integration with the content resolver
-    // to find an alternative lower-quality source
-    res.status(501).json({
-      error: 'Fallback not implemented',
-      message: 'Lower quality fallback sources are not currently available. Please try again later.'
-    });
+    if (!tmdbId || !type) {
+      return res.status(400).json({ success: false, error: 'Missing tmdbId or type' });
+    }
+
+    // ── Anti-spam: 60s cooldown per content+user ──
+    const cacheKey = `${tmdbId}:${season || ''}:${episode || ''}:${userId}`;
+    const cached = fallbackCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp) < FALLBACK_COOLDOWN_MS) {
+      logger.info(`[Fallback] Anti-spam: returning cached result for ${cacheKey}`);
+      return res.json(cached.result);
+    }
+
+    const rdApiKey = getUserRdApiKey(userId);
+    if (!rdApiKey) {
+      return res.status(400).json({ success: false, error: 'Real-Debrid API key not configured' });
+    }
+
+    // Determine current resolution from the job or the currentBitrate hint
+    const recentJob = downloadJobManager.findRecentJob(tmdbId, type, season, episode, userId);
+    let currentResolution = null;
+
+    if (recentJob?.quality) {
+      currentResolution = parseResolutionFromQuality(recentJob.quality);
+    }
+    if (!currentResolution && currentBitrate) {
+      // Estimate resolution from bitrate: >12 Mbps → likely 2160p, >4 → 1080p, >2 → 720p
+      if (currentBitrate > 12) currentResolution = 2160;
+      else if (currentBitrate > 4) currentResolution = 1080;
+      else if (currentBitrate > 2) currentResolution = 720;
+      else currentResolution = 480;
+    }
+    if (!currentResolution) currentResolution = 1080; // Safe default
+
+    const serverHost = req.get('host') || process.env.SERVER_HOST || `localhost:${process.env.PORT || 3001}`;
+
+    logger.info(`[Fallback] Current resolution: ${currentResolution}p, looking for lower quality`);
+
+    // ── Tier 1: RD Cache lower quality ──
+    try {
+      const lowerCached = await rdCacheService.getCachedLinkLowerQuality({
+        tmdbId, type, season, episode, maxResolution: currentResolution, rdApiKey
+      });
+
+      if (lowerCached) {
+        // Verify the cached link is still valid
+        const isValid = await rdCacheService.verifyLink(lowerCached.streamUrl);
+        if (isValid) {
+          const result = {
+            success: true,
+            newStreamUrl: lowerCached.streamUrl,
+            quality: `${lowerCached.resolution}p`,
+            tier: 'rd-cache'
+          };
+          fallbackCache.set(cacheKey, { result, timestamp: Date.now() });
+          logger.info(`[Fallback] Tier 1 hit: ${lowerCached.resolution}p from RD cache`);
+          return res.json(result);
+        }
+        logger.info('[Fallback] Tier 1: cached link expired, continuing to Tier 2');
+      }
+    } catch (cacheErr) {
+      logger.warn(`[Fallback] Tier 1 error: ${cacheErr.message}`);
+    }
+
+    // ── Tier 2: Stored source queue ──
+    if (recentJob?.sourceQueue && recentJob.sourceQueue.length > 0) {
+      // Get hashes/paths already attempted in the original job
+      const attemptedKeys = new Set(
+        (recentJob.attemptedSources || []).map(s =>
+          s.hash?.toLowerCase() || s.filePath || s.title
+        )
+      );
+
+      // Filter: lower resolution, cached only, not already attempted
+      const candidates = recentJob.sourceQueue
+        .filter(s => {
+          if (!s.resolution || s.resolution >= currentResolution) return false;
+          if (!s.isCached) return false;
+          const key = s.hash?.toLowerCase() || s.filePath || s.title;
+          if (attemptedKeys.has(key)) return false;
+          return true;
+        })
+        .sort((a, b) => (b.resolution || 0) - (a.resolution || 0)); // Best quality first (under cap)
+
+      logger.info(`[Fallback] Tier 2: ${candidates.length} lower-quality cached candidates from source queue`);
+
+      for (const candidate of candidates) {
+        try {
+          logger.info(`[Fallback] Trying: ${candidate.title?.substring(0, 60)} (${candidate.resolution}p, ${candidate.source})`);
+
+          const resolved = await resolveSourceForFallback(candidate, rdApiKey, serverHost, season, episode);
+
+          if (resolved && resolved.streamUrl) {
+            // Validate codec compatibility (skip audio processing for speed — just check video)
+            const analysis = await analyzeStreamCompatibility(resolved.streamUrl);
+            if (!analysis.videoCompatible) {
+              logger.info(`[Fallback] Rejected ${candidate.resolution}p: ${analysis.videoReason}`);
+              continue;
+            }
+
+            // Cache the result for this content
+            const resolution = candidate.resolution;
+            try {
+              const isRdDirectLink = resolved.streamUrl.includes('real-debrid.com') || resolved.streamUrl.includes('rdb.so');
+              if (isRdDirectLink) {
+                await rdCacheService.cacheLink({
+                  tmdbId, title: recentJob.contentInfo?.title || '', year: year || 0,
+                  type, season, episode, streamUrl: resolved.streamUrl,
+                  fileName: resolved.fileName, resolution, rdApiKey
+                });
+              }
+            } catch (cacheErr) {
+              logger.warn(`[Fallback] Failed to cache fallback link: ${cacheErr.message}`);
+            }
+
+            const result = {
+              success: true,
+              newStreamUrl: resolved.streamUrl,
+              quality: `${resolution}p`,
+              tier: 'source-queue'
+            };
+            fallbackCache.set(cacheKey, { result, timestamp: Date.now() });
+            logger.info(`[Fallback] Tier 2 success: ${resolution}p via ${candidate.source}`);
+            return res.json(result);
+          }
+        } catch (err) {
+          logger.warn(`[Fallback] Tier 2 candidate failed: ${err.message}`);
+          continue;
+        }
+      }
+    } else {
+      logger.info('[Fallback] Tier 2: no stored source queue available');
+    }
+
+    // ── Tier 3: Exhausted ──
+    const result = { success: false, exhausted: true };
+    fallbackCache.set(cacheKey, { result, timestamp: Date.now() });
+    logger.info(`[Fallback] All tiers exhausted for ${tmdbId} ${type === 'tv' ? `S${season}E${episode}` : ''}`);
+    return res.json(result);
   } catch (error) {
-    logger.error('Fallback error:', error);
+    logger.error('[Fallback] Error:', error);
     res.status(500).json({
+      success: false,
       error: 'Fallback failed',
       message: error.message || 'Unable to get fallback stream'
     });

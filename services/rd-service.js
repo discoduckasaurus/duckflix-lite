@@ -3,9 +3,9 @@ const {
   getTorrentInfo: rdGetTorrentInfo,
   selectFiles: rdSelectFiles,
   unrestrictLink,
-  downloadFromRD
+  downloadFromRD,
+  rdAxios
 } = require('@duckflix/rd-client');
-const axios = require('axios');
 const logger = require('../utils/logger');
 
 const RD_API_BASE = 'https://api.real-debrid.com/rest/1.0';
@@ -99,7 +99,7 @@ async function completeDownloadFlow(apiKey, magnetUrl, season = null, episode = 
  */
 async function deleteTorrent(apiKey, torrentId) {
   try {
-    await axios.delete(`${RD_API_BASE}/torrents/delete/${torrentId}`, {
+    await rdAxios.delete(`${RD_API_BASE}/torrents/delete/${torrentId}`, {
       headers: { 'Authorization': `Bearer ${apiKey}` }
     });
     logger.info(`🗑️  Deleted torrent ${torrentId} from RD`);
@@ -116,7 +116,7 @@ async function deleteTorrent(apiKey, torrentId) {
  */
 async function listTorrents(apiKey) {
   try {
-    const response = await axios.get(`${RD_API_BASE}/torrents`, {
+    const response = await rdAxios.get(`${RD_API_BASE}/torrents`, {
       headers: { 'Authorization': `Bearer ${apiKey}` }
     });
     return response.data || [];

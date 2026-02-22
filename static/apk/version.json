@@ -1,5 +1,5 @@
 {
-  "versionCode": 8,
-  "versionName": "2.3.0",
-  "releaseNotes": "Sticky subtitle language preference, subtitle style settings, filter unknown tracks, fix stream error polling loop, transient timeout handling, 5-min poll safety timeout"
+  "versionCode": 9,
+  "versionName": "2.5.0",
+  "releaseNotes": "DVR recording, background pause, live TV stream resilience with lightweight player restart"
 }

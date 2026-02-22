@@ -38,6 +38,7 @@ class DownloadJobManager {
       source: null,
       error: null,
       attemptedSources: [], // Track all sources tried
+      sourceQueue: [], // Full ranked source list from search (for fallback endpoint)
       createdAt: Date.now(),
       completedAt: null
     });
@@ -131,6 +132,42 @@ class DownloadJobManager {
 
   getRecentPlaybacks() {
     return this.recentPlaybacks;
+  }
+
+  /**
+   * Find the most recent job for a given content+user combination.
+   * Searches active jobs first, then completed jobs.
+   * Returns the job with a stream URL (completed) or the most recent active one.
+   */
+  findRecentJob(tmdbId, type, season, episode, userId) {
+    const matches = (job) => {
+      const ci = job.contentInfo;
+      if (!ci) return false;
+      if (String(ci.tmdbId) !== String(tmdbId)) return false;
+      if (ci.type !== type) return false;
+      if (ci.userId !== userId) return false;
+      if (type === 'tv') {
+        if (ci.season != season || ci.episode != episode) return false;
+      }
+      return true;
+    };
+
+    // Check active jobs (most recent first — iterate all and pick best)
+    let bestActive = null;
+    for (const job of this.jobs.values()) {
+      if (!matches(job)) continue;
+      if (job.status === 'completed' && job.streamUrl) return job; // Best case: active completed job
+      if (!bestActive || job.createdAt > bestActive.createdAt) bestActive = job;
+    }
+
+    // Check completed jobs archive (already sorted newest-first)
+    for (const job of this.completedJobs) {
+      if (!matches(job)) continue;
+      if (job.streamUrl) return job;
+      if (!bestActive || job.createdAt > bestActive.createdAt) bestActive = job;
+    }
+
+    return bestActive || null;
   }
 
   deleteJob(jobId) {

@@ -15,7 +15,8 @@ if (!JWT_SECRET) {
  */
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // "Bearer <token>"
+  // Support query-param token for Chromecast/AirPlay (devices can't set headers)
+  const token = (authHeader && authHeader.split(' ')[1]) || req.query.token;
 
   if (!token) {
     logger.warn('No token provided. Auth header:', authHeader);
@@ -29,7 +30,7 @@ function authenticateToken(req, res, next) {
     next();
   } catch (error) {
     logger.warn(`Invalid token. Error: ${error.message} | Token length: ${token?.length} | First 20 chars: ${token?.substring(0, 20)}`);
-    return res.status(403).json({ error: 'Invalid or expired token' });
+    return res.status(401).json({ error: 'Invalid or expired token' });
   }
 }
 
@@ -53,7 +54,7 @@ function generateToken(user) {
     isAdmin: !!user.is_admin
   };
 
-  const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
+  const expiresIn = process.env.JWT_EXPIRES_IN || '365d';
 
   return jwt.sign(payload, JWT_SECRET, { expiresIn, algorithm: 'HS256' });
 }

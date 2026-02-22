@@ -23,7 +23,7 @@ const MIN_EARLY_RESOLUTION = 720;
  * @param {string[]} excludedFilePaths - Zurg file paths to exclude
  * @param {Function} onSourcesReady - Optional callback for streaming mode: (sources, isComplete) => void
  */
-async function getAllSources({ title, year, type, season, episode, tmdbId, rdApiKey, maxBitrateMbps, excludedHashes = [], excludedFilePaths = [], platform }, onSourcesReady = null) {
+async function getAllSources({ title, year, type, season, episode, tmdbId, rdApiKey, maxBitrateMbps, excludedHashes = [], excludedFilePaths = [], platform, browserEngine }, onSourcesReady = null) {
   logger.info(`🔍 Searching ALL sources in parallel: ${title} (${year})`);
 
   if (excludedHashes.length > 0 || excludedFilePaths.length > 0) {
@@ -155,7 +155,7 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
   const emitSources = (isComplete) => {
     if (!onSourcesReady) return;
 
-    const ranked = rankUnifiedSources(allSources, type, platform);
+    const ranked = rankUnifiedSources(allSources, type, platform, browserEngine);
     logger.info(`📤 Emitting ${ranked.length} sources (complete: ${isComplete})`);
     onSourcesReady(ranked, isComplete);
   };
@@ -267,7 +267,7 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
   logger.info(`📊 Total sources: ${allSources.length} (${zurgCount} Zurg cached, ${prowlarrCount} Prowlarr uncached${overBwCount > 0 ? `, ${overBwCount} over-bandwidth fallback` : ''})`);
 
   // Rank all sources together
-  const rankedSources = rankUnifiedSources(allSources, type, platform);
+  const rankedSources = rankUnifiedSources(allSources, type, platform, browserEngine);
 
   logger.info(`🏆 Ranked ${rankedSources.length} sources (top: ${rankedSources[0]?.title?.substring(0, 60)}...)`);
 
@@ -278,19 +278,27 @@ async function getAllSources({ title, year, type, season, episode, tmdbId, rdApi
  * Unified ranking algorithm that treats cached sources equally
  * Note: Codec compatibility is validated via ffprobe AFTER stream URL is resolved
  */
-function rankUnifiedSources(sources, type, platform) {
+function rankUnifiedSources(sources, type, platform, browserEngine) {
   return sources
     .map((source) => {
       let score = 0;
       const title = (source.title || '').toLowerCase();
       const titleUpper = title.toUpperCase();
 
-      // Web client container preference: MP4 plays natively in browsers, MKV does not
+      // Web client container preference — browser-engine-aware
       if (platform === 'web') {
         if (title.endsWith('.mp4')) {
-          score += 2000;
+          score += 2000; // MP4 universally supported
         } else if (title.endsWith('.mkv')) {
-          score -= 1000;
+          // Chromium plays MKV natively — no penalty, no remux needed
+          // Safari/Firefox need server-side remux → light penalty (remux adds latency)
+          if (browserEngine !== 'chromium') {
+            score -= 1000;
+          }
+        } else if (title.endsWith('.avi') || title.endsWith('.wmv') || title.endsWith('.flv') || title.endsWith('.ts')) {
+          // AVI/WMV/FLV/TS — codecs inside are typically incompatible with all browsers
+          // (Xvid, MPEG-2, WMV, etc.) — avoid on web entirely
+          score -= 8000;
         }
       }
 

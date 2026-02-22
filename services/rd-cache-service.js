@@ -135,6 +135,48 @@ class RdCacheService {
   }
 
   /**
+   * Get cached RD link at a lower quality than the current stream.
+   * Used by the fallback endpoint to find a lower-bitrate alternative.
+   */
+  async getCachedLinkLowerQuality({ tmdbId, type, season, episode, maxResolution, rdApiKey }) {
+    const now = Date.now();
+    const keyHash = hashRdKey(rdApiKey);
+
+    let query = `
+      SELECT * FROM rd_link_cache
+      WHERE tmdb_id = ? AND type = ?
+        AND rd_key_hash = ?
+        AND expires_at > ?
+        AND resolution IS NOT NULL
+        AND resolution < ?
+    `;
+    const params = [tmdbId, type, keyHash, now, maxResolution];
+
+    if (type === 'tv') {
+      query += ` AND season = ? AND episode = ?`;
+      params.push(season, episode);
+    }
+
+    // Best quality under the cap
+    query += ` ORDER BY resolution DESC LIMIT 1`;
+
+    const cached = db.prepare(query).get(...params);
+
+    if (cached) {
+      db.prepare(`UPDATE rd_link_cache SET last_accessed_at = ? WHERE id = ?`).run(now, cached.id);
+      logger.info(`[RD Cache] Lower-quality hit for ${tmdbId} (${type}) - ${cached.resolution}p (max was ${maxResolution}p)`);
+      return {
+        streamUrl: cached.stream_url,
+        fileName: cached.file_name,
+        resolution: cached.resolution,
+        estimatedBitrateMbps: cached.estimated_bitrate_mbps
+      };
+    }
+
+    return null;
+  }
+
+  /**
    * Cleanup expired links (run periodically)
    */
   async cleanupExpired() {
