@@ -73,9 +73,7 @@ object DatabaseModule {
 
     /**
      * Migration 12→13: Expand recordings table for DVR — drop and recreate with new schema.
-     * Old table had: id, channelId, title, filePath, startTime, endTime, status
-     * New table has: id, channelId, channelName, programTitle, programDescription, scheduledStart,
-     *   scheduledEnd, actualStart, actualEnd, filePath, fileSize, status, errorMessage, storageType, createdAt
+     * (DVR feature was removed in v2.6.0 / migration 13→14)
      */
     private val MIGRATION_12_13 = object : Migration(12, 13) {
         override fun migrate(db: SupportSQLiteDatabase) {
@@ -102,6 +100,15 @@ object DatabaseModule {
         }
     }
 
+    /**
+     * Migration 13→14: Remove DVR recordings table (feature disabled).
+     */
+    private val MIGRATION_13_14 = object : Migration(13, 14) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("DROP TABLE IF EXISTS recordings")
+        }
+    }
+
     @Provides
     @Singleton
     fun provideDatabase(
@@ -111,7 +118,7 @@ object DatabaseModule {
         DuckFlixDatabase::class.java,
         "duckflix.db"
     )
-        .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
+        .addMigrations(MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
         .fallbackToDestructiveMigration() // Safety net for other version jumps
         .build()
 
@@ -123,9 +130,6 @@ object DatabaseModule {
 
     @Provides
     fun provideEpgDao(database: DuckFlixDatabase) = database.epgDao()
-
-    @Provides
-    fun provideRecordingDao(database: DuckFlixDatabase) = database.recordingDao()
 
     @Provides
     fun provideWatchProgressDao(database: DuckFlixDatabase) = database.watchProgressDao()

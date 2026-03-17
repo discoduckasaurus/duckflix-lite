@@ -120,12 +120,6 @@ fun HomeScreen(
                     coroutineScope = coroutineScope,
                     scrollState = scrollState
                 )
-                CompactMenuTile(
-                    title = "DVR",
-                    onClick = { /* TODO: navController.navigate(Screen.Dvr.route) */ },
-                    coroutineScope = coroutineScope,
-                    scrollState = scrollState
-                )
                 if (uiState.isAdmin) {
                     CompactMenuTile(
                         title = "Admin",

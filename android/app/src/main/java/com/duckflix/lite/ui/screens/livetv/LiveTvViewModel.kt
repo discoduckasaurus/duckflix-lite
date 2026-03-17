@@ -15,16 +15,8 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
-import androidx.work.workDataOf
-import com.duckflix.lite.data.dvr.DvrStorageManager
-import com.duckflix.lite.data.local.dao.RecordingDao
-import com.duckflix.lite.data.local.entity.RecordingEntity
 import com.duckflix.lite.data.remote.DuckFlixApi
 import com.duckflix.lite.data.remote.dto.LiveTvChannel
-import com.duckflix.lite.data.remote.dto.LiveTvProgram
-import com.duckflix.lite.service.DvrSchedulerWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
@@ -65,9 +57,7 @@ data class LiveTvUiState(
 @HiltViewModel
 class LiveTvViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val api: DuckFlixApi,
-    private val recordingDao: RecordingDao,
-    private val storageManager: DvrStorageManager
+    private val api: DuckFlixApi
 ) : ViewModel() {
 
     companion object {
@@ -627,63 +617,6 @@ class LiveTvViewModel @Inject constructor(
                 println("[LiveTV] Auto-refreshing EPG data")
                 loadChannels()
             }
-        }
-    }
-
-    /**
-     * Record the currently-airing program on a channel (starts immediately).
-     */
-    fun recordNow(channel: LiveTvChannel, program: LiveTvProgram) {
-        viewModelScope.launch {
-            val filePath = storageManager.generateFilePath(channel.effectiveDisplayName, program.title)
-            val recording = RecordingEntity(
-                channelId = channel.id,
-                channelName = channel.effectiveDisplayName,
-                programTitle = program.title,
-                programDescription = program.description,
-                scheduledStart = System.currentTimeMillis(),
-                scheduledEnd = program.stop * 1000, // EPG times are in seconds
-                filePath = filePath,
-                storageType = storageManager.getStorageType()
-            )
-            val id = recordingDao.insertRecording(recording).toInt()
-
-            val workRequest = OneTimeWorkRequestBuilder<DvrSchedulerWorker>()
-                .setInputData(workDataOf(DvrSchedulerWorker.KEY_RECORDING_ID to id))
-                .build()
-            WorkManager.getInstance(context).enqueue(workRequest)
-            println("[LiveTV] Started recording: ${program.title} on ${channel.effectiveDisplayName}")
-        }
-    }
-
-    /**
-     * Schedule a future program for recording.
-     */
-    fun scheduleRecording(channel: LiveTvChannel, program: LiveTvProgram) {
-        viewModelScope.launch {
-            val filePath = storageManager.generateFilePath(channel.effectiveDisplayName, program.title)
-            val recording = RecordingEntity(
-                channelId = channel.id,
-                channelName = channel.effectiveDisplayName,
-                programTitle = program.title,
-                programDescription = program.description,
-                scheduledStart = program.start * 1000, // EPG times are in seconds
-                scheduledEnd = program.stop * 1000,
-                filePath = filePath,
-                storageType = storageManager.getStorageType()
-            )
-            recordingDao.insertRecording(recording)
-
-            // Ensure periodic scheduler is running
-            val periodicWork = androidx.work.PeriodicWorkRequestBuilder<DvrSchedulerWorker>(
-                15, java.util.concurrent.TimeUnit.MINUTES
-            ).build()
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                DvrSchedulerWorker.WORK_NAME_PERIODIC,
-                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
-                periodicWork
-            )
-            println("[LiveTV] Scheduled recording: ${program.title} on ${channel.effectiveDisplayName}")
         }
     }
 
